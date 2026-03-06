@@ -1,4 +1,20 @@
-# Ignore local Codex workspace metadata and agent instructions copied into the repo root.
-/.codex/
-/Agents.md
-/AGENTS.md
+# 本文件用于声明仓库中不应该提交到 Git 的文件和目录。
+# 这里主要忽略前端依赖、前端构建产物、后端本地数据库、运行时环境变量文件以及常见编辑器缓存。
+
+frontend/node_modules/
+frontend/dist/
+
+backend/.env
+backend/data/
+backend/tmp/
+
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.codex/

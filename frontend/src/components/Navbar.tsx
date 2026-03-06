@@ -1,0 +1,73 @@
+import { Moon, Sun, Cloud, Settings, Home, LogIn } from 'lucide-react';
+import { motion } from 'motion/react';
+
+interface NavbarProps {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  isDark: boolean;
+  toggleTheme: () => void;
+}
+
+export function Navbar({ activeTab, setActiveTab, isDark, toggleTheme }: NavbarProps) {
+  const navItems = [
+    { id: 'home', label: '首页', icon: Home },
+    { id: 'domains', label: '域名分发', icon: Cloud },
+    { id: 'settings', label: '配置中心', icon: Settings },
+  ];
+
+  return (
+    <motion.nav
+      initial={{ y: -50, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      className="fixed top-0 left-0 right-0 z-50 px-6 py-4"
+    >
+      <div className="max-w-6xl mx-auto backdrop-blur-xl bg-white/30 dark:bg-black/30 border border-white/20 dark:border-white/10 shadow-lg rounded-full px-6 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('home')}>
+          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-teal-400 to-emerald-500 flex items-center justify-center text-white font-bold text-xl shadow-lg">
+            L
+          </div>
+          <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-500 to-emerald-600 dark:from-teal-400 dark:to-emerald-400 hidden sm:block">
+            LinuxDoSpace
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 sm:gap-6">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-300 ${
+                  isActive
+                    ? 'bg-white/50 dark:bg-white/10 text-teal-600 dark:text-teal-300 shadow-sm'
+                    : 'text-gray-700 dark:text-gray-300 hover:bg-white/30 dark:hover:bg-white/5'
+                }`}
+              >
+                <Icon size={18} />
+                <span className="hidden md:block font-medium">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-full bg-white/30 dark:bg-white/10 text-gray-700 dark:text-gray-300 hover:bg-white/50 dark:hover:bg-white/20 transition-all"
+          >
+            {isDark ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+          <button
+            onClick={() => setActiveTab('login')}
+            className="flex items-center gap-2 px-5 py-2 rounded-full bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-white font-medium shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5"
+          >
+            <LogIn size={18} />
+            <span className="hidden sm:block">登录</span>
+          </button>
+        </div>
+      </div>
+    </motion.nav>
+  );
+}
