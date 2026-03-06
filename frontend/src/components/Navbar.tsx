@@ -1,4 +1,4 @@
-import { Moon, Sun, Cloud, Settings, Home, LogIn } from 'lucide-react';
+import { Moon, Sun, Cloud, Settings, Home, LogIn, Github } from 'lucide-react';
 import { motion } from 'motion/react';
 
 // NavbarProps 描述导航栏和外层应用状态之间的交互契约。
@@ -74,6 +74,16 @@ export function Navbar({
           >
             {isDark ? <Sun size={20} /> : <Moon size={20} />}
           </button>
+          <a
+            href="https://github.com/MoYeRanqianzhi/LinuxDoSpace"
+            target="_blank"
+            rel="noreferrer"
+            title="查看 GitHub 仓库"
+            aria-label="查看 GitHub 仓库"
+            className="p-2 rounded-full bg-white/30 dark:bg-white/10 text-gray-700 dark:text-gray-300 hover:bg-white/50 dark:hover:bg-white/20 transition-all"
+          >
+            <Github size={18} />
+          </a>
           <button
             onClick={onAuthAction}
             className="flex items-center gap-2 px-5 py-2 rounded-full bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-white font-medium shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 max-w-[10rem]"
