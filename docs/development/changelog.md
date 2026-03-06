@@ -1,5 +1,13 @@
 # LinuxDoSpace 更新日志
 
+## 0.5.0-alpha.1
+
+- 增加单镜像 Docker 部署方案，前端构建产物会嵌入 Go 二进制。
+- 增加根目录 `Dockerfile` 与 `.dockerignore`。
+- 增加 Debian 服务器使用的 `docker-compose.yml` 与环境变量模板。
+- 增加 GitHub Actions 容器构建、GHCR 发布与可选 Debian SSH 部署工作流。
+- 补充部署文档、运行手册和发布说明。
+
 ## 0.4.1-alpha.1
 
 - 修复 `Agents.md` 被错误提交到仓库的问题。

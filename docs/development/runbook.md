@@ -17,6 +17,20 @@
 5. 浏览器访问 `http://localhost:3000`。
 6. 点击登录按钮时，前端会跳转到 `${VITE_API_BASE_URL}/v1/auth/login`。
 
+## 本地构建 Docker 镜像
+
+在仓库根目录执行：
+
+```powershell
+docker build -t linuxdospace:local --build-arg VERSION=local .
+```
+
+运行容器：
+
+```powershell
+docker run --rm -p 8080:8080 --env-file deploy/linuxdospace.env.example linuxdospace:local
+```
+
 ## 当前关键依赖
 
 - Go 1.25.x
@@ -52,3 +66,4 @@ go test ./internal/cloudflare -run TestClientIntegrationCreateGetDelete -v
 - 默认根域名支持自动引导，如果未显式配置 `CLOUDFLARE_DEFAULT_ZONE_ID`，服务会尝试通过 Cloudflare API 查询。
 - 前端已接入登录态、域名查询、命名空间申请和 DNS 记录管理接口。
 - 为了支持 OAuth 回跳，前端当前通过浏览器 URL 和内部 tab 状态双向同步。
+- Docker 单镜像部署时，前端静态资源会被嵌入 Go 二进制，由后端统一提供。

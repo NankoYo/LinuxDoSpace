@@ -34,10 +34,19 @@ LinuxDoSpace 是一个基于 Cloudflare DNS 的二级域名分发站，主要面
 - 命名空间内 DNS 记录管理
 - URL 与当前页面状态同步
 
+当前部署能力已实现：
+
+- 单镜像 Docker 部署
+- 前端静态资源嵌入 Go 二进制
+- GitHub Actions 自动构建并发布到 GHCR
+- 可选通过 SSH 自动部署到 Debian 服务器
+
 当前未完成：
 
 - 前端 API 联调
 - 兑换码 / L 站积分兑换流程
 - 管理后台页面
+
+部署参考见 [deployment.md](/G:/ClaudeProjects/LinuxDoSpace/docs/development/deployment.md)。
 
 详细开发文档见 [docs/development/README.md](/G:/ClaudeProjects/LinuxDoSpace/docs/development/README.md)。

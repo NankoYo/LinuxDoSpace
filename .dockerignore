@@ -1,0 +1,24 @@
+# Git 元数据与本地工具目录不需要进入 Docker 构建上下文。
+.git
+.gitignore
+.codex
+Agents.md
+AGENTS.md
+
+# 前端依赖与构建产物会在 Docker 内部重新生成。
+frontend/node_modules
+frontend/dist
+
+# 后端运行时数据和本地环境文件不应打入镜像。
+backend/.env
+backend/data
+backend/tmp
+
+# 文档和编辑器缓存不会参与镜像构建。
+docs
+.idea
+.vscode
+*.log
+*.db
+*.sqlite
+*.sqlite3

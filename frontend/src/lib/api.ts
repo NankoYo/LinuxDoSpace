@@ -11,9 +11,12 @@ import type {
 } from '../types/api';
 
 // apiBaseURL 用于保存当前前端应该连接的后端地址。
-// 如果没有通过环境变量显式指定，则默认连接本地开发后端。
-export const apiBaseURL =
-  (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
+// 在 Docker / 同源部署场景下，如果没有显式配置环境变量，就自动回退到当前页面所在源。
+export const apiBaseURL = (
+  import.meta.env.VITE_API_BASE_URL && import.meta.env.VITE_API_BASE_URL.trim() !== ''
+    ? import.meta.env.VITE_API_BASE_URL
+    : window.location.origin
+).replace(/\/+$/, '');
 
 // APIError 是浏览器端统一使用的接口异常类型。
 // 我们额外保留了 `code` 和 `status`，方便页面层做更细的错误提示。

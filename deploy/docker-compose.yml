@@ -1,0 +1,11 @@
+services:
+  linuxdospace:
+    image: ${IMAGE_NAME:-ghcr.io/moyeranqianzhi/linuxdospace}:${IMAGE_TAG:-latest}
+    container_name: linuxdospace
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

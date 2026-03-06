@@ -24,6 +24,12 @@
 - `POST /v1/admin/domains`
 - `POST /v1/admin/quotas`
 
+当前部署方式：
+
+- 本仓库提供单镜像 Docker 构建
+- 前端生产构建产物会在镜像构建阶段复制到 `backend/web/dist`
+- 后端会直接托管前端静态资源与 API
+
 本地运行：
 
 ```powershell

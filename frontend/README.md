@@ -19,4 +19,7 @@
 4. 运行类型检查：`npm run lint`
 5. 构建生产包：`npm run build`
 
-默认前端会连接 `http://localhost:8080`。
+说明：
+
+- 本地前后端分离开发时，`VITE_API_BASE_URL` 通常指向 `http://localhost:8080`。
+- Docker 单镜像部署时，可以省略该值，前端会自动回退到当前页面同源地址。

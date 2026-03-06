@@ -26,6 +26,10 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	}
 
 	mux := http.NewServeMux()
+	spaHandler, err := newSPAHandler()
+	if err != nil {
+		panic(err)
+	}
 
 	mux.HandleFunc("GET /healthz", api.handleHealth)
 	mux.HandleFunc("GET /v1/public/domains", api.handlePublicDomains)
@@ -43,6 +47,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/admin/domains", api.handleAdminDomains)
 	mux.HandleFunc("POST /v1/admin/domains", api.handleAdminUpsertDomain)
 	mux.HandleFunc("POST /v1/admin/quotas", api.handleAdminSetQuota)
+	mux.Handle("/", spaHandler)
 
 	return withCORS(deps.Config.App.AllowedOrigins, mux)
 }
