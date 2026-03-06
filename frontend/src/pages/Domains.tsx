@@ -58,25 +58,9 @@ export function Domains({
     setSelectedRootDomain(defaultDomain.root_domain);
   }, [publicDomains, selectedRootDomain]);
 
-  // 当前临时阶段只允许申请与 Linux Do 用户名同名的子域，因此登录后自动锁定输入框。
-  useEffect(() => {
-    if (!authenticated || !user?.username) {
-      return;
-    }
-
-    setDomain(user.username);
-    setStatus('idle');
-    setAvailability(null);
-    setMessage('');
-  }, [authenticated, user?.username]);
-
   // handleSearch 调用后端检查某个前缀是否可用。
   async function handleSearch(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!authenticated) {
-      onLogin();
-      return;
-    }
     if (!domain.trim() || !selectedRootDomain) {
       return;
     }
@@ -143,6 +127,10 @@ export function Domains({
   // selectedSuffix 用于展示当前输入框右侧动态变化的域名后缀。
   const selectedSuffix = selectedRootDomain || 'linuxdo.space';
   const reservedPrefix = user?.username?.trim() || '你的用户名';
+  const normalizedReservedPrefix = normalizeFrontendPrefix(user?.username ?? '');
+  const canRegisterCurrentResult =
+    availability?.available === true &&
+    (!authenticated || availability.normalized_prefix === normalizedReservedPrefix);
 
   return (
     <div className="max-w-4xl mx-auto pt-32 pb-24 px-6">
@@ -166,7 +154,7 @@ export function Domains({
       <GlassCard className="mb-8">
         {!authenticated && (
           <div className="mb-5 rounded-2xl border border-amber-300/40 bg-amber-100/60 dark:bg-amber-950/25 dark:border-amber-700/40 px-4 py-4 text-sm text-amber-900 dark:text-amber-200">
-            当前临时阶段仅允许领取与你的 Linux Do 用户名完全同名的子域名。请先登录后继续。
+            搜索功能保持开放。当前临时阶段仅允许登录后注册与你的 Linux Do 用户名完全同名的子域名。
           </div>
         )}
 
@@ -206,17 +194,13 @@ export function Domains({
               type="text"
               value={domain}
               onChange={(event) => {
-                if (authenticated) {
-                  return;
-                }
                 setDomain(event.target.value);
                 setStatus('idle');
                 setAvailability(null);
                 setMessage('');
               }}
-              readOnly={authenticated}
-              placeholder={authenticated ? reservedPrefix : '输入你想要的域名前缀'}
-              className="w-full pl-4 pr-32 py-4 rounded-2xl bg-white/50 dark:bg-black/50 border border-white/40 dark:border-white/20 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 transition-all read-only:cursor-not-allowed read-only:opacity-80"
+              placeholder="输入你想要的域名前缀"
+              className="w-full pl-4 pr-32 py-4 rounded-2xl bg-white/50 dark:bg-black/50 border border-white/40 dark:border-white/20 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 transition-all"
             />
             <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
               .{selectedSuffix}
@@ -228,13 +212,13 @@ export function Domains({
             className="flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold shadow-lg transition-all transform hover:scale-105"
           >
             {status === 'checking' ? <LoaderCircle size={20} className="animate-spin" /> : <Search size={20} />}
-            {authenticated ? '检查我的同名子域' : '登录后继续'}
+            查询
           </button>
         </form>
 
         {authenticated && (
           <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">
-            当前只允许申请 <span className="font-semibold text-teal-600 dark:text-teal-300">{reservedPrefix}.{selectedSuffix}</span>
+            当前暂时只开放注册 <span className="font-semibold text-teal-600 dark:text-teal-300">{reservedPrefix}.{selectedSuffix}</span>，其他前缀仅可搜索。
           </div>
         )}
 
@@ -261,11 +245,11 @@ export function Domains({
                   <button
                     type="button"
                     onClick={() => void handleRegister()}
-                    disabled={status === 'creating'}
+                    disabled={status === 'creating' || !canRegisterCurrentResult}
                     className="px-6 py-2 rounded-xl bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white font-medium transition-colors flex items-center gap-2"
                   >
                     {status === 'creating' ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                    {authenticated ? '立即注册' : '登录后注册'}
+                    {!authenticated ? '登录后注册' : canRegisterCurrentResult ? '立即注册' : '暂未开放注册'}
                   </button>
                 ) : (
                   <span className="text-red-500 font-medium">当前不可申请</span>
@@ -274,6 +258,11 @@ export function Domains({
             )}
 
             {message && <div className="mt-4 text-sm text-gray-700 dark:text-gray-300">{message}</div>}
+            {availability?.available && authenticated && !canRegisterCurrentResult && (
+              <div className="mt-4 text-sm text-amber-700 dark:text-amber-300">
+                该前缀当前可以搜索，但暂未开放注册。当前只允许注册与你的用户名同名的子域。
+              </div>
+            )}
           </motion.div>
         )}
       </GlassCard>
@@ -336,4 +325,36 @@ function readableErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+// normalizeFrontendPrefix 复用后端同样的清洗思路，避免前端按钮状态与后端限制出现明显偏差。
+function normalizeFrontendPrefix(raw: string): string {
+  const value = raw.trim().toLowerCase();
+  if (value === '') {
+    return '';
+  }
+
+  let normalized = '';
+  let lastWasDash = false;
+  for (const char of value) {
+    const isLower = char >= 'a' && char <= 'z';
+    const isDigit = char >= '0' && char <= '9';
+
+    if (isLower || isDigit) {
+      normalized += char;
+      lastWasDash = false;
+      continue;
+    }
+
+    if (!lastWasDash) {
+      normalized += '-';
+      lastWasDash = true;
+    }
+  }
+
+  normalized = normalized.replace(/^-+|-+$/g, '');
+  if (normalized.length > 63) {
+    normalized = normalized.slice(0, 63).replace(/-+$/g, '');
+  }
+  return normalized;
 }

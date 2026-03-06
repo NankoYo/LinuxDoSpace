@@ -168,19 +168,6 @@ func (s *DomainService) CheckAvailability(ctx context.Context, rootDomain string
 	return result, nil
 }
 
-// CheckAvailabilityForUser 在公开可用性检查之外，再额外施加“用户名同名子域”临时限制。
-func (s *DomainService) CheckAvailabilityForUser(ctx context.Context, user model.User, rootDomain string, prefix string) (AvailabilityResult, error) {
-	normalizedPrefix, err := NormalizePrefix(prefix)
-	if err != nil {
-		return AvailabilityResult{}, ValidationError(err.Error())
-	}
-	if err := ensureTemporaryUsernameMatch(user, normalizedPrefix); err != nil {
-		return AvailabilityResult{}, err
-	}
-
-	return s.CheckAvailability(ctx, rootDomain, prefix)
-}
-
 // AutoProvisionForUser 尝试为刚登录的用户自动分配 `<username>.<root_domain>`。
 func (s *DomainService) AutoProvisionForUser(ctx context.Context, user model.User) error {
 	managedDomains, err := s.db.ListManagedDomains(ctx, false)
