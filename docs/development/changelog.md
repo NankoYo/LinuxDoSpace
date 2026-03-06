@@ -1,5 +1,11 @@
 # LinuxDoSpace 更新日志
 
+## 0.4.1-alpha.1
+
+- 修复 `Agents.md` 被错误提交到仓库的问题。
+- 在 `.gitignore` 中增加 `Agents.md` 与 `AGENTS.md` 忽略规则。
+- 将已跟踪的 `Agents.md` 从 Git 索引移除，但保留本地文件。
+
 ## 0.1.0-alpha.1
 
 - 初始化 Git 仓库。
