@@ -2,6 +2,7 @@ package linuxdo
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,10 @@ func TestExchangeCodeSendsFormAndAcceptHeader(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
+		expectedAuthorization := "Basic " + base64.StdEncoding.EncodeToString([]byte("client-id:client-secret"))
+		if got := r.Header.Get("Authorization"); got != expectedAuthorization {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
 		if got := r.Header.Get("Accept"); got != "application/json" {
 			t.Fatalf("expected Accept application/json, got %q", got)
 		}
@@ -47,11 +52,11 @@ func TestExchangeCodeSendsFormAndAcceptHeader(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatalf("parse form: %v", err)
 		}
-		if got := r.Form.Get("client_id"); got != "client-id" {
-			t.Fatalf("unexpected client_id %q", got)
+		if got := r.Form.Get("client_id"); got != "" {
+			t.Fatalf("expected empty client_id in form body, got %q", got)
 		}
-		if got := r.Form.Get("client_secret"); got != "client-secret" {
-			t.Fatalf("unexpected client_secret %q", got)
+		if got := r.Form.Get("client_secret"); got != "" {
+			t.Fatalf("expected empty client_secret in form body, got %q", got)
 		}
 		if got := r.Form.Get("grant_type"); got != "authorization_code" {
 			t.Fatalf("unexpected grant_type %q", got)

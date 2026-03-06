@@ -29,6 +29,7 @@ func (a *API) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		security.FingerprintUserAgent(r),
 	)
 	if err != nil {
+		log.Printf("linuxdo oauth callback failed: %v", err)
 		writeError(w, err)
 		return
 	}

@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
-import { LogIn, ShieldCheck, ArrowRight, LogOut } from 'lucide-react';
+import { ShieldCheck, ArrowRight, LogOut } from 'lucide-react';
+import { LinuxDoIcon } from '../components/LinuxDoIcon';
 import type { User } from '../types/api';
 
 // LoginProps 描述登录页和外层应用之间的交互契约。
@@ -58,8 +59,8 @@ export function Login({
               disabled={!oauthConfigured}
               className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-[#1a1a1a] dark:bg-white hover:bg-black dark:hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed text-white dark:text-black font-bold text-lg shadow-xl transition-all transform hover:scale-[1.02] active:scale-95"
             >
-              <LogIn size={24} />
-              <span>{oauthConfigured ? 'Login with Linux Do' : 'OAuth 暂未配置'}</span>
+              <LinuxDoIcon className="w-6 h-6 shrink-0" />
+              <span>{oauthConfigured ? '使用 Linux Do 继续' : 'OAuth 暂未配置'}</span>
             </button>
           ) : (
             <div className="space-y-3">

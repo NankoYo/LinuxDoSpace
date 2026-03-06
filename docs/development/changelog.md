@@ -1,5 +1,11 @@
 ﻿# LinuxDoSpace 更新日志
 
+## 0.5.3-alpha.1
+
+- 参考 `QuantumNous/new-api` 修复 Linux Do OAuth token 交换方式，改为使用 HTTP Basic Auth 传递 `client_id:client_secret`。
+- 为 Linux Do OAuth 回调失败增加后端日志，便于定位线上 `502` 或鉴权失败根因。
+- 在不改变现有登录页布局的前提下，为 Linux Do 登录按钮接入品牌 SVG 图标并更新按钮文案。
+
 ## 0.5.2-alpha.1
 
 - 修复 Linux Do OAuth 客户端未显式发送 Accept: application/json 的问题。

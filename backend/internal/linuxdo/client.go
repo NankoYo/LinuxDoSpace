@@ -2,6 +2,7 @@ package linuxdo
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,13 +78,17 @@ func (c *Client) BuildAuthorizationURL(state string, codeChallenge string) strin
 	return c.authorizeURL + "?" + values.Encode()
 }
 
+// basicAuthorizationHeader returns the RFC 7617 Basic Authorization header required by Linux Do.
+func (c *Client) basicAuthorizationHeader() string {
+	credentials := c.clientID + ":" + c.clientSecret
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
+}
+
 // ExchangeCode swaps an authorization code for an access token.
 func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier string) (TokenResponse, error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
-	form.Set("client_id", c.clientID)
-	form.Set("client_secret", c.clientSecret)
 	form.Set("redirect_uri", c.redirectURL)
 	if c.enablePKCE && codeVerifier != "" {
 		form.Set("code_verifier", codeVerifier)
@@ -93,6 +98,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier str
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("create linuxdo token request: %w", err)
 	}
+	request.Header.Set("Authorization", c.basicAuthorizationHeader())
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
 
