@@ -1,47 +1,27 @@
-# LinuxDoSpace 更新日志
+﻿# LinuxDoSpace 更新日志
+
+## 0.5.2-alpha.1
+
+- 修复 Linux Do OAuth 客户端未显式发送 Accept: application/json 的问题。
+- 修复部署默认值把 LINUXDO_OAUTH_SCOPE 留空的问题，统一改为 user。
+- 增加 Linux Do OAuth 客户端测试，覆盖授权 URL、token 交换和用户信息请求。
 
 ## 0.5.1-alpha.1
 
-- 修复 GitHub Actions 工作流语法错误。
-- 避免在 job 级 `if` 条件中直接引用 `secrets.*`，改为仅判断手动部署输入。
-- 增加部署 job 内部的 secret 校验步骤，确保缺失配置时明确失败。
-
+- 淇 GitHub Actions 宸ヤ綔娴佽娉曢敊璇€?- 閬垮厤鍦?job 绾?`if` 鏉′欢涓洿鎺ュ紩鐢?`secrets.*`锛屾敼涓轰粎鍒ゆ柇鎵嬪姩閮ㄧ讲杈撳叆銆?- 澧炲姞閮ㄧ讲 job 鍐呴儴鐨?secret 鏍￠獙姝ラ锛岀‘淇濈己澶遍厤缃椂鏄庣‘澶辫触銆?
 ## 0.5.0-alpha.1
 
-- 增加单镜像 Docker 部署方案，前端构建产物会嵌入 Go 二进制。
-- 增加根目录 `Dockerfile` 与 `.dockerignore`。
-- 增加 Debian 服务器使用的 `docker-compose.yml` 与环境变量模板。
-- 增加 GitHub Actions 容器构建、GHCR 发布与可选 Debian SSH 部署工作流。
-- 补充部署文档、运行手册和发布说明。
-
+- 澧炲姞鍗曢暅鍍?Docker 閮ㄧ讲鏂规锛屽墠绔瀯寤轰骇鐗╀細宓屽叆 Go 浜岃繘鍒躲€?- 澧炲姞鏍圭洰褰?`Dockerfile` 涓?`.dockerignore`銆?- 澧炲姞 Debian 鏈嶅姟鍣ㄤ娇鐢ㄧ殑 `docker-compose.yml` 涓庣幆澧冨彉閲忔ā鏉裤€?- 澧炲姞 GitHub Actions 瀹瑰櫒鏋勫缓銆丟HCR 鍙戝竷涓庡彲閫?Debian SSH 閮ㄧ讲宸ヤ綔娴併€?- 琛ュ厖閮ㄧ讲鏂囨。銆佽繍琛屾墜鍐屽拰鍙戝竷璇存槑銆?
 ## 0.4.1-alpha.1
 
-- 修复 `Agents.md` 被错误提交到仓库的问题。
-- 在 `.gitignore` 中增加 `Agents.md` 与 `AGENTS.md` 忽略规则。
-- 将已跟踪的 `Agents.md` 从 Git 索引移除，但保留本地文件。
-
+- 淇 `Agents.md` 琚敊璇彁浜ゅ埌浠撳簱鐨勯棶棰樸€?- 鍦?`.gitignore` 涓鍔?`Agents.md` 涓?`AGENTS.md` 蹇界暐瑙勫垯銆?- 灏嗗凡璺熻釜鐨?`Agents.md` 浠?Git 绱㈠紩绉婚櫎锛屼絾淇濈暀鏈湴鏂囦欢銆?
 ## 0.1.0-alpha.1
 
-- 初始化 Git 仓库。
-- 建立 Go 后端基础骨架。
-- 增加配置加载、SQLite 初始化和 SQL 迁移。
-- 增加 Linux Do / Cloudflare 客户端初版。
-- 增加 `GET /healthz` 健康检查接口。
-- 建立开发文档目录与基础文档。
-
+- 鍒濆鍖?Git 浠撳簱銆?- 寤虹珛 Go 鍚庣鍩虹楠ㄦ灦銆?- 澧炲姞閰嶇疆鍔犺浇銆丼QLite 鍒濆鍖栧拰 SQL 杩佺Щ銆?- 澧炲姞 Linux Do / Cloudflare 瀹㈡埛绔垵鐗堛€?- 澧炲姞 `GET /healthz` 鍋ュ悍妫€鏌ユ帴鍙ｃ€?- 寤虹珛寮€鍙戞枃妗ｇ洰褰曚笌鍩虹鏂囨。銆?
 ## 0.2.0-alpha.1
 
-- 增加 Linux Do OAuth 登录流程、会话创建和退出登录。
-- 增加服务端 Session、CSRF 校验和 User-Agent 指纹绑定。
-- 增加根域名配置、用户配额覆盖和命名空间分配能力。
-- 增加 Cloudflare 实时 DNS 记录创建、查询、更新和删除。
-- 增加管理员接口和审计日志写入。
-- 增加单元测试与 Cloudflare 真实集成测试。
-
+- 澧炲姞 Linux Do OAuth 鐧诲綍娴佺▼銆佷細璇濆垱寤哄拰閫€鍑虹櫥褰曘€?- 澧炲姞鏈嶅姟绔?Session銆丆SRF 鏍￠獙鍜?User-Agent 鎸囩汗缁戝畾銆?- 澧炲姞鏍瑰煙鍚嶉厤缃€佺敤鎴烽厤棰濊鐩栧拰鍛藉悕绌洪棿鍒嗛厤鑳藉姏銆?- 澧炲姞 Cloudflare 瀹炴椂 DNS 璁板綍鍒涘缓銆佹煡璇€佹洿鏂板拰鍒犻櫎銆?- 澧炲姞绠＄悊鍛樻帴鍙ｅ拰瀹¤鏃ュ織鍐欏叆銆?- 澧炲姞鍗曞厓娴嬭瘯涓?Cloudflare 鐪熷疄闆嗘垚娴嬭瘯銆?
 ## 0.4.0-alpha.1
 
-- 前端接入后端真实 API，不再使用随机占用状态和本地 mock 记录。
-- 增加前端统一 API 客户端、类型定义和环境变量配置。
-- 增加前端登录态同步、OAuth 跳转和 URL 与 tab 状态同步。
-- 增加前端 allocation 申请、DNS 记录查询、创建、更新和删除能力。
-- 在保留原有 UI 设计风格的前提下完成真实业务联调。
+- 鍓嶇鎺ュ叆鍚庣鐪熷疄 API锛屼笉鍐嶄娇鐢ㄩ殢鏈哄崰鐢ㄧ姸鎬佸拰鏈湴 mock 璁板綍銆?- 澧炲姞鍓嶇缁熶竴 API 瀹㈡埛绔€佺被鍨嬪畾涔夊拰鐜鍙橀噺閰嶇疆銆?- 澧炲姞鍓嶇鐧诲綍鎬佸悓姝ャ€丱Auth 璺宠浆鍜?URL 涓?tab 鐘舵€佸悓姝ャ€?- 澧炲姞鍓嶇 allocation 鐢宠銆丏NS 璁板綍鏌ヨ銆佸垱寤恒€佹洿鏂板拰鍒犻櫎鑳藉姏銆?- 鍦ㄤ繚鐣欏師鏈?UI 璁捐椋庢牸鐨勫墠鎻愪笅瀹屾垚鐪熷疄涓氬姟鑱旇皟銆?
+

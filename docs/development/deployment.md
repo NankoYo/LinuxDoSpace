@@ -1,84 +1,67 @@
-# LinuxDoSpace 部署说明
+﻿# LinuxDoSpace 閮ㄧ讲璇存槑
 
-## 部署形态
+## 閮ㄧ讲褰㈡€?
+褰撳墠浠撳簱閲囩敤鍗曢暅鍍忛儴缃叉柟妗堬細
 
-当前仓库采用单镜像部署方案：
+- GitHub Actions 鏋勫缓鍓嶇闈欐€佽祫婧?- Go 鍚庣鎶婂墠绔瀯寤轰骇鐗╁祵鍏ヤ簩杩涘埗
+- Debian 鏈嶅姟鍣ㄥ彧闇€瑕佽繍琛屼竴涓鍣?
+杩欐牱鍙互閬垮厤鍓嶅悗绔媶鍒嗛儴缃插甫鏉ョ殑璺ㄥ煙銆佸洖璋冨湴鍧€鍜岄潤鎬佽祫婧愬悓姝ラ棶棰樸€?
+## Docker 闀滃儚
 
-- GitHub Actions 构建前端静态资源
-- Go 后端把前端构建产物嵌入二进制
-- Debian 服务器只需要运行一个容器
+- Dockerfile锛氫粨搴撴牴鐩綍 [Dockerfile](/G:/ClaudeProjects/LinuxDoSpace/Dockerfile)
+- 杩愯鏃堕暅鍍忛粯璁ょ洃鍚鍣ㄥ唴 `8080`
+- SQLite 鏁版嵁搴撻粯璁ゆ寕杞藉埌 `/app/data/linuxdospace.sqlite`
 
-这样可以避免前后端拆分部署带来的跨域、回调地址和静态资源同步问题。
-
-## Docker 镜像
-
-- Dockerfile：仓库根目录 [Dockerfile](/G:/ClaudeProjects/LinuxDoSpace/Dockerfile)
-- 运行时镜像默认监听容器内 `8080`
-- SQLite 数据库默认挂载到 `/app/data/linuxdospace.sqlite`
-
-## Debian 服务器准备
-
-需要安装：
+## Debian 鏈嶅姟鍣ㄥ噯澶?
+闇€瑕佸畨瑁咃細
 
 - Docker Engine
 - Docker Compose Plugin
 
-推荐部署目录：
-
+鎺ㄨ崘閮ㄧ讲鐩綍锛?
 - `/opt/linuxdospace`
 
-## 服务器文件
+## 鏈嶅姟鍣ㄦ枃浠?
+浠撳簱鎻愪緵锛?
+- Compose 鏂囦欢锛歔deploy/docker-compose.yml](/G:/ClaudeProjects/LinuxDoSpace/deploy/docker-compose.yml)
+- 鐜鍙橀噺妯℃澘锛歔deploy/linuxdospace.env.example](/G:/ClaudeProjects/LinuxDoSpace/deploy/linuxdospace.env.example)
 
-仓库提供：
+鍦?Debian 鏈嶅姟鍣ㄤ笂锛岄€氬父闇€瑕侊細
 
-- Compose 文件：[deploy/docker-compose.yml](/G:/ClaudeProjects/LinuxDoSpace/deploy/docker-compose.yml)
-- 环境变量模板：[deploy/linuxdospace.env.example](/G:/ClaudeProjects/LinuxDoSpace/deploy/linuxdospace.env.example)
+1. 鍒涘缓 `/opt/linuxdospace`
+2. 鏀惧叆 `docker-compose.yml`
+3. 鏀惧叆 `.env`
+4. 鎵ц `docker compose pull`
+5. 鎵ц `docker compose up -d`
 
-在 Debian 服务器上，通常需要：
-
-1. 创建 `/opt/linuxdospace`
-2. 放入 `docker-compose.yml`
-3. 放入 `.env`
-4. 执行 `docker compose pull`
-5. 执行 `docker compose up -d`
-
-## GitHub Actions 工作流
-
-工作流文件：
+## GitHub Actions 宸ヤ綔娴?
+宸ヤ綔娴佹枃浠讹細
 
 - [container-release.yml](/G:/ClaudeProjects/LinuxDoSpace/.github/workflows/container-release.yml)
 
-功能：
+鍔熻兘锛?
+- push 鍒?`main` 鏃惰嚜鍔ㄦ瀯寤哄苟鎺ㄩ€侀暅鍍忓埌 GHCR
+- push 鐗堟湰 tag 鏃惰嚜鍔ㄦ瀯寤哄苟鎺ㄩ€佸搴?tag 闀滃儚
+- `workflow_dispatch` 鎵嬪姩瑙﹀彂鏃跺彲閫夌洿鎺ラ儴缃插埌 Debian 鏈嶅姟鍣?
+## 闇€瑕侀厤缃殑 GitHub Secrets
 
-- push 到 `main` 时自动构建并推送镜像到 GHCR
-- push 版本 tag 时自动构建并推送对应 tag 镜像
-- `workflow_dispatch` 手动触发时可选直接部署到 Debian 服务器
+鏋勫缓鎺ㄩ€佸埌 GHCR锛?
+- 榛樿浣跨敤 `GITHUB_TOKEN`锛屾棤闇€棰濆 Secrets
 
-## 需要配置的 GitHub Secrets
-
-构建推送到 GHCR：
-
-- 默认使用 `GITHUB_TOKEN`，无需额外 Secrets
-
-手动部署到 Debian 服务器时需要：
+鎵嬪姩閮ㄧ讲鍒?Debian 鏈嶅姟鍣ㄦ椂闇€瑕侊細
 
 - `DEPLOY_HOST`
-- `DEPLOY_PORT`（可选，默认 `22`）
-- `DEPLOY_USER`
-- `DEPLOY_PATH`（可选，默认 `/opt/linuxdospace`）
-- `DEPLOY_SSH_PRIVATE_KEY`
+- `DEPLOY_PORT`锛堝彲閫夛紝榛樿 `22`锛?- `DEPLOY_USER`
+- `DEPLOY_PATH`锛堝彲閫夛紝榛樿 `/opt/linuxdospace`锛?- `DEPLOY_SSH_PRIVATE_KEY`
 - `DEPLOY_ENV_FILE`
 - `DEPLOY_GHCR_USERNAME`
 - `DEPLOY_GHCR_TOKEN`
 
-其中：
-
-- `DEPLOY_ENV_FILE` 应是完整的多行 `.env` 文件内容
-- `DEPLOY_GHCR_TOKEN` 需要具备读取 GHCR 镜像的权限
-
-## 部署后验证
-
-可以在服务器上执行：
+鍏朵腑锛?
+- `DEPLOY_ENV_FILE` 搴旀槸瀹屾暣鐨勫琛?`.env` 鏂囦欢鍐呭
+- `DEPLOY_GHCR_TOKEN` 闇€瑕佸叿澶囪鍙?GHCR 闀滃儚鐨勬潈闄?
+## 閮ㄧ讲鍚庨獙璇?
+鍙互鍦ㄦ湇鍔″櫒涓婃墽琛岋細
 
 ```bash
 docker compose ps
@@ -86,8 +69,12 @@ docker compose logs -f
 curl http://127.0.0.1:8080/healthz
 ```
 
-如果服务对外经过反代，还应验证：
+濡傛灉鏈嶅姟瀵瑰缁忚繃鍙嶄唬锛岃繕搴旈獙璇侊細
 
-- 前端首页是否可访问
-- `/v1/me` 是否可返回未登录状态
-- Linux Do OAuth 回调地址是否与生产域名一致
+- 鍓嶇棣栭〉鏄惁鍙闂?- `/v1/me` 鏄惁鍙繑鍥炴湭鐧诲綍鐘舵€?- Linux Do OAuth 鍥炶皟鍦板潃鏄惁涓庣敓浜у煙鍚嶄竴鑷?
+
+## OAuth 注意事项
+
+- LINUXDO_OAUTH_REDIRECT_URL 必须指向后端回调地址，例如 https://api.linuxdo.space/v1/auth/callback`r
+- LINUXDO_OAUTH_SCOPE 建议保持为 user，与 Linux Do 官方示例一致
+

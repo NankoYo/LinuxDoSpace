@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"linuxdospace/backend/internal/model"
 )
 
-// Client 是 Linux Do OAuth / 用户信息接口的轻量级客户端。
+// Client is a small Linux Do OAuth / userinfo client backed by the standard library.
 type Client struct {
 	httpClient   *http.Client
 	clientID     string
@@ -25,19 +26,24 @@ type Client struct {
 	enablePKCE   bool
 }
 
-// TokenResponse 表示 OAuth 令牌交换成功后的返回结果。
+// TokenResponse captures the minimum token fields used by the application.
 type TokenResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 }
 
-// userEnvelope 用于兼容某些接口把用户对象包在 `user` 字段中的情况。
+// userEnvelope handles deployments where the user payload is wrapped under `user`.
 type userEnvelope struct {
 	User model.LinuxDOProfile `json:"user"`
 }
 
-// NewClient 创建 Linux Do 客户端。
+// NewClient constructs a Linux Do client and falls back to the documented `user` scope.
 func NewClient(clientID string, clientSecret string, redirectURL string, authorizeURL string, tokenURL string, userInfoURL string, scope string, enablePKCE bool) *Client {
+	normalizedScope := strings.TrimSpace(scope)
+	if normalizedScope == "" {
+		normalizedScope = "user"
+	}
+
 	return &Client{
 		httpClient:   &http.Client{Timeout: 20 * time.Second},
 		clientID:     strings.TrimSpace(clientID),
@@ -46,26 +52,24 @@ func NewClient(clientID string, clientSecret string, redirectURL string, authori
 		authorizeURL: strings.TrimSpace(authorizeURL),
 		tokenURL:     strings.TrimSpace(tokenURL),
 		userInfoURL:  strings.TrimSpace(userInfoURL),
-		scope:        strings.TrimSpace(scope),
+		scope:        normalizedScope,
 		enablePKCE:   enablePKCE,
 	}
 }
 
-// Configured 返回客户端是否具备完成 OAuth 授权码流程的最小配置。
+// Configured reports whether the client has the minimum settings required for OAuth.
 func (c *Client) Configured() bool {
 	return c.clientID != "" && c.clientSecret != "" && c.redirectURL != ""
 }
 
-// BuildAuthorizationURL 构造 Linux Do OAuth 登录跳转地址。
+// BuildAuthorizationURL creates the Linux Do authorization URL for one login attempt.
 func (c *Client) BuildAuthorizationURL(state string, codeChallenge string) string {
 	values := url.Values{}
 	values.Set("response_type", "code")
 	values.Set("client_id", c.clientID)
 	values.Set("redirect_uri", c.redirectURL)
 	values.Set("state", state)
-	if c.scope != "" {
-		values.Set("scope", c.scope)
-	}
+	values.Set("scope", c.scope)
 	if c.enablePKCE && codeChallenge != "" {
 		values.Set("code_challenge", codeChallenge)
 		values.Set("code_challenge_method", "S256")
@@ -73,7 +77,7 @@ func (c *Client) BuildAuthorizationURL(state string, codeChallenge string) strin
 	return c.authorizeURL + "?" + values.Encode()
 }
 
-// ExchangeCode 使用授权码换取访问令牌。
+// ExchangeCode swaps an authorization code for an access token.
 func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier string) (TokenResponse, error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
@@ -90,6 +94,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier str
 		return TokenResponse{}, fmt.Errorf("create linuxdo token request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "application/json")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
@@ -97,63 +102,59 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier str
 	}
 	defer response.Body.Close()
 
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("read linuxdo token response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return TokenResponse{}, fmt.Errorf("linuxdo token request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
 	var token TokenResponse
-	if err := json.NewDecoder(response.Body).Decode(&token); err != nil {
+	if err := json.Unmarshal(body, &token); err != nil {
 		return TokenResponse{}, fmt.Errorf("decode linuxdo token response: %w", err)
 	}
 	if strings.TrimSpace(token.AccessToken) == "" {
-		return TokenResponse{}, fmt.Errorf("linuxdo token response did not contain access_token")
+		return TokenResponse{}, fmt.Errorf("linuxdo token response did not contain access_token: %s", strings.TrimSpace(string(body)))
 	}
 
 	return token, nil
 }
 
-// GetCurrentUser 使用访问令牌获取当前 Linux Do 用户信息。
-// 这里会先尝试解析直出结构，如果失败，再回退到包裹结构解析。
+// GetCurrentUser fetches the current Linux Do profile with the issued access token.
 func (c *Client) GetCurrentUser(ctx context.Context, accessToken string) (model.LinuxDOProfile, error) {
-	decodeDirect := func() (model.LinuxDOProfile, error) {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.userInfoURL, nil)
-		if err != nil {
-			return model.LinuxDOProfile{}, fmt.Errorf("create linuxdo userinfo request: %w", err)
-		}
-		request.Header.Set("Authorization", "Bearer "+accessToken)
-
-		response, err := c.httpClient.Do(request)
-		if err != nil {
-			return model.LinuxDOProfile{}, fmt.Errorf("perform linuxdo userinfo request: %w", err)
-		}
-		defer response.Body.Close()
-
-		var direct model.LinuxDOProfile
-		if err := json.NewDecoder(response.Body).Decode(&direct); err != nil {
-			return model.LinuxDOProfile{}, err
-		}
-		return direct, nil
-	}
-
-	direct, err := decodeDirect()
-	if err == nil && direct.Username != "" {
-		return direct, nil
-	}
-
-	request, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, c.userInfoURL, nil)
-	if reqErr != nil {
-		return model.LinuxDOProfile{}, fmt.Errorf("recreate linuxdo userinfo request: %w", reqErr)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.userInfoURL, nil)
+	if err != nil {
+		return model.LinuxDOProfile{}, fmt.Errorf("create linuxdo userinfo request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", "application/json")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return model.LinuxDOProfile{}, fmt.Errorf("repeat linuxdo userinfo request: %w", err)
+		return model.LinuxDOProfile{}, fmt.Errorf("perform linuxdo userinfo request: %w", err)
 	}
 	defer response.Body.Close()
 
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return model.LinuxDOProfile{}, fmt.Errorf("read linuxdo userinfo response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var direct model.LinuxDOProfile
+	if err := json.Unmarshal(body, &direct); err == nil && direct.Username != "" {
+		return direct, nil
+	}
+
 	var envelope userEnvelope
-	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		return model.LinuxDOProfile{}, fmt.Errorf("decode linuxdo userinfo response: %w", err)
 	}
 	if envelope.User.Username == "" {
-		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo response did not contain username")
+		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo response did not contain username: %s", strings.TrimSpace(string(body)))
 	}
 	return envelope.User, nil
 }
