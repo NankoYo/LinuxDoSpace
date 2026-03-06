@@ -1,5 +1,10 @@
 ﻿# LinuxDoSpace 更新日志
 
+## 0.5.3-alpha.2
+
+- 修复部署环境使用错误 DNS 解析 `connect.linux.do` 的问题，为 Docker Compose 明确指定公共 DNS。
+- 解决 Linux Do OAuth token 请求因上游域名解析错误而超时，避免登录回调阶段返回 `502`。
+
 ## 0.5.3-alpha.1
 
 - 参考 `QuantumNous/new-api` 修复 Linux Do OAuth token 交换方式，改为使用 HTTP Basic Auth 传递 `client_id:client_secret`。

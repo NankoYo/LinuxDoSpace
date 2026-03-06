@@ -3,6 +3,10 @@ services:
     image: ${IMAGE_NAME:-ghcr.io/moyeranqianzhi/linuxdospace}:${IMAGE_TAG:-latest}
     container_name: linuxdospace
     restart: unless-stopped
+    # 固定公共 DNS，避免宿主机错误解析 connect.linux.do 导致 OAuth token 请求超时。
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "${APP_PORT:-8080}:8080"
     env_file:
