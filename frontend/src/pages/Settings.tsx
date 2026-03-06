@@ -1,27 +1,151 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
-import { Plus, Trash2, Edit2, X } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  Edit2,
+  X,
+  LoaderCircle,
+  ArrowRight,
+  LogOut,
+  Sparkles,
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
+import {
+  APIError,
+  createDNSRecord,
+  deleteDNSRecord,
+  listAllocationRecords,
+  updateDNSRecord,
+} from '../lib/api';
+import type { Allocation, DNSRecord, UpsertDNSRecordInput, User } from '../types/api';
 
-interface Record {
-  id: number;
+// RecordFormState 表示 DNS 记录弹窗中的表单状态。
+interface RecordFormState {
   type: string;
   name: string;
   content: string;
+  ttl: number;
   proxied: boolean;
+  comment: string;
+  priority: string;
 }
 
-export function Settings() {
-  const [records, setRecords] = useState<Record[]>([
-    { id: 1, type: 'A', name: '@', content: '192.168.1.1', proxied: true },
-    { id: 2, type: 'CNAME', name: 'www', content: 'cname.vercel-dns.com', proxied: false },
-  ]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingRecord, setEditingRecord] = useState<Record | null>(null);
-  const [formData, setFormData] = useState({ type: 'A', name: '', content: '', proxied: false });
+// SettingsProps 描述配置中心需要的用户态、分配列表和操作回调。
+interface SettingsProps {
+  authenticated: boolean;
+  sessionLoading: boolean;
+  user?: User;
+  allocations: Allocation[];
+  csrfToken?: string;
+  onLogin: () => void;
+  onNavigateDomains: () => void;
+  onSessionRefresh: () => Promise<void>;
+  onLogout: () => Promise<void>;
+}
 
-  const triggerFireworks = () => {
+// emptyForm 是 DNS 记录弹窗默认使用的初始表单值。
+const emptyForm: RecordFormState = {
+  type: 'A',
+  name: '@',
+  content: '',
+  ttl: 1,
+  proxied: true,
+  comment: '',
+  priority: '',
+};
+
+// Settings 负责接入用户自己的 allocation 和 DNS 记录管理能力。
+export function Settings({
+  authenticated,
+  sessionLoading,
+  user,
+  allocations,
+  csrfToken,
+  onLogin,
+  onNavigateDomains,
+  onSessionRefresh,
+  onLogout,
+}: SettingsProps) {
+  // selectedAllocationID 保存当前用户正在查看的命名空间。
+  const [selectedAllocationID, setSelectedAllocationID] = useState<number | null>(null);
+
+  // records 保存当前命名空间下的实时 DNS 记录列表。
+  const [records, setRecords] = useState<DNSRecord[]>([]);
+
+  // recordsLoading 用于控制 DNS 记录列表的加载状态。
+  const [recordsLoading, setRecordsLoading] = useState(false);
+
+  // recordsError 用于保存 DNS 记录列表加载失败的信息。
+  const [recordsError, setRecordsError] = useState('');
+
+  // notice 用于展示创建、更新、删除后的反馈信息。
+  const [notice, setNotice] = useState('');
+
+  // isModalOpen 控制 DNS 记录编辑弹窗的显示与隐藏。
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // editingRecord 表示当前正在编辑的记录；为空时表示新建模式。
+  const [editingRecord, setEditingRecord] = useState<DNSRecord | null>(null);
+
+  // formData 保存弹窗表单状态。
+  const [formData, setFormData] = useState<RecordFormState>(emptyForm);
+
+  // isSaving 用于控制保存按钮的提交中状态。
+  const [isSaving, setIsSaving] = useState(false);
+
+  // deletingRecordID 用于标记当前正在删除的记录。
+  const [deletingRecordID, setDeletingRecordID] = useState<string | null>(null);
+
+  // 当 allocation 列表更新时，自动选中 primary 或第一条 allocation。
+  useEffect(() => {
+    if (!authenticated || allocations.length === 0) {
+      setSelectedAllocationID(null);
+      setRecords([]);
+      return;
+    }
+
+    const currentExists = allocations.some((item) => item.id === selectedAllocationID);
+    if (currentExists) {
+      return;
+    }
+
+    const preferred = allocations.find((item) => item.is_primary) ?? allocations[0];
+    setSelectedAllocationID(preferred.id);
+  }, [allocations, authenticated, selectedAllocationID]);
+
+  // 当用户切换 allocation 时，读取该命名空间下的实时 DNS 记录。
+  useEffect(() => {
+    if (!authenticated || selectedAllocationID == null) {
+      setRecords([]);
+      return;
+    }
+
+    void loadRecords(selectedAllocationID);
+  }, [authenticated, selectedAllocationID]);
+
+  // selectedAllocation 方便模板层读取当前选中的 allocation。
+  const selectedAllocation = allocations.find((item) => item.id === selectedAllocationID) ?? null;
+
+  // loadRecords 从后端读取指定命名空间下的记录列表。
+  async function loadRecords(allocationID: number): Promise<void> {
+    setRecordsLoading(true);
+    setRecordsError('');
+
+    try {
+      const nextRecords = await listAllocationRecords(allocationID);
+      setRecords(nextRecords);
+    } catch (error) {
+      setRecords([]);
+      setRecordsError(readableErrorMessage(error, '无法加载当前命名空间的 DNS 记录'));
+    } finally {
+      setRecordsLoading(false);
+    }
+  }
+
+  // triggerFireworks 继续沿用原有庆祝动画，在写操作成功后调用。
+  function triggerFireworks(): void {
     const duration = 3 * 1000;
     const end = Date.now() + duration;
 
@@ -31,71 +155,252 @@ export function Settings() {
         angle: 60,
         spread: 55,
         origin: { x: 0 },
-        colors: ['#2dd4bf', '#34d399', '#0ea5e9']
+        colors: ['#2dd4bf', '#34d399', '#0ea5e9'],
       });
       confetti({
         particleCount: 5,
         angle: 120,
         spread: 55,
         origin: { x: 1 },
-        colors: ['#2dd4bf', '#34d399', '#0ea5e9']
+        colors: ['#2dd4bf', '#34d399', '#0ea5e9'],
       });
 
       if (Date.now() < end) {
         requestAnimationFrame(frame);
       }
     };
+
     frame();
-  };
+  }
 
-  const handleSave = () => {
-    if (!formData.name || !formData.content) return;
-    
-    if (editingRecord) {
-      setRecords(records.map(r => r.id === editingRecord.id ? { ...formData, id: r.id } : r));
-    } else {
-      setRecords([...records, { ...formData, id: Date.now() }]);
-    }
-    
-    setIsModalOpen(false);
-    setEditingRecord(null);
-    setFormData({ type: 'A', name: '', content: '', proxied: false });
-    triggerFireworks();
-  };
-
-  const handleDelete = (id: number) => {
-    setRecords(records.filter(r => r.id !== id));
-  };
-
-  const openModal = (record?: Record) => {
+  // openModal 打开记录弹窗，并根据是否传入 record 决定是编辑还是新建。
+  function openModal(record?: DNSRecord): void {
     if (record) {
       setEditingRecord(record);
-      setFormData(record);
+      setFormData({
+        type: record.type,
+        name: record.relative_name,
+        content: record.content,
+        ttl: record.ttl,
+        proxied: record.proxied,
+        comment: record.comment ?? '',
+        priority: record.priority != null ? String(record.priority) : '',
+      });
     } else {
       setEditingRecord(null);
-      setFormData({ type: 'A', name: '', content: '', proxied: false });
+      setFormData(emptyForm);
     }
+
+    setNotice('');
     setIsModalOpen(true);
-  };
+  }
+
+  // closeModal 关闭弹窗并重置编辑态。
+  function closeModal(): void {
+    setIsModalOpen(false);
+    setEditingRecord(null);
+    setFormData(emptyForm);
+  }
+
+  // handleSave 把弹窗表单提交给后端，用于创建或更新 DNS 记录。
+  async function handleSave(): Promise<void> {
+    if (!selectedAllocation || !csrfToken) {
+      setNotice('当前会话不可用，请刷新页面后重试。');
+      return;
+    }
+
+    if (!formData.name.trim() || !formData.content.trim()) {
+      setNotice('记录名称和内容不能为空。');
+      return;
+    }
+
+    setIsSaving(true);
+    setNotice('');
+
+    try {
+      const payload = buildRecordPayload(formData);
+
+      if (editingRecord) {
+        await updateDNSRecord(selectedAllocation.id, editingRecord.id, payload, csrfToken);
+      } else {
+        await createDNSRecord(selectedAllocation.id, payload, csrfToken);
+      }
+
+      await loadRecords(selectedAllocation.id);
+      closeModal();
+      setNotice(editingRecord ? '记录更新成功。' : '记录创建成功。');
+      triggerFireworks();
+    } catch (error) {
+      setNotice(readableErrorMessage(error, '保存记录失败'));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  // handleDelete 删除指定记录。
+  async function handleDelete(recordID: string): Promise<void> {
+    if (!selectedAllocation || !csrfToken) {
+      setNotice('当前会话不可用，请刷新页面后重试。');
+      return;
+    }
+
+    setDeletingRecordID(recordID);
+    setNotice('');
+
+    try {
+      await deleteDNSRecord(selectedAllocation.id, recordID, csrfToken);
+      await loadRecords(selectedAllocation.id);
+      setNotice('记录删除成功。');
+    } catch (error) {
+      setNotice(readableErrorMessage(error, '删除记录失败'));
+    } finally {
+      setDeletingRecordID(null);
+    }
+  }
+
+  // 未登录时，配置中心显示登录引导卡片，而不是空白页。
+  if (!authenticated) {
+    return (
+      <div className="max-w-4xl mx-auto pt-32 pb-24 px-6">
+        <GlassCard className="text-center">
+          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">解析配置中心</h1>
+          <p className="mt-3 text-gray-700 dark:text-gray-300">
+            {sessionLoading ? '正在检查当前登录状态...' : '请先通过 Linux Do 登录，再管理你的 DNS 命名空间。'}
+          </p>
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={onLogin}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white font-medium shadow-lg transition-all"
+            >
+              立即登录
+            </button>
+            <button
+              onClick={onNavigateDomains}
+              className="px-6 py-3 rounded-xl bg-white/45 dark:bg-black/30 hover:bg-white/60 dark:hover:bg-black/45 text-gray-900 dark:text-white font-medium transition-colors"
+            >
+              去域名分发页
+            </button>
+          </div>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  // 已登录但没有 allocation 时，提示用户先去申请命名空间。
+  if (!sessionLoading && allocations.length === 0) {
+    return (
+      <div className="max-w-4xl mx-auto pt-32 pb-24 px-6">
+        <GlassCard className="text-center">
+          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">解析配置中心</h1>
+          <p className="mt-3 text-gray-700 dark:text-gray-300">
+            {user?.display_name || user?.username}，你当前还没有可管理的命名空间。
+          </p>
+          <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={onNavigateDomains}
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white font-medium shadow-lg transition-all inline-flex items-center gap-2"
+            >
+              <ArrowRight size={18} />
+              前往申请域名
+            </button>
+            <button
+              onClick={() => void onSessionRefresh()}
+              className="px-6 py-3 rounded-xl bg-white/45 dark:bg-black/30 hover:bg-white/60 dark:hover:bg-black/45 text-gray-900 dark:text-white font-medium transition-colors"
+            >
+              刷新状态
+            </button>
+          </div>
+        </GlassCard>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto pt-32 pb-24 px-6 relative">
       <motion.div
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        className="mb-8 flex flex-col gap-4"
       >
-        <div>
-          <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">解析配置中心</h1>
-          <p className="text-gray-700 dark:text-gray-300 mt-2">管理你的 linuxdo.space 域名记录</p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">解析配置中心</h1>
+            <p className="text-gray-700 dark:text-gray-300 mt-2">
+              管理你在 Cloudflare 上的真实 DNS 记录
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => void onLogout()}
+              className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white/45 dark:bg-black/30 hover:bg-white/60 dark:hover:bg-black/45 text-gray-900 dark:text-white font-medium transition-colors"
+            >
+              <LogOut size={18} />
+              退出
+            </button>
+            <button
+              onClick={() => openModal()}
+              disabled={!selectedAllocation}
+              className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-medium shadow-lg transition-all transform hover:scale-105"
+            >
+              <Plus size={18} />
+              添加记录
+            </button>
+          </div>
         </div>
-        <button 
-          onClick={() => openModal()}
-          className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white font-medium shadow-lg transition-all transform hover:scale-105"
-        >
-          <Plus size={18} />
-          添加记录
-        </button>
+
+        <GlassCard className="p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-3">
+              {allocations.map((allocation) => (
+                <button
+                  key={allocation.id}
+                  onClick={() => setSelectedAllocationID(allocation.id)}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${
+                    selectedAllocationID === allocation.id
+                      ? 'bg-teal-500 text-white shadow-lg'
+                      : 'bg-white/45 dark:bg-black/30 text-gray-700 dark:text-gray-200 hover:bg-white/65 dark:hover:bg-black/50'
+                  }`}
+                >
+                  {allocation.fqdn}
+                </button>
+              ))}
+            </div>
+
+            {selectedAllocation && (
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm uppercase tracking-[0.25em] text-teal-600 dark:text-teal-300 font-bold">
+                    Active Namespace
+                  </div>
+                  <div className="mt-2 text-2xl font-extrabold text-gray-900 dark:text-white">
+                    {selectedAllocation.fqdn}
+                  </div>
+                  <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                    你可以管理 `@`、`www`、`api.v2` 等所有属于该命名空间的记录。
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-white/35 dark:bg-black/30 border border-white/20 px-4 py-3 text-sm text-gray-700 dark:text-gray-200">
+                  <div>来源：{selectedAllocation.source}</div>
+                  <div>主命名空间：{selectedAllocation.is_primary ? '是' : '否'}</div>
+                  <div>状态：{selectedAllocation.status}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        </GlassCard>
+
+        {notice && (
+          <div className="rounded-2xl border border-teal-300/40 bg-teal-100/60 dark:bg-teal-950/25 dark:border-teal-700/40 px-4 py-3 text-sm text-teal-900 dark:text-teal-200">
+            {notice}
+          </div>
+        )}
+
+        {recordsError && (
+          <div className="rounded-2xl border border-red-300/40 bg-red-100/60 dark:bg-red-950/25 dark:border-red-700/40 px-4 py-3 text-sm text-red-900 dark:text-red-200">
+            {recordsError}
+          </div>
+        )}
       </motion.div>
 
       <GlassCard className="overflow-hidden p-0">
@@ -126,8 +431,17 @@ export function Settings() {
                         {record.type}
                       </span>
                     </td>
-                    <td className="p-4 font-medium text-gray-800 dark:text-gray-200">{record.name}</td>
-                    <td className="p-4 text-gray-600 dark:text-gray-400 font-mono text-sm">{record.content}</td>
+                    <td className="p-4 font-medium text-gray-800 dark:text-gray-200">{record.relative_name}</td>
+                    <td className="p-4 text-gray-600 dark:text-gray-400 font-mono text-sm">
+                      <div>{record.content}</div>
+                      {(record.comment || record.ttl || record.priority != null) && (
+                        <div className="mt-1 text-xs text-gray-500 dark:text-gray-500">
+                          TTL: {record.ttl === 1 ? 'Auto' : record.ttl}s
+                          {record.priority != null ? ` · Priority: ${record.priority}` : ''}
+                          {record.comment ? ` · ${record.comment}` : ''}
+                        </div>
+                      )}
+                    </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
                         <div
@@ -142,17 +456,18 @@ export function Settings() {
                     </td>
                     <td className="p-4 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <button 
+                        <button
                           onClick={() => openModal(record)}
                           className="p-2 rounded-lg hover:bg-white/50 dark:hover:bg-white/10 text-blue-600 dark:text-blue-400 transition-colors"
                         >
                           <Edit2 size={16} />
                         </button>
-                        <button 
-                          onClick={() => handleDelete(record.id)}
-                          className="p-2 rounded-lg hover:bg-white/50 dark:hover:bg-white/10 text-red-600 dark:text-red-400 transition-colors"
+                        <button
+                          onClick={() => void handleDelete(record.id)}
+                          disabled={deletingRecordID === record.id}
+                          className="p-2 rounded-lg hover:bg-white/50 dark:hover:bg-white/10 disabled:opacity-60 text-red-600 dark:text-red-400 transition-colors"
                         >
-                          <Trash2 size={16} />
+                          {deletingRecordID === record.id ? <LoaderCircle size={16} className="animate-spin" /> : <Trash2 size={16} />}
                         </button>
                       </div>
                     </td>
@@ -162,9 +477,15 @@ export function Settings() {
             </tbody>
           </table>
         </div>
-        {records.length === 0 && (
+        {recordsLoading && (
+          <div className="p-12 text-center text-gray-500 dark:text-gray-400 flex items-center justify-center gap-3">
+            <LoaderCircle size={18} className="animate-spin" />
+            正在同步 Cloudflare DNS 记录...
+          </div>
+        )}
+        {!recordsLoading && records.length === 0 && (
           <div className="p-12 text-center text-gray-500 dark:text-gray-400">
-            暂无解析记录，点击上方按钮添加。
+            当前命名空间还没有记录，点击上方按钮即可添加。
           </div>
         )}
       </GlassCard>
@@ -172,12 +493,12 @@ export function Settings() {
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setIsModalOpen(false)}
+              onClick={closeModal}
             />
             <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -185,80 +506,147 @@ export function Settings() {
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               className="relative w-full max-w-md bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border border-white/20 dark:border-white/10 rounded-3xl p-6 shadow-2xl"
             >
-              <button 
-                onClick={() => setIsModalOpen(false)}
+              <button
+                onClick={closeModal}
                 className="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors"
               >
                 <X size={20} />
               </button>
-              
+
               <h2 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
                 {editingRecord ? '修改记录' : '添加记录'}
               </h2>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">记录类型</label>
-                  <select 
+                  <select
                     value={formData.type}
-                    onChange={e => setFormData({...formData, type: e.target.value})}
+                    onChange={(event) =>
+                      setFormData({
+                        ...formData,
+                        type: event.target.value,
+                        proxied: supportsProxy(event.target.value) ? formData.proxied : false,
+                      })
+                    }
                     className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
                   >
                     <option value="A">A</option>
+                    <option value="AAAA">AAAA</option>
                     <option value="CNAME">CNAME</option>
                     <option value="TXT">TXT</option>
                     <option value="MX">MX</option>
                   </select>
                 </div>
-                
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">名称</label>
-                  <div className="relative">
-                    <input 
-                      type="text"
-                      value={formData.name}
-                      onChange={e => setFormData({...formData, name: e.target.value})}
-                      placeholder="@ 或 www"
-                      className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
-                    />
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">内容</label>
-                  <input 
+                  <input
                     type="text"
-                    value={formData.content}
-                    onChange={e => setFormData({...formData, content: e.target.value})}
-                    placeholder="IPv4 地址或域名"
+                    value={formData.name}
+                    onChange={(event) => setFormData({ ...formData, name: event.target.value })}
+                    placeholder="@ 或 www"
                     className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
                   />
                 </div>
-                
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">内容</label>
+                  <input
+                    type="text"
+                    value={formData.content}
+                    onChange={(event) => setFormData({ ...formData, content: event.target.value })}
+                    placeholder="IPv4 / IPv6 / 域名 / 文本"
+                    className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">TTL</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={formData.ttl}
+                      onChange={(event) =>
+                        setFormData({
+                          ...formData,
+                          ttl: Number(event.target.value || 1),
+                        })
+                      }
+                      placeholder="1 = Auto"
+                      className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
+                    />
+                  </div>
+
+                  {formData.type === 'MX' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Priority</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={formData.priority}
+                        onChange={(event) => setFormData({ ...formData, priority: event.target.value })}
+                        placeholder="10"
+                        className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">备注</label>
+                  <input
+                    type="text"
+                    value={formData.comment}
+                    onChange={(event) => setFormData({ ...formData, comment: event.target.value })}
+                    placeholder="可选，用于标记用途"
+                    className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
+                  />
+                </div>
+
                 <div className="flex items-center gap-3 pt-2">
-                  <button 
-                    onClick={() => setFormData({...formData, proxied: !formData.proxied})}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${formData.proxied ? 'bg-orange-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                  <button
+                    onClick={() =>
+                      supportsProxy(formData.type) &&
+                      setFormData({
+                        ...formData,
+                        proxied: !formData.proxied,
+                      })
+                    }
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      supportsProxy(formData.type)
+                        ? formData.proxied
+                          ? 'bg-orange-500'
+                          : 'bg-gray-300 dark:bg-gray-600'
+                        : 'bg-gray-200 dark:bg-gray-700 cursor-not-allowed opacity-60'
+                    }`}
                   >
-                    <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${formData.proxied ? 'translate-x-6' : 'translate-x-0'}`} />
+                    <div
+                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                        formData.proxied ? 'translate-x-6' : 'translate-x-0'
+                      }`}
+                    />
                   </button>
                   <span className="text-sm text-gray-700 dark:text-gray-300">
-                    代理状态 (Cloudflare)
+                    {supportsProxy(formData.type) ? '代理状态 (Cloudflare)' : '当前记录类型不支持代理'}
                   </span>
                 </div>
               </div>
-              
+
               <div className="mt-8 flex gap-3">
-                <button 
-                  onClick={() => setIsModalOpen(false)}
+                <button
+                  onClick={closeModal}
                   className="flex-1 px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-900 dark:text-white font-medium transition-colors"
                 >
                   取消
                 </button>
-                <button 
-                  onClick={handleSave}
-                  className="flex-1 px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-white font-medium shadow-lg transition-all"
+                <button
+                  onClick={() => void handleSave()}
+                  disabled={isSaving}
+                  className="flex-1 px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 disabled:opacity-60 text-white font-medium shadow-lg transition-all flex items-center justify-center gap-2"
                 >
+                  {isSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
                   保存
                 </button>
               </div>
@@ -268,4 +656,33 @@ export function Settings() {
       </AnimatePresence>
     </div>
   );
+}
+
+// buildRecordPayload 把表单状态转换为后端要求的请求结构。
+function buildRecordPayload(formData: RecordFormState): UpsertDNSRecordInput {
+  return {
+    type: formData.type,
+    name: formData.name,
+    content: formData.content,
+    ttl: Number.isFinite(formData.ttl) ? formData.ttl : 1,
+    proxied: supportsProxy(formData.type) ? formData.proxied : false,
+    comment: formData.comment,
+    priority: formData.type === 'MX' && formData.priority.trim() !== '' ? Number(formData.priority) : undefined,
+  };
+}
+
+// supportsProxy 判断当前记录类型是否允许开启 Cloudflare 代理。
+function supportsProxy(recordType: string): boolean {
+  return ['A', 'AAAA', 'CNAME'].includes(recordType.toUpperCase());
+}
+
+// readableErrorMessage 统一提取接口错误文本。
+function readableErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof APIError) {
+    return error.message;
+  }
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
+  }
+  return fallback;
 }

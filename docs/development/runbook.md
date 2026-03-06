@@ -8,6 +8,15 @@
 4. 访问 `http://localhost:8080/healthz` 进行健康检查。
 5. 访问 `GET /v1/public/domains` 检查默认根域名是否已经自动引导。
 
+## 本地启动前端
+
+1. 进入 `frontend/` 目录。
+2. 参考 `.env.example` 设置 `VITE_API_BASE_URL`，默认值为 `http://localhost:8080`。
+3. 执行 `npm install`。
+4. 执行 `npm run dev`。
+5. 浏览器访问 `http://localhost:3000`。
+6. 点击登录按钮时，前端会跳转到 `${VITE_API_BASE_URL}/v1/auth/login`。
+
 ## 当前关键依赖
 
 - Go 1.25.x
@@ -41,4 +50,5 @@ go test ./internal/cloudflare -run TestClientIntegrationCreateGetDelete -v
 
 - 当前代码允许在开发环境未配置 OAuth 的情况下先启动；这时认证接口会返回 `503`。
 - 默认根域名支持自动引导，如果未显式配置 `CLOUDFLARE_DEFAULT_ZONE_ID`，服务会尝试通过 Cloudflare API 查询。
-- 当前前端还没有接入这些接口，需要后续补联调。
+- 前端已接入登录态、域名查询、命名空间申请和 DNS 记录管理接口。
+- 为了支持 OAuth 回跳，前端当前通过浏览器 URL 和内部 tab 状态双向同步。

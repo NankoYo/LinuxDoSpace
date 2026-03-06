@@ -64,17 +64,19 @@ export function Home() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {features.map((feature, index) => (
-          <GlassCard key={index} delay={0.3 + index * 0.1} className="hover:bg-white/50 dark:hover:bg-black/50 transition-colors group">
-            <div className="flex items-start gap-4">
-              <div className="p-3 rounded-2xl bg-white/50 dark:bg-white/10 group-hover:scale-110 transition-transform duration-300">
-                {feature.icon}
+          <div key={index}>
+            <GlassCard delay={0.3 + index * 0.1} className="hover:bg-white/50 dark:hover:bg-black/50 transition-colors group">
+              <div className="flex items-start gap-4">
+                <div className="p-3 rounded-2xl bg-white/50 dark:bg-white/10 group-hover:scale-110 transition-transform duration-300">
+                  {feature.icon}
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">{feature.title}</h3>
+                  <p className="text-gray-600 dark:text-gray-300 leading-relaxed">{feature.description}</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">{feature.title}</h3>
-                <p className="text-gray-600 dark:text-gray-300 leading-relaxed">{feature.description}</p>
-              </div>
-            </div>
-          </GlassCard>
+            </GlassCard>
+          </div>
         ))}
       </div>
     </div>
