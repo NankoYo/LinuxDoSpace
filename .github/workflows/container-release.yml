@@ -113,7 +113,34 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          keyscan_success=0
+          for attempt in $(seq 1 10); do
+            keyscan_file="$(mktemp)"
+
+            if ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 -p "$DEPLOY_PORT" "$DEPLOY_HOST" > "$keyscan_file" 2>/dev/null && [ -s "$keyscan_file" ]; then
+              cat "$keyscan_file" >> ~/.ssh/known_hosts
+              rm -f "$keyscan_file"
+              keyscan_success=1
+              break
+            fi
+
+            if [ -s "$keyscan_file" ]; then
+              cat "$keyscan_file" >> ~/.ssh/known_hosts
+              rm -f "$keyscan_file"
+              keyscan_success=1
+              break
+            fi
+
+            rm -f "$keyscan_file"
+            echo "ssh-keyscan attempt ${attempt}/10 did not return a host key."
+            sleep 3
+          done
+
+          if [ "$keyscan_success" -ne 1 ]; then
+            echo '::error::Failed to collect the SSH host key after 10 attempts.'
+            exit 1
+          fi
 
       - name: Prepare deployment env file
         shell: bash

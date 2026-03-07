@@ -1,5 +1,10 @@
 # LinuxDoSpace 更新日志
 
+## 0.5.3-alpha.14
+
+- 修复部署工作流在 `Prepare SSH key` 阶段被 `ssh-keyscan` 的非零退出码误判失败的问题；只要成功拿到主机 key，就不再直接中断流程。
+- 为 `ssh-keyscan` 增加最多 10 次重试、超时与多算法探测，降低 GitHub Runner 到 Debian 服务器链路抖动带来的偶发失败率。
+
 ## 0.5.3-alpha.13
 
 - 修复 GitHub Actions 在启动远端部署脚本时，虽然脚本已在服务器执行，但 SSH 会话未真正脱离、导致流程长期卡在 `Start remote deployment job` 的问题。
