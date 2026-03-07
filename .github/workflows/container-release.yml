@@ -171,102 +171,102 @@ jobs:
           # The remote script keeps the inner 10 pull and health retries.
           prepare_remote_deployment_script() {
             cat > deploy/remote-deploy.sh <<'REMOTE_SCRIPT'
-            #!/usr/bin/env bash
-            set -euo pipefail
+          #!/usr/bin/env bash
+          set -euo pipefail
 
-            # This script runs on the Debian server. It trusts only explicit environment
-            # variables passed by the GitHub Actions runner at launch time.
-            : "${DEPLOY_PATH:?DEPLOY_PATH is required}"
-            : "${TARGET_IMAGE:?TARGET_IMAGE is required}"
-            : "${TARGET_REVISION:?TARGET_REVISION is required}"
-            : "${MAX_DEPLOY_ATTEMPTS:?MAX_DEPLOY_ATTEMPTS is required}"
-            : "${STATUS_FILE:?STATUS_FILE is required}"
+          # This script runs on the Debian server. It trusts only explicit environment
+          # variables passed by the GitHub Actions runner at launch time.
+          : "${DEPLOY_PATH:?DEPLOY_PATH is required}"
+          : "${TARGET_IMAGE:?TARGET_IMAGE is required}"
+          : "${TARGET_REVISION:?TARGET_REVISION is required}"
+          : "${MAX_DEPLOY_ATTEMPTS:?MAX_DEPLOY_ATTEMPTS is required}"
+          : "${STATUS_FILE:?STATUS_FILE is required}"
 
-            cd "$DEPLOY_PATH"
+          cd "$DEPLOY_PATH"
 
-            # Report the current health state. Containers without a healthcheck return no-healthcheck.
-            container_health_status() {
-              docker inspect linuxdospace --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || true
-            }
+          # Report the current health state. Containers without a healthcheck return no-healthcheck.
+          container_health_status() {
+            docker inspect linuxdospace --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || true
+          }
 
-            # Report the runtime state so a no-healthcheck container can still be validated as running.
-            container_runtime_status() {
-              docker inspect linuxdospace --format '{{.State.Status}}' 2>/dev/null || true
-            }
+          # Report the runtime state so a no-healthcheck container can still be validated as running.
+          container_runtime_status() {
+            docker inspect linuxdospace --format '{{.State.Status}}' 2>/dev/null || true
+          }
 
-            # Read the revision label from the running container to confirm the target image is live.
-            container_revision() {
-              docker inspect linuxdospace --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true
-            }
+          # Read the revision label from the running container to confirm the target image is live.
+          container_revision() {
+            docker inspect linuxdospace --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true
+          }
 
-            # deployment_is_healthy succeeds only when the expected revision is running and healthy.
-            deployment_is_healthy() {
-              current_revision="$(container_revision)"
-              current_health="$(container_health_status)"
-              current_status="$(container_runtime_status)"
+          # deployment_is_healthy succeeds only when the expected revision is running and healthy.
+          deployment_is_healthy() {
+            current_revision="$(container_revision)"
+            current_health="$(container_health_status)"
+            current_status="$(container_runtime_status)"
 
-              echo "Current revision: ${current_revision}"
-              echo "Current health: ${current_health}"
-              echo "Current status: ${current_status}"
+            echo "Current revision: ${current_revision}"
+            echo "Current health: ${current_health}"
+            echo "Current status: ${current_status}"
 
-              if [ "$current_revision" != "$TARGET_REVISION" ]; then
-                return 1
-              fi
-
-              if [ "$current_health" = 'healthy' ]; then
-                return 0
-              fi
-
-              if [ "$current_health" = 'no-healthcheck' ] && [ "$current_status" = 'running' ]; then
-                return 0
-              fi
-
+            if [ "$current_revision" != "$TARGET_REVISION" ]; then
               return 1
-            }
+            fi
 
-            # show_diagnostics prints enough context for the Actions runner to debug a failed attempt.
-            show_diagnostics() {
-              docker ps --filter name=linuxdospace --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
-              docker compose ps || true
-              docker logs --tail 80 linuxdospace || true
-            }
+            if [ "$current_health" = 'healthy' ]; then
+              return 0
+            fi
 
-            # Default to failure unless the script explicitly reaches a verified success state.
-            echo 'running' > "$STATUS_FILE"
-            trap 'echo failure > "$STATUS_FILE"' EXIT
+            if [ "$current_health" = 'no-healthcheck' ] && [ "$current_status" = 'running' ]; then
+              return 0
+            fi
 
-            for attempt in $(seq 1 "$MAX_DEPLOY_ATTEMPTS"); do
-              echo "Deploy attempt ${attempt}/${MAX_DEPLOY_ATTEMPTS}"
+            return 1
+          }
 
-              if docker pull "$TARGET_IMAGE" && docker compose up -d; then
-                for health_check_round in $(seq 1 12); do
-                  echo "Health check round ${health_check_round}/12"
-                  sleep 10
+          # show_diagnostics prints enough context for the Actions runner to debug a failed attempt.
+          show_diagnostics() {
+            docker ps --filter name=linuxdospace --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+            docker compose ps || true
+            docker logs --tail 80 linuxdospace || true
+          }
 
-                  if deployment_is_healthy; then
-                    echo 'Deployment finished successfully.'
-                    echo 'success' > "$STATUS_FILE"
-                    trap - EXIT
-                    exit 0
-                  fi
-                done
-              else
-                echo 'Pull or compose update failed in this attempt.'
-              fi
+          # Default to failure unless the script explicitly reaches a verified success state.
+          echo 'running' > "$STATUS_FILE"
+          trap 'echo failure > "$STATUS_FILE"' EXIT
 
-              show_diagnostics
+          for attempt in $(seq 1 "$MAX_DEPLOY_ATTEMPTS"); do
+            echo "Deploy attempt ${attempt}/${MAX_DEPLOY_ATTEMPTS}"
 
-              if [ "$attempt" -lt "$MAX_DEPLOY_ATTEMPTS" ]; then
-                echo 'Retrying after 20 seconds...'
-                sleep 20
-              fi
-            done
+            if docker pull "$TARGET_IMAGE" && docker compose up -d; then
+              for health_check_round in $(seq 1 12); do
+                echo "Health check round ${health_check_round}/12"
+                sleep 10
 
-            echo "Deployment failed after ${MAX_DEPLOY_ATTEMPTS} attempts."
-            echo 'failure' > "$STATUS_FILE"
-            trap - EXIT
-            exit 1
-            REMOTE_SCRIPT
+                if deployment_is_healthy; then
+                  echo 'Deployment finished successfully.'
+                  echo 'success' > "$STATUS_FILE"
+                  trap - EXIT
+                  exit 0
+                fi
+              done
+            else
+              echo 'Pull or compose update failed in this attempt.'
+            fi
+
+            show_diagnostics
+
+            if [ "$attempt" -lt "$MAX_DEPLOY_ATTEMPTS" ]; then
+              echo 'Retrying after 20 seconds...'
+              sleep 20
+            fi
+          done
+
+          echo "Deployment failed after ${MAX_DEPLOY_ATTEMPTS} attempts."
+          echo 'failure' > "$STATUS_FILE"
+          trap - EXIT
+          exit 1
+          REMOTE_SCRIPT
 
             chmod +x deploy/remote-deploy.sh
           }
