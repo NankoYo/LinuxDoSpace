@@ -237,6 +237,7 @@ jobs:
             set -euo pipefail && \
             command -v docker >/dev/null && \
             docker compose version >/dev/null && \
+            command -v setsid >/dev/null && \
             mkdir -p '$DEPLOY_PATH'"
 
       - name: Upload compose bundle to Debian server
@@ -264,18 +265,33 @@ jobs:
           REMOTE_STATUS_FILE="${REMOTE_DEPLOY_BASENAME}.status"
           REMOTE_PID_FILE="${REMOTE_DEPLOY_BASENAME}.pid"
           SSH_OPTS="-o ServerAliveInterval=15 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=20"
-          ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
-            cd '$DEPLOY_PATH' && \
-            rm -f '$REMOTE_LOG_FILE' '$REMOTE_STATUS_FILE' '$REMOTE_PID_FILE' && \
-            chmod +x ./remote-deploy.sh && \
-            DEPLOY_PATH='$DEPLOY_PATH' \
-            TARGET_IMAGE='$TARGET_IMAGE' \
-            TARGET_REVISION='$TARGET_REVISION' \
-            MAX_DEPLOY_ATTEMPTS='$MAX_DEPLOY_ATTEMPTS' \
-            STATUS_FILE='$REMOTE_STATUS_FILE' \
-            nohup ./remote-deploy.sh > '$REMOTE_LOG_FILE' 2>&1 < /dev/null & \
-            echo \$! > '$REMOTE_PID_FILE' && \
-            cat '$REMOTE_PID_FILE'"
+
+          remote_pid="$(
+            ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+              cd '$DEPLOY_PATH' && \
+              rm -f '$REMOTE_LOG_FILE' '$REMOTE_STATUS_FILE' '$REMOTE_PID_FILE' && \
+              chmod +x ./remote-deploy.sh && \
+              setsid -f env \
+                DEPLOY_PATH='$DEPLOY_PATH' \
+                TARGET_IMAGE='$TARGET_IMAGE' \
+                TARGET_REVISION='$TARGET_REVISION' \
+                MAX_DEPLOY_ATTEMPTS='$MAX_DEPLOY_ATTEMPTS' \
+                STATUS_FILE='$REMOTE_STATUS_FILE' \
+                bash -lc 'echo \$\$ > '$REMOTE_PID_FILE'; exec ./remote-deploy.sh' \
+                > '$REMOTE_LOG_FILE' 2>&1 < /dev/null && \
+              sleep 1 && \
+              cat '$REMOTE_PID_FILE' && \
+              kill -0 \$(cat '$REMOTE_PID_FILE') 2>/dev/null"
+          )"
+
+          remote_pid="$(printf '%s' "$remote_pid" | tr -d '\r\n[:space:]')"
+
+          if ! printf '%s' "$remote_pid" | grep -Eq '^[0-9]+$'; then
+            echo '::error::Failed to start detached remote deployment job.'
+            exit 1
+          fi
+
+          echo "Remote deployment PID: ${remote_pid}"
 
       - name: Wait for remote deployment result
         shell: bash
