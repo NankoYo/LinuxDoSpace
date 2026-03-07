@@ -69,9 +69,6 @@ jobs:
     name: Deploy To Debian
     needs: build-and-push
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
     # GitHub Actions does not allow secrets.* in job-level if expressions.
     # We only gate on the manual input here, then validate the required secrets
     # inside the job so the workflow file stays syntactically valid.
@@ -123,19 +120,16 @@ jobs:
         run: |
           printf '%s\n' "$DEPLOY_ENV_FILE" > deploy/.env
 
-      - name: Log in to GHCR on runner
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull deployment image and export bundle
+      - name: Check remote deployment prerequisites
         shell: bash
         run: |
-          DEPLOY_IMAGE_REF="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
-          docker pull "$DEPLOY_IMAGE_REF"
-          docker save "$DEPLOY_IMAGE_REF" | gzip > deploy/linuxdospace-image.tar.gz
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          DEPLOY_PATH="${DEPLOY_PATH:-/opt/linuxdospace}"
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+            set -euo pipefail && \
+            command -v docker >/dev/null && \
+            docker compose version >/dev/null && \
+            mkdir -p '$DEPLOY_PATH'"
 
       - name: Upload compose bundle to Debian server
         shell: bash
@@ -145,16 +139,103 @@ jobs:
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
           scp -P "$DEPLOY_PORT" deploy/docker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
           scp -P "$DEPLOY_PORT" deploy/.env "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
-          scp -P "$DEPLOY_PORT" deploy/linuxdospace-image.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/linuxdospace-image.tar.gz"
 
-      - name: Load image and restart compose stack
+      - name: Deploy with retry and health checks
         shell: bash
+        env:
+          TARGET_IMAGE: ghcr.io/${{ github.repository }}:latest
+          TARGET_REVISION: ${{ github.sha }}
+          MAX_DEPLOY_ATTEMPTS: '10'
         run: |
           DEPLOY_PORT="${DEPLOY_PORT:-22}"
           DEPLOY_PATH="${DEPLOY_PATH:-/opt/linuxdospace}"
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
-            cd '$DEPLOY_PATH' && \
-            gunzip -c linuxdospace-image.tar.gz | docker load && \
-            docker compose up -d && \
-            docker image prune -f && \
-            rm -f linuxdospace-image.tar.gz"
+            DEPLOY_PATH='$DEPLOY_PATH' \
+            TARGET_IMAGE='$TARGET_IMAGE' \
+            TARGET_REVISION='$TARGET_REVISION' \
+            MAX_DEPLOY_ATTEMPTS='$MAX_DEPLOY_ATTEMPTS' \
+            bash -s" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+
+          # container_health_status 读取当前容器的健康检查状态。
+          # 若镜像未定义 Healthcheck，则返回 no-healthcheck，随后退化为检查运行态。
+          container_health_status() {
+            docker inspect linuxdospace --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' 2>/dev/null || true
+          }
+
+          # container_runtime_status 读取当前容器的运行状态，例如 running / exited。
+          container_runtime_status() {
+            docker inspect linuxdospace --format '{{.State.Status}}' 2>/dev/null || true
+          }
+
+          # container_revision 读取当前容器内记录的镜像 revision 标签。
+          container_revision() {
+            docker inspect linuxdospace --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true
+          }
+
+          # deployment_is_healthy 判断当前部署是否已经达到目标 revision 且容器可用。
+          deployment_is_healthy() {
+            local current_revision
+            local current_health
+            local current_status
+
+            current_revision="$(container_revision)"
+            current_health="$(container_health_status)"
+            current_status="$(container_runtime_status)"
+
+            echo "Current revision: ${current_revision:-<none>}"
+            echo "Current health: ${current_health:-<none>}"
+            echo "Current status: ${current_status:-<none>}"
+
+            if [ "$current_revision" != "$TARGET_REVISION" ]; then
+              return 1
+            fi
+
+            if [ "$current_health" = 'healthy' ]; then
+              return 0
+            fi
+
+            if [ "$current_health" = 'no-healthcheck' ] && [ "$current_status" = 'running' ]; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          # show_diagnostics 输出本轮失败时最重要的运行信息，便于直接在 Actions 日志里定位。
+          show_diagnostics() {
+            docker ps --filter name=linuxdospace --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+            docker compose ps || true
+            docker logs --tail 80 linuxdospace || true
+          }
+
+          for attempt in $(seq 1 "$MAX_DEPLOY_ATTEMPTS"); do
+            echo "Deploy attempt ${attempt}/${MAX_DEPLOY_ATTEMPTS}"
+
+            if docker pull "$TARGET_IMAGE" && docker compose up -d; then
+              for health_check_round in $(seq 1 12); do
+                echo "Health check round ${health_check_round}/12"
+                sleep 10
+
+                if deployment_is_healthy; then
+                  echo 'Deployment finished successfully.'
+                  exit 0
+                fi
+              done
+            else
+              echo 'Pull or compose update failed in this attempt.'
+            fi
+
+            show_diagnostics
+
+            if [ "$attempt" -lt "$MAX_DEPLOY_ATTEMPTS" ]; then
+              echo 'Retrying after 20 seconds...'
+              sleep 20
+            fi
+          done
+
+          echo "Deployment failed after ${MAX_DEPLOY_ATTEMPTS} attempts."
+          exit 1
+          REMOTE_SCRIPT

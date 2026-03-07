@@ -1,5 +1,11 @@
 # LinuxDoSpace 更新日志
 
+## 0.5.3-alpha.10
+
+- 将 Debian 自动部署工作流收敛回服务器端 `docker pull ghcr.io/moyeranqianzhi/linuxdospace:latest && docker compose up -d` 的更新路径。
+- 为部署流程增加远程前置检查、容器 revision 校验与健康检查，避免镜像拉取成功但服务没有真正切换到目标版本。
+- 为服务器端部署增加最多 10 次重试机制；若连续 10 次仍未拉取成功或健康检查未通过，则明确判定工作流失败。
+
 ## 0.5.3-alpha.9
 
 - 将 GitHub Actions 的 Debian 自动部署流程改为在 runner 上拉取镜像、导出为压缩镜像包并上传到服务器，再由服务器 `docker load` 后执行 `docker compose up -d`。
