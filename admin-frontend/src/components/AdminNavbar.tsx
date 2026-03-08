@@ -6,7 +6,6 @@ import {
   Mail,
   Menu,
   Moon,
-  ShieldAlert,
   Sun,
   Ticket,
   Users,
@@ -47,8 +46,8 @@ export function AdminNavbar({ activeTab, onTabChange, isDark, onToggleTheme, onL
       >
         <div className="mx-auto flex max-w-7xl items-center justify-between rounded-full border border-red-500/15 bg-white/45 px-4 py-3 shadow-xl backdrop-blur-xl dark:border-red-500/10 dark:bg-red-950/15 sm:px-6">
           <button className="flex items-center gap-3" onClick={() => onTabChange('users')}>
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-orange-500 text-white shadow-lg">
-              <ShieldAlert size={20} />
+            <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full bg-white/80 shadow-lg ring-1 ring-white/40 dark:bg-white/10 dark:ring-white/10">
+              <img src="/ICON.png" alt="LinuxDoSpace Icon" className="h-full w-full object-cover" />
             </span>
             <span className="hidden text-left sm:block">
               <span className="block text-sm font-semibold uppercase tracking-[0.28em] text-red-500/80">Admin</span>

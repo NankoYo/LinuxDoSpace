@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight, KeyRound, LogOut, Moon, Shield, Sun } from 'lucide-react';
+import { ArrowRight, KeyRound, LogOut, Moon, Sun } from 'lucide-react';
 import { motion } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
 import type { AdminUser } from '../types/admin';
@@ -84,8 +84,8 @@ export function AdminLogin({
       >
         <GlassCard className="p-8 sm:p-10">
           <div className="mb-8 flex flex-col items-center text-center">
-            <div className="mb-4 flex h-18 w-18 items-center justify-center rounded-[24px] bg-gradient-to-br from-red-500 to-orange-500 text-white shadow-xl">
-              <Shield size={34} />
+            <div className="mb-4 flex h-18 w-18 items-center justify-center overflow-hidden rounded-[24px] bg-white/85 shadow-xl ring-1 ring-white/40 dark:bg-white/10 dark:ring-white/10">
+              <img src="/ICON.png" alt="LinuxDoSpace Icon" className="h-full w-full object-cover" />
             </div>
             <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{text.heading}</h1>
             <p className="mt-3 max-w-md text-sm leading-6 text-slate-500 dark:text-slate-300">
