@@ -123,7 +123,7 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		AvatarURL:      buildAvatarURL(profile.AvatarTemplate),
 		TrustLevel:     profile.TrustLevel,
 		IsLinuxDOAdmin: profile.Admin,
-		IsAppAdmin:     isAppAdmin(profile.Username, s.cfg.App.AdminUsernames) || profile.Admin,
+		IsAppAdmin:     isAppAdmin(profile.Username, s.cfg.App.AdminUsernames),
 	})
 	if err != nil {
 		return LoginCompleteResult{}, InternalError("failed to upsert local user", err)
