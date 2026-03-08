@@ -25,6 +25,7 @@ type AppConfig struct {
 	Addr                  string
 	BaseURL               string
 	FrontendURL           string
+	AdminFrontendURL      string
 	AllowedOrigins        []string
 	SessionCookieName     string
 	SessionSecret         []byte
@@ -73,7 +74,8 @@ func Load() (Config, error) {
 			Addr:                  getEnv("APP_ADDR", ":8080"),
 			BaseURL:               getEnv("APP_BASE_URL", "http://localhost:8080"),
 			FrontendURL:           getEnv("APP_FRONTEND_URL", "http://localhost:3000"),
-			AllowedOrigins:        splitCSV(getEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000")),
+			AdminFrontendURL:      getEnv("APP_ADMIN_FRONTEND_URL", "http://localhost:3001"),
+			AllowedOrigins:        splitCSV(getEnv("APP_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001")),
 			SessionCookieName:     getEnv("APP_SESSION_COOKIE_NAME", "linuxdospace_session"),
 			SessionTTL:            mustParseDuration(getEnv("APP_SESSION_TTL", "24h")),
 			SessionSecure:         mustParseBool(getEnv("APP_SESSION_SECURE", "false")),

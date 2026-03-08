@@ -11,44 +11,40 @@ import (
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
-// oauthStateLifetime 控制一次 OAuth 登录 state 的有效期。
+// oauthStateLifetime limits how long one OAuth state token remains valid.
 const oauthStateLifetime = 10 * time.Minute
 
-// AuthService 负责 Linux Do OAuth 登录、服务端会话和当前用户解析。
+// AuthService handles Linux Do OAuth login, server-side sessions, and current-user resolution.
 type AuthService struct {
 	cfg   config.Config
 	store Store
 	oauth OAuthClient
 }
 
-// LoginStartResult 表示开始 OAuth 登录时需要返回给 HTTP 层的信息。
+// LoginStartResult contains the redirect information returned to the HTTP layer.
 type LoginStartResult struct {
 	StateID     string
 	RedirectURL string
 }
 
-// LoginCompleteResult 表示 OAuth 回调完成后的结果。
+// LoginCompleteResult contains the session and redirect information produced by a successful callback.
 type LoginCompleteResult struct {
 	User     model.User
 	Session  model.Session
 	NextPath string
 }
 
-// NewAuthService 创建认证服务。
+// NewAuthService creates a new authentication service instance.
 func NewAuthService(cfg config.Config, store Store, oauth OAuthClient) *AuthService {
-	return &AuthService{
-		cfg:   cfg,
-		store: store,
-		oauth: oauth,
-	}
+	return &AuthService{cfg: cfg, store: store, oauth: oauth}
 }
 
-// Configured 返回认证服务是否具备运行条件。
+// Configured reports whether OAuth is sufficiently configured to start a login flow.
 func (s *AuthService) Configured() bool {
 	return s.oauth != nil && s.oauth.Configured()
 }
 
-// BeginLogin 创建一次新的 OAuth state，并返回 Linux Do 登录地址。
+// BeginLogin creates a short-lived OAuth state record and returns the Linux Do authorization URL.
 func (s *AuthService) BeginLogin(ctx context.Context, nextPath string) (LoginStartResult, error) {
 	if !s.Configured() {
 		return LoginStartResult{}, UnavailableError("linux.do oauth is not configured", nil)
@@ -76,7 +72,6 @@ func (s *AuthService) BeginLogin(ctx context.Context, nextPath string) (LoginSta
 		ExpiresAt:    time.Now().UTC().Add(oauthStateLifetime),
 		CreatedAt:    time.Now().UTC(),
 	}
-
 	if err := s.store.SaveOAuthState(ctx, state); err != nil {
 		return LoginStartResult{}, InternalError("failed to persist oauth state", err)
 	}
@@ -87,7 +82,7 @@ func (s *AuthService) BeginLogin(ctx context.Context, nextPath string) (LoginSta
 	}, nil
 }
 
-// CompleteLogin 完成授权码交换、获取用户信息、落库并创建会话。
+// CompleteLogin exchanges the authorization code, loads the Linux Do profile, and creates a session.
 func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, stateFromCookie string, code string, userAgentFingerprint string) (LoginCompleteResult, error) {
 	if !s.Configured() {
 		return LoginCompleteResult{}, UnavailableError("linux.do oauth is not configured", nil)
@@ -133,11 +128,18 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, InternalError("failed to upsert local user", err)
 	}
 
+	control, err := s.store.GetUserControlByUserID(ctx, user.ID)
+	if err != nil {
+		return LoginCompleteResult{}, InternalError("failed to load user moderation state", err)
+	}
+	if control.IsBanned {
+		return LoginCompleteResult{}, ForbiddenError("your account has been banned")
+	}
+
 	sessionID, err := security.RandomToken(32)
 	if err != nil {
 		return LoginCompleteResult{}, InternalError("failed to generate session id", err)
 	}
-
 	csrfToken, err := security.RandomToken(32)
 	if err != nil {
 		return LoginCompleteResult{}, InternalError("failed to generate csrf token", err)
@@ -164,14 +166,10 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, InternalError("failed to write auth login audit log", err)
 	}
 
-	return LoginCompleteResult{
-		User:     user,
-		Session:  session,
-		NextPath: state.NextPath,
-	}, nil
+	return LoginCompleteResult{User: user, Session: session, NextPath: state.NextPath}, nil
 }
 
-// AuthenticateSession 解析并校验当前请求携带的会话。
+// AuthenticateSession resolves and validates the current browser session.
 func (s *AuthService) AuthenticateSession(ctx context.Context, sessionID string, userAgentFingerprint string) (model.Session, model.User, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return model.Session{}, model.User{}, UnauthorizedError("missing session cookie")
@@ -195,6 +193,15 @@ func (s *AuthService) AuthenticateSession(ctx context.Context, sessionID string,
 		return model.Session{}, model.User{}, UnauthorizedError("session fingerprint mismatch")
 	}
 
+	control, err := s.store.GetUserControlByUserID(ctx, user.ID)
+	if err != nil {
+		return model.Session{}, model.User{}, InternalError("failed to load user moderation state", err)
+	}
+	if control.IsBanned {
+		_ = s.store.DeleteSession(ctx, session.ID)
+		return model.Session{}, model.User{}, ForbiddenError("your account has been banned")
+	}
+
 	if err := s.store.TouchSession(ctx, session.ID); err != nil {
 		return model.Session{}, model.User{}, InternalError("failed to touch session", err)
 	}
@@ -202,7 +209,7 @@ func (s *AuthService) AuthenticateSession(ctx context.Context, sessionID string,
 	return session, user, nil
 }
 
-// Logout 删除当前会话并记录审计事件。
+// Logout deletes the current session and records an audit event.
 func (s *AuthService) Logout(ctx context.Context, sessionID string, actorUserID int64) error {
 	if err := s.store.DeleteSession(ctx, sessionID); err != nil {
 		return InternalError("failed to delete session", err)
@@ -217,11 +224,10 @@ func (s *AuthService) Logout(ctx context.Context, sessionID string, actorUserID 
 	}); err != nil {
 		return InternalError("failed to write auth logout audit log", err)
 	}
-
 	return nil
 }
 
-// buildAvatarURL 把 Linux Do 返回的头像模板转换为可直接访问的 URL。
+// buildAvatarURL converts the avatar template returned by Linux Do into a directly fetchable image URL.
 func buildAvatarURL(avatarTemplate string) string {
 	trimmed := strings.TrimSpace(avatarTemplate)
 	if trimmed == "" {
@@ -238,7 +244,7 @@ func buildAvatarURL(avatarTemplate string) string {
 	return trimmed
 }
 
-// isAppAdmin 根据配置判断一个 Linux Do 用户名是否被显式授予应用管理员身份。
+// isAppAdmin reports whether the provided Linux Do username is explicitly listed as an application admin.
 func isAppAdmin(username string, configuredAdmins []string) bool {
 	for _, admin := range configuredAdmins {
 		if strings.EqualFold(strings.TrimSpace(admin), strings.TrimSpace(username)) {
@@ -248,7 +254,7 @@ func isAppAdmin(username string, configuredAdmins []string) bool {
 	return false
 }
 
-// firstNonEmpty 返回第一个非空字符串。
+// firstNonEmpty returns the first non-empty string after trimming whitespace.
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

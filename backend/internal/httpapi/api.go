@@ -5,10 +5,11 @@ import (
 	"linuxdospace/backend/internal/service"
 )
 
-// API 汇总 HTTP 层需要使用的所有依赖对象。
+// API groups the service dependencies required by the HTTP layer.
 type API struct {
 	config        config.Config
 	version       string
 	authService   *service.AuthService
 	domainService *service.DomainService
+	adminService  *service.AdminService
 }

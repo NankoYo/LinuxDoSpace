@@ -81,19 +81,24 @@ curl http://127.0.0.1:8080/healthz
 
 ## Admin Frontend (Cloudflare Pages)
 
-管理员前端已经从设计稿拆分为独立工程：
+The administrator frontend is now a real standalone application that talks to the shared backend:
 
 - [admin-frontend/README.md](/G:/ClaudeProjects/LinuxDoSpace/admin-frontend/README.md)
 
-推荐在 Cloudflare Pages 中使用如下配置：
+Recommended Cloudflare Pages settings:
 
 - Root directory: `admin-frontend`
 - Build command: `npm run build`
 - Build output directory: `dist`
-- Optional env: `VITE_ADMIN_DEMO_PASSWORD`
+- Required env: `VITE_API_BASE_URL=https://api.linuxdo.space`
 
-注意事项：
+Backend requirements for the admin frontend:
 
-- 当前管理员前端仍是 UI 原型，未接入真实管理 API。
-- 该演示口令只用于静态页面预览，不可替代服务端管理员鉴权。
-- 后续若上线真实后台，必须先补服务端权限校验、审计日志和敏感操作防护。
+- `APP_ADMIN_FRONTEND_URL` must point to the deployed admin site
+- `APP_ALLOWED_ORIGINS` must include the admin frontend origin
+- `APP_ADMIN_USERNAMES` must list the Linux Do usernames allowed to access the admin console
+
+Security notes:
+
+- The admin frontend no longer uses a demo password.
+- All real write operations go through backend sessions, admin authorization, CSRF validation, and audit logging.

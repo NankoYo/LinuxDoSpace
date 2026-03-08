@@ -9,8 +9,8 @@ import (
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
-// Store 抽象了业务层依赖的持久化能力。
-// 我们在这里使用接口，而不是直接耦合具体实现，目的是让后续测试和替换更容易。
+// Store abstracts the persistence capabilities used by the service layer.
+// The interface keeps service code testable and decoupled from the concrete SQLite implementation.
 type Store interface {
 	UpsertUser(ctx context.Context, input sqlite.UpsertUserInput) (model.User, error)
 	GetUserByID(ctx context.Context, userID int64) (model.User, error)
@@ -21,6 +21,9 @@ type Store interface {
 	DeleteSession(ctx context.Context, sessionID string) error
 	SaveOAuthState(ctx context.Context, state model.OAuthState) error
 	ConsumeOAuthState(ctx context.Context, stateID string) (model.OAuthState, error)
+	GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error)
+	UpsertUserControl(ctx context.Context, input sqlite.UpsertUserControlInput) (model.UserControl, error)
+	ListAdminUsers(ctx context.Context) ([]model.AdminUserSummary, error)
 	ListManagedDomains(ctx context.Context, includeDisabled bool) ([]model.ManagedDomain, error)
 	GetManagedDomainByID(ctx context.Context, id int64) (model.ManagedDomain, error)
 	GetManagedDomainByRoot(ctx context.Context, rootDomain string) (model.ManagedDomain, error)
@@ -31,13 +34,23 @@ type Store interface {
 	FindAllocationByNormalizedPrefix(ctx context.Context, managedDomainID int64, normalizedPrefix string) (model.Allocation, error)
 	CreateAllocation(ctx context.Context, input sqlite.CreateAllocationInput) (model.Allocation, error)
 	ListAllocationsByUser(ctx context.Context, userID int64) ([]model.Allocation, error)
+	ListAdminAllocations(ctx context.Context) ([]model.AdminAllocationSummary, error)
 	ListPublicAllocationOwnerships(ctx context.Context) ([]model.PublicAllocationOwnership, error)
 	GetAllocationByID(ctx context.Context, allocationID int64) (model.Allocation, error)
 	GetAllocationByIDForUser(ctx context.Context, allocationID int64, userID int64) (model.Allocation, error)
+	ListEmailRoutes(ctx context.Context) ([]model.EmailRoute, error)
+	CreateEmailRoute(ctx context.Context, input sqlite.CreateEmailRouteInput) (model.EmailRoute, error)
+	UpdateEmailRoute(ctx context.Context, input sqlite.UpdateEmailRouteInput) (model.EmailRoute, error)
+	DeleteEmailRoute(ctx context.Context, id int64) error
+	ListAdminApplications(ctx context.Context) ([]model.AdminApplication, error)
+	UpdateAdminApplication(ctx context.Context, input sqlite.UpdateAdminApplicationInput) (model.AdminApplication, error)
+	ListRedeemCodes(ctx context.Context) ([]model.RedeemCode, error)
+	CreateRedeemCode(ctx context.Context, input sqlite.CreateRedeemCodeInput) (model.RedeemCode, error)
+	DeleteRedeemCode(ctx context.Context, id int64) error
 	WriteAuditLog(ctx context.Context, input sqlite.AuditLogInput) error
 }
 
-// OAuthClient 抽象 Linux Do OAuth 能力。
+// OAuthClient abstracts Linux Do OAuth operations.
 type OAuthClient interface {
 	Configured() bool
 	BuildAuthorizationURL(state string, codeChallenge string) string
@@ -45,7 +58,7 @@ type OAuthClient interface {
 	GetCurrentUser(ctx context.Context, accessToken string) (model.LinuxDOProfile, error)
 }
 
-// CloudflareClient 抽象 Cloudflare DNS 能力。
+// CloudflareClient abstracts Cloudflare DNS operations.
 type CloudflareClient interface {
 	ResolveZoneID(ctx context.Context, rootDomain string) (string, error)
 	ListAllDNSRecords(ctx context.Context, zoneID string) ([]cloudflare.DNSRecord, error)

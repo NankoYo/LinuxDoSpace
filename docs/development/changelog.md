@@ -1,104 +1,32 @@
+﻿# LinuxDoSpace Changelog
+
 ## 0.6.0
 
-- 汇总并吸收 `0.5.3-alpha.21` 到 `0.5.3-alpha.23` 的阶段性成果，提升项目发布基线到 `0.6.0`。
-- 新增独立的 `admin-frontend` 管理员前端工程，可单独部署到另一个 Cloudflare Pages，并保留完整的管理员 UI 原型。
-- 修复“共同监督”页条目过量的问题，改为仅展示数据库中可确认仍在实际使用的子域名。
-- 统一主站品牌图标，导航栏左上角改为使用 `ICON.png`，与浏览器页签 favicon 保持一致。
+- Added a real standalone administrator console integration for `admin-frontend`.
+- Added administrator Linux Do OAuth login, backend session bootstrap, server-side authorization checks, CSRF validation, and audit-log-backed write operations.
+- Added persistent administrator APIs for users, managed domains, DNS records, email routes, application review, and redeem codes.
+- Fixed the public supervision page so it only shows subdomains that are verifiably still in active use.
+- Unified the brand icon so the main site and favicon both use `ICON.png`.
+
 ## 0.5.3-alpha.23
 
-- 将主站导航栏左上角品牌图标从默认的 `L` 字符替换为 `ICON.png`，与浏览器页签 favicon 保持一致。
-- 保持现有导航布局和交互不变，仅替换品牌视觉标识，避免影响当前 UI 结构。
+- Replaced the previous text-based navbar mark with `ICON.png` on the main frontend.
+
 ## 0.5.3-alpha.22
 
-- 修复公开“共同监督”页统计过量的问题；后端不再按所有 active allocation 直接展示，而是改为基于数据库内的 DNS 审计日志判断子域名是否真的被实际使用。
-- 只有最近一次 DNS 事件仍为 `dns_record.create` 或 `dns_record.update` 的 allocation 才会出现在公开监督列表中；仅自动分配但从未填写记录的占位子域名将不再显示。
-- 新增 sqlite 仓储层测试，覆盖“未使用不显示、删除后不显示、禁用 allocation 不显示”的关键场景。
+- Corrected public supervision ownership listing so unused placeholder allocations are no longer exposed.
+- Added SQLite tests that validate the supervision filtering rules.
+
 ## 0.5.3-alpha.21
 
-- 从 `new-ui-design` 中提取管理员页面，重组为独立的 `admin-frontend` React 项目，便于单独部署到另一个 Cloudflare Pages。
-- 为管理员端补充独立入口、图标、演示登录、移动端导航、hash 标签页切换和五个管理页面的本地交互原型。
-- 新增管理员前端 README、环境变量示例和部署文档说明，明确当前阶段仍未接入真实管理员鉴权与后台 API。
-# LinuxDoSpace 鏇存柊鏃ュ織
+- Extracted the administrator UI from `new-ui-design` into a standalone `admin-frontend` Vite project.
+- Added the initial standalone administrator UI prototype, navigation, and Cloudflare Pages deployment notes.
 
 ## 0.5.3-alpha.20
 
-- ?? Debian ????????????????? GitHub Actions ???????????????? `ghcr.io/moyeranqianzhi/linuxdospace:latest` ??? `docker compose up -d`?
-- ????????? `.env` ?? `IMAGE_NAME` ? `IMAGE_TAG`?????????? `latest` ????????????????????
-- ?????????? `docker compose pull linuxdospace`??? Compose ???????????????????
+- Updated the release pipeline to publish `ghcr.io/moyeranqianzhi/linuxdospace:latest` before Debian deployment.
+- Kept Debian deployment aligned with `docker pull ghcr.io/moyeranqianzhi/linuxdospace:latest` based updates.
 
-## 0.5.3-alpha.19
+## Earlier history
 
-- 灏?Debian 鑷姩閮ㄧ讲鏉′欢鏀逛负 tag push 瑙﹀彂锛涘彂甯冩柊鐗堟湰 tag 鍚庯紝闀滃儚鏋勫缓瀹屾垚浼氳嚜鍔ㄨ繘鍏?Debian 閮ㄧ讲闃舵銆?- 淇濈暀 `workflow_dispatch + deploy_to_debian=true` 浣滀负鍏滃簳鎵嬪姩鍏ュ彛锛屼絾榛樿鍙戝竷璺緞鏀逛负 tag 椹卞姩銆?- 璁╅儴缃查樁娈靛湪 tag push 鏃朵紭鍏堜娇鐢ㄥ綋鍓?tag 瀵瑰簲鐨勭幇鏈夐暅鍍忥紝鑰屼笉鏄浐瀹氭媺鍙?`latest`锛岄伩鍏嶇増鏈紓绉汇€?
-## 0.5.3-alpha.18
-
-- 涓烘湇鍔″櫒绔?`remote-deploy.sh` 鐨?`docker pull` 鍜?`docker compose up -d` 澧炲姞鏄惧紡瓒呮椂锛岄伩鍏嶇綉缁滃紓甯告椂鍗℃鍦ㄥ崟娆″唴灞傚皾璇曘€佸鑷村灞傞噸璇曟棤娉曟帴绠°€?- 鍦ㄨ繙绔墠缃鏌ヤ腑琛ュ厖 `timeout` 鍛戒护鍙敤鎬ф牎楠岋紝骞舵妸瓒呮椂鍙傛暟涓€骞舵敞鍏ュ埌杩滅閮ㄧ讲鑴氭湰锛屼娇鈥滃灞?10 娆?+ 鍐呭眰 10 娆♀€濋噸璇曢€昏緫鐪熸闂幆銆?
-## 0.5.3-alpha.17
-
-- 淇 `0.5.3-alpha.16` 涓儴缃茶剼鏈敓鎴愰€昏緫鐨?here-doc 缂╄繘閿欒锛岄伩鍏?GitHub Runner 鍦ㄨ繘鍏ュ灞傞噸璇曚箣鍓嶅氨鍥?shell 瑙ｆ瀽澶辫触鑰岀洿鎺ョ粓姝€?- 淇濇寔澶栧眰 10 娆″畬鏁撮儴缃查噸璇曞拰鍐呭眰 10 娆¤繙绔暅鍍忔媺鍙栭噸璇曚笉鍙橈紝浠呬慨姝ｈ剼鏈惤鐩樻柟寮忎互纭繚閲嶈瘯閫昏緫鑳藉鐪熸鎵ц銆?
-## 0.5.3-alpha.16
-
-- 灏?Debian 閮ㄧ讲闃舵鏀舵暃涓轰竴涓甫澶栧眰 10 娆￠噸璇曠殑瀹屾暣娴佺▼锛屾妸 SSH 寤洪摼銆佽繙绔墠缃鏌ャ€侀厤缃笂浼犮€佽繙绔惎鍔ㄤ笌缁撴灉杞缁熶竴绾冲叆鍚屼竴灞傞噸璇曢€昏緫銆?- 淇濈暀鏈嶅姟鍣ㄧ `remote-deploy.sh` 鍐呴儴鍘熸湁鐨?10 娆￠暅鍍忔媺鍙栦笌鍋ュ悍妫€鏌ラ噸璇曪紝浠庤€岃鐞嗚鏈€澶ч噸璇曟鏁版彁鍗囧埌 10 x 10銆?- 璁?GitHub Runner 鍒?Debian 鏈嶅姟鍣ㄤ箣闂寸殑鍋跺彂 SSH/SCP 瓒呮椂涓嶅啀鐩存帴缁堟鏁存鍙戝竷锛岃€屾槸鑷姩閲嶆柊鎵ц瀹屾暣閮ㄧ讲娴佹按绾裤€?
-## 0.5.3-alpha.14
-
-- 淇閮ㄧ讲宸ヤ綔娴佸湪 `Prepare SSH key` 闃舵琚?`ssh-keyscan` 鐨勯潪闆堕€€鍑虹爜璇垽澶辫触鐨勯棶棰橈紱鍙鎴愬姛鎷垮埌涓绘満 key锛屽氨涓嶅啀鐩存帴涓柇娴佺▼銆?- 涓?`ssh-keyscan` 澧炲姞鏈€澶?10 娆￠噸璇曘€佽秴鏃朵笌澶氱畻娉曟帰娴嬶紝闄嶄綆 GitHub Runner 鍒?Debian 鏈嶅姟鍣ㄩ摼璺姈鍔ㄥ甫鏉ョ殑鍋跺彂澶辫触鐜囥€?
-## 0.5.3-alpha.13
-
-- 淇 GitHub Actions 鍦ㄥ惎鍔ㄨ繙绔儴缃茶剼鏈椂锛岃櫧鐒惰剼鏈凡鍦ㄦ湇鍔″櫒鎵ц锛屼絾 SSH 浼氳瘽鏈湡姝ｈ劚绂汇€佸鑷存祦绋嬮暱鏈熷崱鍦?`Start remote deployment job` 鐨勯棶棰樸€?- 灏嗚繙绔惎鍔ㄦ柟寮忔敼涓?`setsid` 鍚庡彴鍖栵紝骞跺湪宸ヤ綔娴佷腑鏄惧紡鏍￠獙杩滅 PID锛岀‘淇濆悗缁疆璇㈡楠よ兘澶熺珛鍗虫帴绠＄姸鎬佹鏌ャ€?- 鍦ㄩ儴缃插墠缃鏌ヤ腑澧炲姞 `setsid` 鍙敤鎬ф牎楠岋紝閬垮厤鏈嶅姟鍣ㄧ幆澧冪己灏戣鍛戒护鏃惰繘鍏ュ崐鍚姩鐘舵€併€?
-## 0.5.3-alpha.12
-
-- 灏嗚嚜鍔ㄩ儴缃插伐浣滄祦鏀逛负鈥滆繙绋嬪悗鍙版墽琛岄儴缃茶剼鏈?+ Actions 鐭繛鎺ヨ疆璇㈢粨鏋溾€濓紝閬垮厤闀挎椂闂村崟涓?SSH 浼氳瘽鍦ㄦ媺鍙栭暅鍍忔椂鍥?`Broken pipe` 涓柇銆?- 淇濈暀鏈嶅姟鍣ㄧ鏈€澶?10 娆℃媺鍙栭噸璇曚笌鍋ュ悍妫€鏌ラ€昏緫锛屼絾鎶婃墽琛岃繃绋嬩粠闀胯繛鎺?SSH 涓В鑰﹀嚭鏉ワ紝浣块儴缃插疄闄呮垚鍔熸椂宸ヤ綔娴佷篃鑳界ǔ瀹氭劅鐭ユ垚鍔熴€?- 涓?SSH / SCP 澧炲姞淇濇椿涓庤繛鎺ヨ秴鏃跺弬鏁帮紝闄嶄綆涓婁紶閰嶇疆鏂囦欢鍜岃疆璇㈤樁娈电殑杩炴帴鑴嗗急鎬с€?
-## 0.5.3-alpha.11
-
-- 淇鑷姩閮ㄧ讲宸ヤ綔娴佸湪杩滅▼鎵ц `docker pull` 鏃堕敊璇娇鐢ㄥ甫澶у啓瀛楁瘝鐨勪粨搴撳悕锛屽鑷?Docker 鎷掔粷闀滃儚寮曠敤鏍煎紡鐨勯棶棰樸€?- 灏嗚繙绋嬮儴缃查樁娈电殑鐩爣闀滃儚鍚嶆樉寮忓浐瀹氫负鍏ㄥ皬鍐?`ghcr.io/moyeranqianzhi/linuxdospace:latest`锛岀‘淇濋噸璇曢€昏緫鐪熸浣滅敤浜庢湁鏁堥暅鍍忓湴鍧€銆?
-## 0.5.3-alpha.10
-
-- 灏?Debian 鑷姩閮ㄧ讲宸ヤ綔娴佹敹鏁涘洖鏈嶅姟鍣ㄧ `docker pull ghcr.io/moyeranqianzhi/linuxdospace:latest && docker compose up -d` 鐨勬洿鏂拌矾寰勩€?- 涓洪儴缃叉祦绋嬪鍔犺繙绋嬪墠缃鏌ャ€佸鍣?revision 鏍￠獙涓庡仴搴锋鏌ワ紝閬垮厤闀滃儚鎷夊彇鎴愬姛浣嗘湇鍔℃病鏈夌湡姝ｅ垏鎹㈠埌鐩爣鐗堟湰銆?- 涓烘湇鍔″櫒绔儴缃插鍔犳渶澶?10 娆￠噸璇曟満鍒讹紱鑻ヨ繛缁?10 娆′粛鏈媺鍙栨垚鍔熸垨鍋ュ悍妫€鏌ユ湭閫氳繃锛屽垯鏄庣‘鍒ゅ畾宸ヤ綔娴佸け璐ャ€?
-## 0.5.3-alpha.9
-
-- 灏?GitHub Actions 鐨?Debian 鑷姩閮ㄧ讲娴佺▼鏀逛负鍦?runner 涓婃媺鍙栭暅鍍忋€佸鍑轰负鍘嬬缉闀滃儚鍖呭苟涓婁紶鍒版湇鍔″櫒锛屽啀鐢辨湇鍔″櫒 `docker load` 鍚庢墽琛?`docker compose up -d`銆?- 閬垮厤閮ㄧ讲闃舵渚濊禆鏈嶅姟鍣ㄧ洿杩?`ghcr.io`锛屼慨澶嶆湇鍔″櫒渚ц闂?GHCR 瓒呮椂瀵艰嚧鑷姩閮ㄧ讲澶辫触鐨勯棶棰樸€?- 绠€鍖栭儴缃插伐浣滄祦瀵?Secrets 鐨勮姹傦紝閮ㄧ讲闃舵涓嶅啀寮轰緷璧栨湇鍔″櫒绔?GHCR 鐧诲綍鍑嵁銆?
-## 0.5.3-alpha.8
-
-- 灏嗗墠绔富瀵艰埅涓庡簲鐢ㄥ３鍒囨崲鍒版柊鐨勫椤甸潰 UI 缁撴瀯锛岃ˉ鍥為椤点€佸煙鍚嶅垎鍙戙€侀偖绠卞垎鍙戙€侀厤缃腑蹇冦€佹潈闄愮敵璇枫€佸叡鍚岀洃鐫ｇ瓑鍏ュ彛銆?- 鏂板 `閭鍒嗗彂` 涓?`鏉冮檺鐢宠` 鍓嶇棰勮椤碉紝娌跨敤鏂拌璁＄瑙嗚椋庢牸锛屽苟鏄庣‘鏍囨敞褰撳墠浠嶆湭鎺ュ叆鍚庣銆?- 琛ュ厖缂哄け鐨?`GlassSelect` 鐜荤拑鎬佷笅鎷夌粍浠跺拰 `custom-scrollbar` 鏍峰紡宸ュ叿锛屼慨澶嶆柊璁捐绋夸緷璧栫殑鍩虹 UI 缁勪欢缂哄彛銆?- 淇濇寔 `鍏卞悓鐩戠潱` 椤甸潰缁х画浣跨敤鐜版湁鐪熷疄鎺ュ彛 `GET /v1/public/supervision`锛屼笉鍥為€€涓鸿璁＄涓殑 mock 鏁版嵁銆?
-## 0.5.3-alpha.7
-
-- 鏂板鈥滃叡鍚岀洃鐫ｂ€濈鍥涗釜椤甸潰锛岀敤浜庡叕寮€灞曠ず宸插垎閰嶅瓙鍩熷悕鍙婂叾鎷ユ湁鑰咃紝鏀寔鐩存帴鐐瑰嚮瀛愬煙鍚嶈闂€?- 鏂板 `GET /v1/public/supervision` 鑴辨晱鍏紑鎺ュ彛锛屾槑纭彧杩斿洖褰掑睘淇℃伅锛屼笉鏆撮湶浠讳綍 DNS 瑙ｆ瀽鍊笺€?- 琛ュ厖瀵艰埅鍏ュ彛涓?API 鏂囨。锛屼繚鎸佺幇鏈夌幓鐠冩€佽瑙夐鏍间笉鍙樸€?
-## 0.5.3-alpha.6
-
-- 淇鍓嶇浠嶄娇鐢ㄩ粯璁ゆ祻瑙堝櫒鏍囩鏍囬鐨勯棶棰橈紝缁熶竴鏀逛负 `LinuxDoSpace (浣弸绌洪棿)`銆?- 灏嗙珯鐐规爣绛惧浘鏍囧垏鎹负浠撳簱鍐呯殑 `ICON.png`锛屽苟鎺ュ叆 Vite 闈欐€佽祫婧愬彂甯冭矾寰勩€?
-## 0.5.3-alpha.5
-
-- 鎭㈠鍩熷悕鎼滅储鎺ュ彛鍏紑鍙敤锛屾湭鐧诲綍鐢ㄦ埛鍜岄潪鍚屽悕鍓嶇紑閮藉彲浠ユ甯告煡璇㈠彲鐢ㄦ€с€?- 淇濈暀鈥滀粎鍏佽娉ㄥ唽鐢ㄦ埛鍚嶅悓鍚嶅瓙鍩熲€濈殑涓存椂绛栫暐锛屾妸闄愬埗鑼冨洿鏀舵暃鍒版敞鍐岄樁娈佃€屼笉鏄悳绱㈤樁娈点€?
-## 0.5.3-alpha.4
-
-- 鍦ㄥ墠绔彸涓婅鐧诲綍鍏ュ彛鏃佹柊澧?GitHub 寰爣锛岀洿鎺ヨ烦杞埌椤圭洰浠撳簱銆?- 淇濇寔瀵艰埅鏍忓師鏈夌幓鐠冩€佸竷灞€涓嶅彉锛屼粎鏂板涓€涓交閲忕骇澶栭摼鍏ュ彛銆?
-## 0.5.3-alpha.3
-
-- 涓存椂鏀剁揣鍒嗗彂绛栫暐锛屼粎鍏佽鐧诲綍鐢ㄦ埛鐢宠銆佹煡鐪嬪拰绠＄悊涓庤嚜宸?Linux Do 鐢ㄦ埛鍚嶅悓鍚嶇殑瀛愬煙鍚嶃€?- 涓存椂鏀剁揣 DNS 绠＄悊绛栫暐锛屼粎鍏佽缂栬緫 `<username>.<root_domain>` 杩欐潯鏍硅褰曪紝鎷掔粷 `www`銆乣api` 绛夐澶栧瓙璁板綍銆?- 鐧诲綍鍚庤嫢褰撳墠鍚屽悕瀛愬煙杩樻病鏈夌湡瀹炶В鏋愯褰曪紝鍓嶇浼氬厛灞曠ず涓€鏉℃湭濉啓鍐呭鐨勫崰浣嶈褰曪紝鏂逛究鐢ㄦ埛鐩存帴琛ュ叏銆?
-## 0.5.3-alpha.2
-
-- 淇閮ㄧ讲鐜浣跨敤閿欒 DNS 瑙ｆ瀽 `connect.linux.do` 鐨勯棶棰橈紝涓?Docker Compose 鏄庣‘鎸囧畾鍏叡 DNS銆?- 瑙ｅ喅 Linux Do OAuth token 璇锋眰鍥犱笂娓稿煙鍚嶈В鏋愰敊璇€岃秴鏃讹紝閬垮厤鐧诲綍鍥炶皟闃舵杩斿洖 `502`銆?
-## 0.5.3-alpha.1
-
-- 鍙傝€?`QuantumNous/new-api` 淇 Linux Do OAuth token 浜ゆ崲鏂瑰紡锛屾敼涓轰娇鐢?HTTP Basic Auth 浼犻€?`client_id:client_secret`銆?- 涓?Linux Do OAuth 鍥炶皟澶辫触澧炲姞鍚庣鏃ュ織锛屼究浜庡畾浣嶇嚎涓?`502` 鎴栭壌鏉冨け璐ユ牴鍥犮€?- 鍦ㄤ笉鏀瑰彉鐜版湁鐧诲綍椤靛竷灞€鐨勫墠鎻愪笅锛屼负 Linux Do 鐧诲綍鎸夐挳鎺ュ叆鍝佺墝 SVG 鍥炬爣骞舵洿鏂版寜閽枃妗堛€?
-## 0.5.2-alpha.1
-
-- 淇 Linux Do OAuth 瀹㈡埛绔湭鏄惧紡鍙戦€?Accept: application/json 鐨勯棶棰樸€?- 淇閮ㄧ讲榛樿鍊兼妸 LINUXDO_OAUTH_SCOPE 鐣欑┖鐨勯棶棰橈紝缁熶竴鏀逛负 user銆?- 澧炲姞 Linux Do OAuth 瀹㈡埛绔祴璇曪紝瑕嗙洊鎺堟潈 URL銆乼oken 浜ゆ崲鍜岀敤鎴蜂俊鎭姹傘€?
-## 0.5.1-alpha.1
-
-- 娣囶喖顦?GitHub Actions 瀹搞儰缍斿ù浣筋嚔濞夋洟鏁婄拠顖樷偓?- 闁灝鍘ら崷?job 缁?`if` 閺夆€叉娑擃厾娲块幒銉ョ穿閻?`secrets.*`閿涘本鏁兼稉杞扮矌閸掋倖鏌囬幍瀣З闁劎璁叉潏鎾冲弳閵?- 婢х偛濮為柈銊ц job 閸愬懘鍎撮惃?secret 閺嶏繝鐛欏銉╊€冮敍宀€鈥樻穱婵堝繁婢堕亶鍘ょ純顔芥閺勫海鈥樻径杈Е閵?
-## 0.5.0-alpha.1
-
-- 婢х偛濮為崡鏇㈡殔閸?Docker 闁劎璁查弬瑙勵攳閿涘苯澧犵粩顖涚€杞伴獓閻椻晙绱板畵灞藉弳 Go 娴滃矁绻橀崚韬测偓?- 婢х偛濮為弽鍦窗瑜?`Dockerfile` 娑?`.dockerignore`閵?- 婢х偛濮?Debian 閺堝秴濮熼崳銊ゅ▏閻劎娈?`docker-compose.yml` 娑撳海骞嗘晶鍐ㄥ綁闁插繑膩閺夎￥鈧?- 婢х偛濮?GitHub Actions 鐎圭懓娅掗弸鍕紦閵嗕笩HCR 閸欐垵绔锋稉搴″讲闁?Debian SSH 闁劎璁插銉ょ稊濞翠降鈧?- 鐞涖儱鍘栭柈銊ц閺傚洦銆傞妴浣界箥鐞涘本澧滈崘灞芥嫲閸欐垵绔风拠瀛樻閵?
-## 0.4.1-alpha.1
-
-- 娣囶喖顦?`Agents.md` 鐞氼偊鏁婄拠顖涘絹娴溿倕鍩屾禒鎾崇氨閻ㄥ嫰妫舵０妯糕偓?- 閸?`.gitignore` 娑擃厼顤冮崝?`Agents.md` 娑?`AGENTS.md` 韫囩晫鏆愮憴鍕灟閵?- 鐏忓棗鍑＄捄鐔婚嚋閻?`Agents.md` 娴?Git 缁便垹绱╃粔濠氭珟閿涘奔绲炬穱婵堟殌閺堫剙婀撮弬鍥︽閵?
-## 0.1.0-alpha.1
-
-- 閸掓繂顫愰崠?Git 娴犳挸绨遍妴?- 瀵よ櫣鐝?Go 閸氬海顏崺铏诡攨妤犮劍鐏﹂妴?- 婢х偛濮為柊宥囩枂閸旂姾娴囬妴涓糛Lite 閸掓繂顫愰崠鏍ф嫲 SQL 鏉╀胶些閵?- 婢х偛濮?Linux Do / Cloudflare 鐎广垺鍩涚粩顖氬灥閻楀牄鈧?- 婢х偛濮?`GET /healthz` 閸嬨儱鎮嶅Λ鈧弻銉﹀复閸欙絻鈧?- 瀵よ櫣鐝涘鈧崣鎴炴瀮濡楋絿娲拌ぐ鏇氱瑢閸╄櫣顢呴弬鍥ㄣ€傞妴?
-## 0.2.0-alpha.1
-
-- 婢х偛濮?Linux Do OAuth 閻ц缍嶅ù浣衡柤閵嗕椒绱扮拠婵嗗灡瀵ゅ搫鎷伴柅鈧崙铏规瑜版洏鈧?- 婢х偛濮為張宥呭缁?Session閵嗕竼SRF 閺嶏繝鐛欓崪?User-Agent 閹稿洨姹楃紒鎴濈暰閵?- 婢х偛濮為弽鐟扮厵閸氬秹鍘ょ純顔衡偓浣烘暏閹寸兘鍘ゆ０婵婎洬閻╂牕鎷伴崨钘夋倳缁屾椽妫块崚鍡涘帳閼宠棄濮忛妴?- 婢х偛濮?Cloudflare 鐎圭偞妞?DNS 鐠佹澘缍嶉崚娑樼紦閵嗕焦鐓＄拠顫偓浣规纯閺傛澘鎷伴崚鐘绘珟閵?- 婢х偛濮炵粻锛勬倞閸涙ɑ甯撮崣锝呮嫲鐎孤ゎ吀閺冦儱绻旈崘娆忓弳閵?- 婢х偛濮為崡鏇炲帗濞村鐦稉?Cloudflare 閻喎鐤勯梿鍡樺灇濞村鐦妴?
-## 0.4.0-alpha.1
-
-- 閸撳秶顏幒銉ュ弳閸氬海顏惇鐔风杽 API閿涘奔绗夐崘宥勫▏閻劑娈㈤張鍝勫窗閻劎濮搁幀浣告嫲閺堫剙婀?mock 鐠佹澘缍嶉妴?- 婢х偛濮為崜宥囶伂缂佺喍绔?API 鐎广垺鍩涚粩顖樷偓浣鸿閸ㄥ鐣炬稊澶婃嫲閻滎垰顣ㄩ崣姗€鍣洪柊宥囩枂閵?- 婢х偛濮為崜宥囶伂閻ц缍嶉幀浣告倱濮濄儯鈧副Auth 鐠哄疇娴嗛崪?URL 娑?tab 閻樿埖鈧礁鎮撳銉ｂ偓?- 婢х偛濮為崜宥囶伂 allocation 閻㈠疇顕妴涓廚S 鐠佹澘缍嶉弻銉嚄閵嗕礁鍨卞鎭掆偓浣规纯閺傛澘鎷伴崚鐘绘珟閼宠棄濮忛妴?- 閸︺劋绻氶悾娆忓斧閺?UI 鐠佹崘顓告搴㈢壐閻ㄥ嫬澧犻幓鎰瑓鐎瑰本鍨氶惇鐔风杽娑撴艾濮熼懕鏃囩殶閵?
-
+Earlier alpha release history remains available in Git history and tags.

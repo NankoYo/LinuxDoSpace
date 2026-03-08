@@ -1,0 +1,777 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/mail"
+	"sort"
+	"strconv"
+	"strings"
+
+	"linuxdospace/backend/internal/cloudflare"
+	"linuxdospace/backend/internal/config"
+	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/security"
+	"linuxdospace/backend/internal/storage/sqlite"
+)
+
+// AdminService groups the administrator-only workflows used by the standalone admin frontend.
+type AdminService struct {
+	cfg config.Config
+	db  Store
+	cf  CloudflareClient
+}
+
+// AdminUserQuotaView describes one managed domain quota row shown inside the user edit dialog.
+type AdminUserQuotaView struct {
+	ManagedDomainID int64  `json:"managed_domain_id"`
+	RootDomain      string `json:"root_domain"`
+	DefaultQuota    int    `json:"default_quota"`
+	EffectiveQuota  int    `json:"effective_quota"`
+	AllocationCount int    `json:"allocation_count"`
+}
+
+// AdminUserDetail is the expanded payload required by the admin user edit dialog.
+type AdminUserDetail struct {
+	User    model.AdminUserSummary `json:"user"`
+	BanNote string                 `json:"ban_note"`
+	Quotas  []AdminUserQuotaView   `json:"quotas"`
+}
+
+// UpdateAdminUserRequest describes the moderation controls that can be changed for one user.
+type UpdateAdminUserRequest struct {
+	IsBanned bool   `json:"is_banned"`
+	BanNote  string `json:"ban_note"`
+}
+
+// UpsertAdminRecordRequest describes the mutable DNS record payload used by administrators.
+type UpsertAdminRecordRequest struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Content  string `json:"content"`
+	TTL      int    `json:"ttl"`
+	Proxied  bool   `json:"proxied"`
+	Comment  string `json:"comment"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// UpsertEmailRouteRequest describes the input accepted by the email routes page.
+type UpsertEmailRouteRequest struct {
+	OwnerUserID int64  `json:"owner_user_id"`
+	RootDomain  string `json:"root_domain"`
+	Prefix      string `json:"prefix"`
+	TargetEmail string `json:"target_email"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// UpdateApplicationRequest describes the moderation action performed on one request row.
+type UpdateApplicationRequest struct {
+	Status     string `json:"status"`
+	ReviewNote string `json:"review_note"`
+}
+
+// GenerateRedeemCodesRequest describes one batch of generated redeem codes.
+type GenerateRedeemCodesRequest struct {
+	Amount int    `json:"amount"`
+	Type   string `json:"type"`
+	Target string `json:"target"`
+	Note   string `json:"note"`
+}
+
+// NewAdminService creates a new administrator service instance.
+func NewAdminService(cfg config.Config, db Store, cf CloudflareClient) *AdminService {
+	return &AdminService{cfg: cfg, db: db, cf: cf}
+}
+
+// ListUsers returns the compact user list required by the admin console user page.
+func (s *AdminService) ListUsers(ctx context.Context) ([]model.AdminUserSummary, error) {
+	items, err := s.db.ListAdminUsers(ctx)
+	if err != nil {
+		return nil, InternalError("failed to list admin users", err)
+	}
+	return items, nil
+}
+
+// GetUserDetail loads the expanded moderation and quota view for one user.
+func (s *AdminService) GetUserDetail(ctx context.Context, userID int64) (AdminUserDetail, error) {
+	baseUser, err := s.db.GetUserByID(ctx, userID)
+	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return AdminUserDetail{}, NotFoundError("target user not found")
+		}
+		return AdminUserDetail{}, InternalError("failed to load target user", err)
+	}
+
+	users, err := s.ListUsers(ctx)
+	if err != nil {
+		return AdminUserDetail{}, err
+	}
+
+	var summary *model.AdminUserSummary
+	for index := range users {
+		if users[index].ID == userID {
+			summary = &users[index]
+			break
+		}
+	}
+	if summary == nil {
+		summary = &model.AdminUserSummary{
+			ID:              baseUser.ID,
+			LinuxDOUserID:   baseUser.LinuxDOUserID,
+			Username:        baseUser.Username,
+			DisplayName:     baseUser.DisplayName,
+			AvatarURL:       baseUser.AvatarURL,
+			TrustLevel:      baseUser.TrustLevel,
+			IsLinuxDOAdmin:  baseUser.IsLinuxDOAdmin,
+			IsAppAdmin:      baseUser.IsAppAdmin,
+			CreatedAt:       baseUser.CreatedAt,
+			LastLoginAt:     baseUser.LastLoginAt,
+			AllocationCount: 0,
+		}
+	}
+
+	control, err := s.db.GetUserControlByUserID(ctx, userID)
+	if err != nil {
+		return AdminUserDetail{}, InternalError("failed to load user moderation state", err)
+	}
+
+	managedDomains, err := s.db.ListManagedDomains(ctx, true)
+	if err != nil {
+		return AdminUserDetail{}, InternalError("failed to load managed domains", err)
+	}
+
+	quotas := make([]AdminUserQuotaView, 0, len(managedDomains))
+	for _, managedDomain := range managedDomains {
+		effectiveQuota, quotaErr := s.db.GetEffectiveQuota(ctx, userID, managedDomain.ID)
+		if quotaErr != nil {
+			return AdminUserDetail{}, InternalError("failed to load effective quota", quotaErr)
+		}
+		allocationCount, countErr := s.db.CountAllocationsByUserAndDomain(ctx, userID, managedDomain.ID)
+		if countErr != nil {
+			return AdminUserDetail{}, InternalError("failed to count user allocations", countErr)
+		}
+		quotas = append(quotas, AdminUserQuotaView{
+			ManagedDomainID: managedDomain.ID,
+			RootDomain:      managedDomain.RootDomain,
+			DefaultQuota:    managedDomain.DefaultQuota,
+			EffectiveQuota:  effectiveQuota,
+			AllocationCount: allocationCount,
+		})
+	}
+
+	sort.Slice(quotas, func(i int, j int) bool {
+		if quotas[i].RootDomain == quotas[j].RootDomain {
+			return quotas[i].ManagedDomainID < quotas[j].ManagedDomainID
+		}
+		return quotas[i].RootDomain < quotas[j].RootDomain
+	})
+
+	summary.IsBanned = control.IsBanned
+	return AdminUserDetail{User: *summary, BanNote: control.Note, Quotas: quotas}, nil
+}
+
+// UpdateUser applies one moderation update to the target user.
+func (s *AdminService) UpdateUser(ctx context.Context, actor model.User, userID int64, request UpdateAdminUserRequest) (AdminUserDetail, error) {
+	if actor.ID == userID && request.IsBanned {
+		return AdminUserDetail{}, ForbiddenError("you cannot ban your own administrator account")
+	}
+
+	targetUser, err := s.db.GetUserByID(ctx, userID)
+	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return AdminUserDetail{}, NotFoundError("target user not found")
+		}
+		return AdminUserDetail{}, InternalError("failed to load target user", err)
+	}
+
+	control, err := s.db.UpsertUserControl(ctx, sqlite.UpsertUserControlInput{
+		UserID:   targetUser.ID,
+		IsBanned: request.IsBanned,
+		Note:     strings.TrimSpace(request.BanNote),
+	})
+	if err != nil {
+		return AdminUserDetail{}, InternalError("failed to update user moderation state", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{
+		"target_user_id": targetUser.ID,
+		"is_banned":      control.IsBanned,
+	})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.user_control.upsert",
+		ResourceType: "user_control",
+		ResourceID:   strconv.FormatInt(targetUser.ID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return AdminUserDetail{}, InternalError("failed to write user moderation audit log", err)
+	}
+
+	return s.GetUserDetail(ctx, userID)
+}
+
+// ListAllocations returns all allocation namespaces with owner identity for admin workflows.
+func (s *AdminService) ListAllocations(ctx context.Context) ([]model.AdminAllocationSummary, error) {
+	items, err := s.db.ListAdminAllocations(ctx)
+	if err != nil {
+		return nil, InternalError("failed to list admin allocations", err)
+	}
+	return items, nil
+}
+
+// ListRecords returns the global DNS record list visible to administrators.
+func (s *AdminService) ListRecords(ctx context.Context) ([]model.AdminDNSRecord, error) {
+	if s.cf == nil || !s.cfg.CloudflareConfigured() {
+		return nil, UnavailableError("cloudflare integration is not configured", nil)
+	}
+
+	allocations, err := s.ListAllocations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	allocationsByZone := make(map[string][]model.AdminAllocationSummary)
+	for _, allocation := range allocations {
+		allocationsByZone[allocation.CloudflareZoneID] = append(allocationsByZone[allocation.CloudflareZoneID], allocation)
+	}
+
+	items := make([]model.AdminDNSRecord, 0, 128)
+	for zoneID, zoneAllocations := range allocationsByZone {
+		records, listErr := s.cf.ListAllDNSRecords(ctx, zoneID)
+		if listErr != nil {
+			return nil, UnavailableError("failed to list cloudflare dns records", listErr)
+		}
+
+		sort.Slice(zoneAllocations, func(i int, j int) bool {
+			if len(zoneAllocations[i].FQDN) == len(zoneAllocations[j].FQDN) {
+				return zoneAllocations[i].FQDN > zoneAllocations[j].FQDN
+			}
+			return len(zoneAllocations[i].FQDN) > len(zoneAllocations[j].FQDN)
+		})
+
+		for _, record := range records {
+			allocation, matched := findBestAllocationMatch(record.Name, zoneAllocations)
+			if !matched {
+				continue
+			}
+
+			items = append(items, model.AdminDNSRecord{
+				AllocationID:     allocation.ID,
+				OwnerUserID:      allocation.UserID,
+				OwnerUsername:    allocation.OwnerUsername,
+				OwnerDisplayName: allocation.OwnerDisplayName,
+				RootDomain:       allocation.RootDomain,
+				NamespaceFQDN:    allocation.FQDN,
+				ID:               record.ID,
+				Type:             record.Type,
+				Name:             record.Name,
+				RelativeName:     RelativeNameFromAbsolute(record.Name, allocation.FQDN),
+				Content:          record.Content,
+				TTL:              record.TTL,
+				Proxied:          record.Proxied,
+				Comment:          record.Comment,
+				Priority:         record.Priority,
+			})
+		}
+	}
+
+	sort.Slice(items, func(i int, j int) bool {
+		if items[i].Name == items[j].Name {
+			if items[i].Type == items[j].Type {
+				return items[i].ID < items[j].ID
+			}
+			return items[i].Type < items[j].Type
+		}
+		return items[i].Name < items[j].Name
+	})
+	return items, nil
+}
+
+// CreateRecord creates a DNS record inside the specified allocation namespace without the temporary end-user restriction.
+func (s *AdminService) CreateRecord(ctx context.Context, actor model.User, allocationID int64, request UpsertAdminRecordRequest) (model.AdminDNSRecord, error) {
+	if s.cf == nil || !s.cfg.CloudflareConfigured() {
+		return model.AdminDNSRecord{}, UnavailableError("cloudflare integration is not configured", nil)
+	}
+
+	allocation, err := s.loadAdminAllocation(ctx, allocationID)
+	if err != nil {
+		return model.AdminDNSRecord{}, err
+	}
+
+	createInput, relativeName, err := s.buildAdminCloudflareRecordInput(allocation, request)
+	if err != nil {
+		return model.AdminDNSRecord{}, err
+	}
+
+	created, err := s.cf.CreateDNSRecord(ctx, allocation.CloudflareZoneID, createInput)
+	if err != nil {
+		return model.AdminDNSRecord{}, UnavailableError("failed to create cloudflare dns record", err)
+	}
+
+	item := adminRecordFromCloudflare(allocation, created, relativeName)
+	metadata, _ := json.Marshal(map[string]any{
+		"record_id":     item.ID,
+		"allocation_id": allocation.ID,
+		"name":          item.Name,
+		"type":          item.Type,
+	})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.dns_record.create",
+		ResourceType: "dns_record",
+		ResourceID:   item.ID,
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return model.AdminDNSRecord{}, InternalError("failed to write admin dns create audit log", err)
+	}
+	return item, nil
+}
+
+// UpdateRecord updates a DNS record inside the specified allocation namespace.
+func (s *AdminService) UpdateRecord(ctx context.Context, actor model.User, allocationID int64, recordID string, request UpsertAdminRecordRequest) (model.AdminDNSRecord, error) {
+	if s.cf == nil || !s.cfg.CloudflareConfigured() {
+		return model.AdminDNSRecord{}, UnavailableError("cloudflare integration is not configured", nil)
+	}
+
+	allocation, err := s.loadAdminAllocation(ctx, allocationID)
+	if err != nil {
+		return model.AdminDNSRecord{}, err
+	}
+
+	existing, err := s.cf.GetDNSRecord(ctx, allocation.CloudflareZoneID, strings.TrimSpace(recordID))
+	if err != nil {
+		return model.AdminDNSRecord{}, UnavailableError("failed to load cloudflare dns record", err)
+	}
+	if !BelongsToNamespace(existing.Name, allocation.FQDN) {
+		return model.AdminDNSRecord{}, ForbiddenError("record does not belong to the selected allocation")
+	}
+
+	updateInput, relativeName, err := s.buildAdminCloudflareRecordInput(allocation, request)
+	if err != nil {
+		return model.AdminDNSRecord{}, err
+	}
+
+	updated, err := s.cf.UpdateDNSRecord(ctx, allocation.CloudflareZoneID, strings.TrimSpace(recordID), updateInput)
+	if err != nil {
+		return model.AdminDNSRecord{}, UnavailableError("failed to update cloudflare dns record", err)
+	}
+
+	item := adminRecordFromCloudflare(allocation, updated, relativeName)
+	metadata, _ := json.Marshal(map[string]any{
+		"record_id":     item.ID,
+		"allocation_id": allocation.ID,
+		"name":          item.Name,
+		"type":          item.Type,
+	})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.dns_record.update",
+		ResourceType: "dns_record",
+		ResourceID:   item.ID,
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return model.AdminDNSRecord{}, InternalError("failed to write admin dns update audit log", err)
+	}
+	return item, nil
+}
+
+// DeleteRecord deletes a DNS record inside the specified allocation namespace.
+func (s *AdminService) DeleteRecord(ctx context.Context, actor model.User, allocationID int64, recordID string) error {
+	if s.cf == nil || !s.cfg.CloudflareConfigured() {
+		return UnavailableError("cloudflare integration is not configured", nil)
+	}
+
+	allocation, err := s.loadAdminAllocation(ctx, allocationID)
+	if err != nil {
+		return err
+	}
+
+	existing, err := s.cf.GetDNSRecord(ctx, allocation.CloudflareZoneID, strings.TrimSpace(recordID))
+	if err != nil {
+		return UnavailableError("failed to load cloudflare dns record", err)
+	}
+	if !BelongsToNamespace(existing.Name, allocation.FQDN) {
+		return ForbiddenError("record does not belong to the selected allocation")
+	}
+
+	if err := s.cf.DeleteDNSRecord(ctx, allocation.CloudflareZoneID, strings.TrimSpace(recordID)); err != nil {
+		return UnavailableError("failed to delete cloudflare dns record", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{
+		"record_id":     strings.TrimSpace(recordID),
+		"allocation_id": allocation.ID,
+		"name":          existing.Name,
+		"type":          existing.Type,
+	})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.dns_record.delete",
+		ResourceType: "dns_record",
+		ResourceID:   strings.TrimSpace(recordID),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return InternalError("failed to write admin dns delete audit log", err)
+	}
+	return nil
+}
+
+// ListEmailRoutes returns all persisted email forwarding rules.
+func (s *AdminService) ListEmailRoutes(ctx context.Context) ([]model.EmailRoute, error) {
+	items, err := s.db.ListEmailRoutes(ctx)
+	if err != nil {
+		return nil, InternalError("failed to list email routes", err)
+	}
+	return items, nil
+}
+
+// CreateEmailRoute inserts one administrator-managed email forwarding rule.
+func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, request UpsertEmailRouteRequest) (model.EmailRoute, error) {
+	if _, err := s.db.GetUserByID(ctx, request.OwnerUserID); err != nil {
+		if sqlite.IsNotFound(err) {
+			return model.EmailRoute{}, NotFoundError("email route owner not found")
+		}
+		return model.EmailRoute{}, InternalError("failed to load email route owner", err)
+	}
+	if _, err := s.db.GetManagedDomainByRoot(ctx, request.RootDomain); err != nil {
+		if sqlite.IsNotFound(err) {
+			return model.EmailRoute{}, NotFoundError("managed domain not found")
+		}
+		return model.EmailRoute{}, InternalError("failed to load managed domain", err)
+	}
+
+	normalizedPrefix, err := NormalizePrefix(request.Prefix)
+	if err != nil {
+		return model.EmailRoute{}, ValidationError(err.Error())
+	}
+	if _, err := mail.ParseAddress(strings.TrimSpace(request.TargetEmail)); err != nil {
+		return model.EmailRoute{}, ValidationError("target_email must be a valid email address")
+	}
+
+	item, err := s.db.CreateEmailRoute(ctx, sqlite.CreateEmailRouteInput{
+		OwnerUserID: request.OwnerUserID,
+		RootDomain:  request.RootDomain,
+		Prefix:      normalizedPrefix,
+		TargetEmail: request.TargetEmail,
+		Enabled:     request.Enabled,
+	})
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return model.EmailRoute{}, ConflictError("the requested email route already exists")
+		}
+		return model.EmailRoute{}, InternalError("failed to create email route", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.email_route.create",
+		ResourceType: "email_route",
+		ResourceID:   strconv.FormatInt(item.ID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return model.EmailRoute{}, InternalError("failed to write email route audit log", err)
+	}
+	return item, nil
+}
+
+// UpdateEmailRoute updates the mutable fields of one email forwarding rule.
+func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, routeID int64, request UpsertEmailRouteRequest) (model.EmailRoute, error) {
+	if _, err := mail.ParseAddress(strings.TrimSpace(request.TargetEmail)); err != nil {
+		return model.EmailRoute{}, ValidationError("target_email must be a valid email address")
+	}
+
+	item, err := s.db.UpdateEmailRoute(ctx, sqlite.UpdateEmailRouteInput{ID: routeID, TargetEmail: request.TargetEmail, Enabled: request.Enabled})
+	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return model.EmailRoute{}, NotFoundError("email route not found")
+		}
+		return model.EmailRoute{}, InternalError("failed to update email route", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.email_route.update",
+		ResourceType: "email_route",
+		ResourceID:   strconv.FormatInt(item.ID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return model.EmailRoute{}, InternalError("failed to write email route update audit log", err)
+	}
+	return item, nil
+}
+
+// DeleteEmailRoute removes one stored email forwarding rule.
+func (s *AdminService) DeleteEmailRoute(ctx context.Context, actor model.User, routeID int64) error {
+	if err := s.db.DeleteEmailRoute(ctx, routeID); err != nil {
+		if sqlite.IsNotFound(err) {
+			return NotFoundError("email route not found")
+		}
+		return InternalError("failed to delete email route", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{"email_route_id": routeID})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.email_route.delete",
+		ResourceType: "email_route",
+		ResourceID:   strconv.FormatInt(routeID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return InternalError("failed to write email route delete audit log", err)
+	}
+	return nil
+}
+
+// ListApplications returns all administrator-visible moderation requests.
+func (s *AdminService) ListApplications(ctx context.Context) ([]model.AdminApplication, error) {
+	items, err := s.db.ListAdminApplications(ctx)
+	if err != nil {
+		return nil, InternalError("failed to list admin applications", err)
+	}
+	return items, nil
+}
+
+// UpdateApplication applies one moderation decision to a request.
+func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, applicationID int64, request UpdateApplicationRequest) (model.AdminApplication, error) {
+	status := normalizeAdminApplicationStatus(request.Status)
+	if status == "" {
+		return model.AdminApplication{}, ValidationError("status must be pending, approved, or rejected")
+	}
+
+	item, err := s.db.UpdateAdminApplication(ctx, sqlite.UpdateAdminApplicationInput{
+		ID:               applicationID,
+		Status:           status,
+		ReviewNote:       strings.TrimSpace(request.ReviewNote),
+		ReviewedByUserID: actor.ID,
+	})
+	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return model.AdminApplication{}, NotFoundError("application not found")
+		}
+		return model.AdminApplication{}, InternalError("failed to update admin application", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{"application_id": item.ID, "status": item.Status})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.application.update",
+		ResourceType: "admin_application",
+		ResourceID:   strconv.FormatInt(item.ID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return model.AdminApplication{}, InternalError("failed to write application audit log", err)
+	}
+	return item, nil
+}
+
+// ListRedeemCodes returns all generated redeem codes.
+func (s *AdminService) ListRedeemCodes(ctx context.Context) ([]model.RedeemCode, error) {
+	items, err := s.db.ListRedeemCodes(ctx)
+	if err != nil {
+		return nil, InternalError("failed to list redeem codes", err)
+	}
+	return items, nil
+}
+
+// GenerateRedeemCodes creates one batch of random redeem codes.
+func (s *AdminService) GenerateRedeemCodes(ctx context.Context, actor model.User, request GenerateRedeemCodesRequest) ([]model.RedeemCode, error) {
+	if request.Amount < 1 || request.Amount > 100 {
+		return nil, ValidationError("amount must be between 1 and 100")
+	}
+	typeValue := normalizeRedeemType(request.Type)
+	if typeValue == "" {
+		return nil, ValidationError("type must be single, multiple, or wildcard")
+	}
+	if strings.TrimSpace(request.Target) == "" {
+		return nil, ValidationError("target is required")
+	}
+
+	items := make([]model.RedeemCode, 0, request.Amount)
+	for index := 0; index < request.Amount; index++ {
+		var created model.RedeemCode
+		var createErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			candidate, tokenErr := generateRedeemCodeValue()
+			if tokenErr != nil {
+				return nil, InternalError("failed to generate redeem code", tokenErr)
+			}
+			created, createErr = s.db.CreateRedeemCode(ctx, sqlite.CreateRedeemCodeInput{
+				Code:            candidate,
+				Type:            typeValue,
+				Target:          strings.TrimSpace(request.Target),
+				Note:            strings.TrimSpace(request.Note),
+				CreatedByUserID: actor.ID,
+			})
+			if createErr == nil {
+				break
+			}
+			if !strings.Contains(strings.ToLower(createErr.Error()), "unique") {
+				return nil, InternalError("failed to persist redeem code", createErr)
+			}
+		}
+		if createErr != nil {
+			return nil, ConflictError("failed to allocate a unique redeem code after multiple retries")
+		}
+		items = append(items, created)
+	}
+
+	for _, item := range items {
+		metadata, _ := json.Marshal(map[string]any{"redeem_code_id": item.ID, "type": item.Type, "target": item.Target})
+		if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+			ActorUserID:  &actor.ID,
+			Action:       "admin.redeem_code.create",
+			ResourceType: "redeem_code",
+			ResourceID:   strconv.FormatInt(item.ID, 10),
+			MetadataJSON: string(metadata),
+		}); err != nil {
+			return nil, InternalError("failed to write redeem code audit log", err)
+		}
+	}
+	return items, nil
+}
+
+// DeleteRedeemCode removes one generated redeem code.
+func (s *AdminService) DeleteRedeemCode(ctx context.Context, actor model.User, redeemCodeID int64) error {
+	if err := s.db.DeleteRedeemCode(ctx, redeemCodeID); err != nil {
+		if sqlite.IsNotFound(err) {
+			return NotFoundError("redeem code not found")
+		}
+		return InternalError("failed to delete redeem code", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{"redeem_code_id": redeemCodeID})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.redeem_code.delete",
+		ResourceType: "redeem_code",
+		ResourceID:   strconv.FormatInt(redeemCodeID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return InternalError("failed to write redeem code delete audit log", err)
+	}
+	return nil
+}
+
+// loadAdminAllocation resolves one allocation and enriches it with owner identity.
+func (s *AdminService) loadAdminAllocation(ctx context.Context, allocationID int64) (model.AdminAllocationSummary, error) {
+	items, err := s.ListAllocations(ctx)
+	if err != nil {
+		return model.AdminAllocationSummary{}, err
+	}
+	for _, item := range items {
+		if item.ID == allocationID {
+			return item, nil
+		}
+	}
+	return model.AdminAllocationSummary{}, NotFoundError("allocation not found")
+}
+
+// buildAdminCloudflareRecordInput validates and converts the admin record form into a Cloudflare request.
+func (s *AdminService) buildAdminCloudflareRecordInput(allocation model.AdminAllocationSummary, request UpsertAdminRecordRequest) (cloudflare.CreateDNSRecordInput, string, error) {
+	recordType := strings.ToUpper(strings.TrimSpace(request.Type))
+	if !isSupportedRecordType(recordType) {
+		return cloudflare.CreateDNSRecordInput{}, "", ValidationError("unsupported dns record type")
+	}
+
+	relativeName, err := NormalizeRelativeRecordName(request.Name)
+	if err != nil {
+		return cloudflare.CreateDNSRecordInput{}, "", err
+	}
+	absoluteName := BuildAbsoluteName(relativeName, allocation.FQDN)
+	normalizedContent, normalizedPriority, normalizedProxied, err := validateAndNormalizeRecordPayload(recordType, strings.TrimSpace(request.Content), request.Priority, request.Proxied)
+	if err != nil {
+		return cloudflare.CreateDNSRecordInput{}, "", err
+	}
+
+	ttl := request.TTL
+	if ttl <= 0 {
+		ttl = 1
+	}
+	return cloudflare.CreateDNSRecordInput{
+		Type:     recordType,
+		Name:     absoluteName,
+		Content:  normalizedContent,
+		TTL:      ttl,
+		Proxied:  normalizedProxied,
+		Comment:  strings.TrimSpace(request.Comment),
+		Priority: normalizedPriority,
+	}, relativeName, nil
+}
+
+// adminRecordFromCloudflare converts a Cloudflare record into the admin console row representation.
+func adminRecordFromCloudflare(allocation model.AdminAllocationSummary, record cloudflare.DNSRecord, relativeName string) model.AdminDNSRecord {
+	if strings.TrimSpace(relativeName) == "" {
+		relativeName = RelativeNameFromAbsolute(record.Name, allocation.FQDN)
+	}
+	return model.AdminDNSRecord{
+		AllocationID:     allocation.ID,
+		OwnerUserID:      allocation.UserID,
+		OwnerUsername:    allocation.OwnerUsername,
+		OwnerDisplayName: allocation.OwnerDisplayName,
+		RootDomain:       allocation.RootDomain,
+		NamespaceFQDN:    allocation.FQDN,
+		ID:               record.ID,
+		Type:             record.Type,
+		Name:             record.Name,
+		RelativeName:     relativeName,
+		Content:          record.Content,
+		TTL:              record.TTL,
+		Proxied:          record.Proxied,
+		Comment:          record.Comment,
+		Priority:         record.Priority,
+	}
+}
+
+// findBestAllocationMatch assigns a DNS record to the most specific allocation namespace that contains it.
+func findBestAllocationMatch(recordName string, allocations []model.AdminAllocationSummary) (model.AdminAllocationSummary, bool) {
+	for _, allocation := range allocations {
+		if BelongsToNamespace(recordName, allocation.FQDN) {
+			return allocation, true
+		}
+	}
+	return model.AdminAllocationSummary{}, false
+}
+
+// normalizeAdminApplicationStatus validates and normalizes moderation request states.
+func normalizeAdminApplicationStatus(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "pending":
+		return "pending"
+	case "approved":
+		return "approved"
+	case "rejected":
+		return "rejected"
+	default:
+		return ""
+	}
+}
+
+// normalizeRedeemType validates and normalizes redeem code types.
+func normalizeRedeemType(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "single":
+		return "single"
+	case "multiple":
+		return "multiple"
+	case "wildcard":
+		return "wildcard"
+	default:
+		return ""
+	}
+}
+
+// generateRedeemCodeValue emits a short human-friendly code suitable for manual copy and paste.
+func generateRedeemCodeValue() (string, error) {
+	token, err := security.RandomToken(12)
+	if err != nil {
+		return "", err
+	}
+	sanitized := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(token, "-", ""), "_", ""))
+	if len(sanitized) < 12 {
+		return "", fmt.Errorf("generated token was unexpectedly short")
+	}
+	return fmt.Sprintf("LDS-%s-%s", sanitized[:6], sanitized[6:12]), nil
+}

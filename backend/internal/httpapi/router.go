@@ -8,21 +8,23 @@ import (
 	"linuxdospace/backend/internal/service"
 )
 
-// RouterDependencies 汇总构造 HTTP 路由所需的基础依赖。
+// RouterDependencies groups the dependencies required to build the HTTP router.
 type RouterDependencies struct {
 	Config        config.Config
 	Version       string
 	AuthService   *service.AuthService
 	DomainService *service.DomainService
+	AdminService  *service.AdminService
 }
 
-// NewRouter 创建 LinuxDoSpace 后端的完整 HTTP 路由。
+// NewRouter builds the complete HTTP router used by the backend process.
 func NewRouter(deps RouterDependencies) http.Handler {
 	api := &API{
 		config:        deps.Config,
 		version:       deps.Version,
 		authService:   deps.AuthService,
 		domainService: deps.DomainService,
+		adminService:  deps.AdminService,
 	}
 
 	mux := http.NewServeMux()
@@ -36,9 +38,11 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/public/supervision", api.handlePublicSupervision)
 	mux.HandleFunc("GET /v1/public/allocations/check", api.handleAllocationAvailability)
 	mux.HandleFunc("GET /v1/auth/login", api.handleAuthLogin)
+	mux.HandleFunc("GET /v1/admin/auth/login", api.handleAdminAuthLogin)
 	mux.HandleFunc("GET /v1/auth/callback", api.handleAuthCallback)
 	mux.HandleFunc("POST /v1/auth/logout", api.handleAuthLogout)
 	mux.HandleFunc("GET /v1/me", api.handleMe)
+	mux.HandleFunc("GET /v1/admin/me", api.handleAdminMe)
 	mux.HandleFunc("GET /v1/my/allocations", api.handleMyAllocations)
 	mux.HandleFunc("POST /v1/my/allocations", api.handleCreateAllocation)
 	mux.HandleFunc("GET /v1/my/allocations/{allocationID}/records", api.handleAllocationRecords)
@@ -48,12 +52,29 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/admin/domains", api.handleAdminDomains)
 	mux.HandleFunc("POST /v1/admin/domains", api.handleAdminUpsertDomain)
 	mux.HandleFunc("POST /v1/admin/quotas", api.handleAdminSetQuota)
+	mux.HandleFunc("GET /v1/admin/users", api.handleAdminUsers)
+	mux.HandleFunc("GET /v1/admin/users/{userID}", api.handleAdminUserDetail)
+	mux.HandleFunc("PATCH /v1/admin/users/{userID}", api.handleAdminUpdateUser)
+	mux.HandleFunc("GET /v1/admin/allocations", api.handleAdminAllocations)
+	mux.HandleFunc("GET /v1/admin/records", api.handleAdminRecords)
+	mux.HandleFunc("POST /v1/admin/allocations/{allocationID}/records", api.handleAdminCreateRecord)
+	mux.HandleFunc("PATCH /v1/admin/allocations/{allocationID}/records/{recordID}", api.handleAdminUpdateRecord)
+	mux.HandleFunc("DELETE /v1/admin/allocations/{allocationID}/records/{recordID}", api.handleAdminDeleteRecord)
+	mux.HandleFunc("GET /v1/admin/email-routes", api.handleAdminEmailRoutes)
+	mux.HandleFunc("POST /v1/admin/email-routes", api.handleAdminCreateEmailRoute)
+	mux.HandleFunc("PATCH /v1/admin/email-routes/{routeID}", api.handleAdminUpdateEmailRoute)
+	mux.HandleFunc("DELETE /v1/admin/email-routes/{routeID}", api.handleAdminDeleteEmailRoute)
+	mux.HandleFunc("GET /v1/admin/applications", api.handleAdminApplications)
+	mux.HandleFunc("PATCH /v1/admin/applications/{applicationID}", api.handleAdminUpdateApplication)
+	mux.HandleFunc("GET /v1/admin/redeem-codes", api.handleAdminRedeemCodes)
+	mux.HandleFunc("POST /v1/admin/redeem-codes/batch", api.handleAdminGenerateRedeemCodes)
+	mux.HandleFunc("DELETE /v1/admin/redeem-codes/{redeemCodeID}", api.handleAdminDeleteRedeemCode)
 	mux.Handle("/", spaHandler)
 
 	return withCORS(deps.Config.App.AllowedOrigins, mux)
 }
 
-// withCORS 为浏览器调用提供最小可用的跨域支持。
+// withCORS provides the minimum browser cross-origin support required by the frontends.
 func withCORS(allowedOrigins []string, next http.Handler) http.Handler {
 	originSet := make(map[string]struct{}, len(allowedOrigins))
 	for _, origin := range allowedOrigins {

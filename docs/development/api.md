@@ -1,8 +1,8 @@
-# LinuxDoSpace API 文档
+﻿# LinuxDoSpace API Documentation
 
-## 响应约定
+## Response envelope
 
-- 成功响应：
+Successful responses:
 
 ```json
 {
@@ -10,7 +10,7 @@
 }
 ```
 
-- 失败响应：
+Error responses:
 
 ```json
 {
@@ -21,85 +21,44 @@
 }
 ```
 
-## 当前已实现接口
+## Public endpoints
 
 ### `GET /healthz`
-
-用途：
-返回服务存活状态、版本、环境与基础依赖配置状态。
-
-响应示例：
-
-```json
-{
-  "data": {
-    "status": "ok",
-    "app": "LinuxDoSpace",
-    "version": "dev",
-    "env": "development",
-    "oauth_ready": true,
-    "cf_ready": true,
-    "time": "2026-03-06T00:00:00Z"
-  }
-}
-```
+Returns process health, version, and dependency readiness.
 
 ### `GET /v1/public/domains`
-
-用途：
-列出当前启用中的可分发根域名。
+Returns the enabled managed root-domain list.
 
 ### `GET /v1/public/supervision`
-
-用途：
-返回公开监督页所需的脱敏子域归属列表。
-
-隐私说明：
-
-- 只返回子域名和拥有者信息。
-- 不返回任何 DNS 解析值、IP 地址、CNAME 目标或其他敏感解析数据。
+Returns privacy-safe ownership rows for the public supervision page.
+Only subdomain ownership is exposed. Concrete DNS values are never returned.
 
 ### `GET /v1/public/allocations/check?root_domain=linuxdo.space&prefix=alice`
+Checks whether a specific prefix is currently available under the selected root domain.
 
-用途：
-检查某个前缀是否可以分配。
+## User authentication and self-service endpoints
 
 ### `GET /v1/auth/login?next=/settings`
-
-用途：
-发起 Linux Do OAuth 登录，并跳转到 `connect.linux.do`。
+Starts the Linux Do OAuth login flow for the main frontend.
 
 ### `GET /v1/auth/callback`
-
-用途：
-完成 OAuth 回调、创建会话并重定向回前端。
+Shared OAuth callback used by both the main frontend and the admin frontend.
+The backend decides which frontend should receive the redirect through a short-lived login-target cookie.
 
 ### `POST /v1/auth/logout`
-
-用途：
-销毁当前登录会话。
-
-要求：
-
-- 需要登录
-- 需要 `X-CSRF-Token`
+Destroys the current authenticated session.
+Requires a valid session and `X-CSRF-Token`.
 
 ### `GET /v1/me`
-
-用途：
-返回当前登录状态、用户资料、CSRF token 和当前用户分配列表。
+Returns the current public-site session, user payload, CSRF token, and visible allocations.
 
 ### `GET /v1/my/allocations`
-
-用途：
-返回当前用户所有命名空间分配。
+Lists the current user's visible allocation namespaces.
 
 ### `POST /v1/my/allocations`
+Creates a new allocation namespace for the current user.
 
-用途：
-为当前用户创建新的命名空间分配。
-
-请求示例：
+Request example:
 
 ```json
 {
@@ -111,49 +70,45 @@
 ```
 
 ### `GET /v1/my/allocations/{allocationID}/records`
-
-用途：
-列出当前用户某个命名空间下的全部 DNS 记录。
+Lists the current user's DNS records inside the selected allocation namespace.
 
 ### `POST /v1/my/allocations/{allocationID}/records`
-
-用途：
-在命名空间内创建 DNS 记录。
-
-请求示例：
-
-```json
-{
-  "type": "A",
-  "name": "@",
-  "content": "1.1.1.1",
-  "ttl": 1,
-  "proxied": true,
-  "comment": "main site"
-}
-```
+Creates one DNS record inside the selected allocation namespace.
 
 ### `PATCH /v1/my/allocations/{allocationID}/records/{recordID}`
-
-用途：
-更新命名空间中的指定 DNS 记录。
+Updates one DNS record inside the selected allocation namespace.
 
 ### `DELETE /v1/my/allocations/{allocationID}/records/{recordID}`
+Deletes one DNS record inside the selected allocation namespace.
 
-用途：
-删除命名空间中的指定 DNS 记录。
+## Administrator authentication endpoints
+
+### `GET /v1/admin/auth/login?next=/#users`
+Starts the Linux Do OAuth login flow for the standalone admin frontend.
+The eventual callback will redirect to `APP_ADMIN_FRONTEND_URL`.
+
+### `GET /v1/admin/me`
+Returns the current administrator session state.
+Possible results:
+
+- `authenticated=false` when no valid backend session exists
+- `authenticated=true, authorized=false` when the Linux Do account is logged in but not granted admin permission
+- `authenticated=true, authorized=true` with `csrf_token`, `session_expires_at`, `user`, and `managed_domains` when the account is an administrator
+
+## Administrator data endpoints
+
+All write endpoints below require:
+
+- a valid authenticated administrator session
+- `X-CSRF-Token`
 
 ### `GET /v1/admin/domains`
-
-用途：
-返回管理员视角下的全部根域名配置。
+Returns all managed root-domain configurations, including disabled ones.
 
 ### `POST /v1/admin/domains`
+Creates or updates a managed root-domain configuration.
 
-用途：
-创建或更新根域名配置。
-
-请求示例：
+Request example:
 
 ```json
 {
@@ -167,24 +122,117 @@
 ```
 
 ### `POST /v1/admin/quotas`
+Writes one user quota override under a managed root domain.
 
-用途：
-为指定用户设置某个根域名的分配数量。
-
-请求示例：
+Request example:
 
 ```json
 {
   "username": "alice",
   "root_domain": "linuxdo.space",
   "max_allocations": 3,
-  "reason": "redeem-code"
+  "reason": "admin-console"
 }
 ```
 
-## 认证与安全说明
+### `GET /v1/admin/users`
+Returns the compact user list for the administrator console.
 
-- 登录态使用服务端 Session Cookie。
-- 所有写接口都需要请求头 `X-CSRF-Token`。
-- `GET /v1/me` 会返回当前会话对应的 `csrf_token`。
-- DNS 记录写操作会先读取 Cloudflare 实时记录并验证记录是否属于当前用户命名空间。
+### `GET /v1/admin/users/{userID}`
+Returns the expanded moderation and quota view for one user.
+
+### `PATCH /v1/admin/users/{userID}`
+Updates the moderation state for one user.
+
+Request example:
+
+```json
+{
+  "is_banned": true,
+  "ban_note": "abuse report confirmed"
+}
+```
+
+### `GET /v1/admin/allocations`
+Returns all allocation namespaces together with owner identity.
+Useful for admin record creation workflows.
+
+### `GET /v1/admin/records`
+Returns the global administrator DNS record list across all allocation namespaces.
+
+### `POST /v1/admin/allocations/{allocationID}/records`
+Creates one DNS record inside the selected allocation namespace.
+
+### `PATCH /v1/admin/allocations/{allocationID}/records/{recordID}`
+Updates one DNS record inside the selected allocation namespace.
+
+### `DELETE /v1/admin/allocations/{allocationID}/records/{recordID}`
+Deletes one DNS record inside the selected allocation namespace.
+
+### `GET /v1/admin/email-routes`
+Returns all administrator-managed email forwarding rules.
+
+### `POST /v1/admin/email-routes`
+Creates one email forwarding rule.
+
+Request example:
+
+```json
+{
+  "owner_user_id": 1,
+  "root_domain": "linuxdo.space",
+  "prefix": "hello",
+  "target_email": "owner@example.com",
+  "enabled": true
+}
+```
+
+### `PATCH /v1/admin/email-routes/{routeID}`
+Updates one email forwarding rule.
+
+### `DELETE /v1/admin/email-routes/{routeID}`
+Deletes one email forwarding rule.
+
+### `GET /v1/admin/applications`
+Returns all moderation requests visible to the administrator console.
+
+### `PATCH /v1/admin/applications/{applicationID}`
+Updates one moderation request state.
+
+Request example:
+
+```json
+{
+  "status": "approved",
+  "review_note": ""
+}
+```
+
+### `GET /v1/admin/redeem-codes`
+Returns all generated redeem codes.
+
+### `POST /v1/admin/redeem-codes/batch`
+Generates one batch of redeem codes.
+
+Request example:
+
+```json
+{
+  "amount": 3,
+  "type": "single",
+  "target": "api.linuxdo.space",
+  "note": "manual reward"
+}
+```
+
+### `DELETE /v1/admin/redeem-codes/{redeemCodeID}`
+Deletes one generated redeem code.
+
+## Security model
+
+- All authenticated state is stored in server-side sessions referenced by an HTTP-only cookie.
+- Unsafe endpoints require the current session's `X-CSRF-Token`.
+- Sessions can be bound to the browser's user-agent fingerprint.
+- Administrator permissions are enforced server-side on every `/v1/admin/*` data endpoint.
+- Banned users are blocked both at login time and on subsequent session validation.
+- Administrator write operations emit audit log rows for traceability.
