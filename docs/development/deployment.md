@@ -97,7 +97,7 @@ Backend requirements for the admin frontend:
 - `APP_ADMIN_FRONTEND_URL` must point to the deployed admin site
 - `APP_ALLOWED_ORIGINS` must include the admin frontend origin
 - `APP_ADMIN_USERNAMES` must list the Linux Do usernames allowed to access the admin console
-- `APP_ADMIN_PASSWORD` should be set to a private value instead of relying on the temporary default password
+- `APP_ADMIN_PASSWORD` is mandatory whenever `APP_ADMIN_USERNAMES` is configured, and production boot now fails if either value is missing
 
 Security notes:
 

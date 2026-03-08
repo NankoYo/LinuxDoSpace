@@ -1,5 +1,10 @@
 ﻿# LinuxDoSpace Changelog
 
+## Unreleased
+
+- Hardened administrator configuration so the backend now fails closed unless `APP_ADMIN_USERNAMES` and `APP_ADMIN_PASSWORD` are explicitly configured together.
+- Added configuration tests that verify development defaults stay locked down and production rejects incomplete admin protection settings.
+
 ## 0.6.0
 
 - Added a real standalone administrator console integration for `admin-frontend`.
