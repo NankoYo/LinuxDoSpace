@@ -63,6 +63,20 @@ function authErrorMessage(raw: string | null): string {
   }
 }
 
+function AdminBackground() {
+  return (
+    <>
+      <div className="fixed inset-0 z-[-3] bg-[radial-gradient(circle_at_top_left,_rgba(252,211,77,0.3),_transparent_40%),radial-gradient(circle_at_top_right,_rgba(56,189,248,0.22),_transparent_38%),linear-gradient(160deg,_#f8fafc_0%,_#e2e8f0_48%,_#cbd5e1_100%)] dark:bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_40%),radial-gradient(circle_at_top_right,_rgba(34,211,238,0.14),_transparent_38%),linear-gradient(160deg,_#020617_0%,_#0f172a_52%,_#111827_100%)]" />
+      <div className="fixed inset-0 z-[-2] overflow-hidden">
+        <div className="absolute -left-16 top-12 h-64 w-64 rounded-full bg-amber-300/40 blur-3xl dark:bg-amber-500/20" />
+        <div className="absolute right-[-5rem] top-1/4 h-72 w-72 rounded-full bg-sky-300/35 blur-3xl dark:bg-cyan-400/20" />
+        <div className="absolute bottom-[-6rem] left-1/3 h-80 w-80 rounded-full bg-emerald-300/20 blur-3xl dark:bg-emerald-400/15" />
+      </div>
+      <div className="fixed inset-0 z-[-1] bg-white/45 backdrop-blur-[2px] dark:bg-slate-950/50" />
+    </>
+  );
+}
+
 export default function App() {
   const [isDark, setIsDark] = useState<boolean>(() => window.localStorage.getItem(STORAGE_KEYS.theme) === 'dark');
   const [activeTab, setActiveTab] = useState<AdminTabKey>(() => tabFromHash(window.location.hash));
@@ -208,11 +222,7 @@ export default function App() {
   if (!authorized) {
     return (
       <div className="relative min-h-screen overflow-x-hidden font-sans text-slate-900 transition-colors duration-500 dark:text-white">
-        <div
-          className="fixed inset-0 z-[-2] bg-cover bg-center bg-no-repeat transition-all duration-1000 dark:brightness-[0.28]"
-          style={{ backgroundImage: 'url(https://www.loliapi.com/acg/)' }}
-        />
-        <div className="fixed inset-0 z-[-1] bg-white/45 backdrop-blur-[2px] dark:bg-black/45" />
+        <AdminBackground />
         <AdminLogin
           error={sessionError}
           isDark={isDark}
@@ -231,11 +241,7 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-x-hidden font-sans text-slate-900 transition-colors duration-500 dark:text-white">
-      <div
-        className="fixed inset-0 z-[-2] bg-cover bg-center bg-no-repeat transition-all duration-1000 dark:brightness-[0.28]"
-        style={{ backgroundImage: 'url(https://www.loliapi.com/acg/)' }}
-      />
-      <div className="fixed inset-0 z-[-1] bg-white/45 backdrop-blur-[2px] dark:bg-black/45" />
+      <AdminBackground />
 
       <AdminNavbar
         activeTab={activeTab}

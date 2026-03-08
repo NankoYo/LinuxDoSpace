@@ -6,6 +6,7 @@
 - Added configuration tests that verify development defaults stay locked down and production rejects incomplete admin protection settings.
 - Tightened admin identity resolution so only the local administrator allowlist can unlock the admin console, even if Linux Do marks a user as a forum administrator.
 - Added rate limiting and failure audit logs to `POST /v1/admin/verify-password` so the extra admin password cannot be brute-forced indefinitely.
+- Removed the administrator console's third-party background image dependency so loading the page no longer leaks admin access metadata to an external host.
 
 ## 0.6.0
 
