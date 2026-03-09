@@ -355,8 +355,12 @@ func requestClientIP(r *http.Request, trustedProxyCIDRs []netip.Prefix) string {
 		}
 		if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
 			parts := strings.Split(forwardedFor, ",")
-			if len(parts) > 0 {
-				if candidate := strings.TrimSpace(parts[0]); candidate != "" {
+			for index := len(parts) - 1; index >= 0; index-- {
+				candidate := strings.TrimSpace(parts[index])
+				if candidate == "" {
+					continue
+				}
+				if _, err := netip.ParseAddr(candidate); err == nil {
 					return candidate
 				}
 			}

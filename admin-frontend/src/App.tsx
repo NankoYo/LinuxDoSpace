@@ -19,6 +19,7 @@ const text = {
     '\u5f53\u524d Linux Do \u8d26\u53f7\u6ca1\u6709\u88ab\u6388\u4e88\u7ba1\u7406\u5458\u6743\u9650\uff0c\u8bf7\u5207\u6362\u8d26\u53f7\u540e\u91cd\u8bd5\u3002',
   forbidden: '\u5f53\u524d\u8d26\u53f7\u5df2\u88ab\u62d2\u7edd\u8bbf\u95ee\u7ba1\u7406\u5458\u63a7\u5236\u53f0\u3002',
   sessionExpired: '\u7ba1\u7406\u5458\u4f1a\u8bdd\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55\u3002',
+  passwordRefreshRequired: '\u7ba1\u7406\u5458\u4e8c\u6b21\u9a8c\u8bc1\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u8f93\u5165\u7ba1\u7406\u5458\u5bc6\u7801\u3002',
   oauthUnavailable:
     '\u540e\u7aef\u5f53\u524d\u65e0\u6cd5\u5b8c\u6210 Linux Do \u767b\u5f55\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
   loggedInButNotAdmin: '\u5f53\u524d\u8d26\u53f7\u5df2\u767b\u5f55\uff0c\u4f46\u6ca1\u6709\u7ba1\u7406\u5458\u6743\u9650\u3002',
@@ -121,13 +122,19 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  async function loadSession() {
+  async function loadSession(reasonCode = '') {
     try {
       setSessionLoading(true);
       const data = await getAdminSession();
       setSession(data);
       setManagedDomains(data.managed_domains ?? []);
-      if (!data.authorized && data.authenticated) {
+      if (reasonCode === 'admin_password_required' && data.authenticated && data.authorized && !data.password_verified) {
+        setSessionError(text.passwordRefreshRequired);
+      } else if (reasonCode === 'forbidden' && !data.authenticated) {
+        setSessionError(text.forbidden);
+      } else if (reasonCode === 'unauthorized' && !data.authenticated) {
+        setSessionError(text.sessionExpired);
+      } else if (!data.authorized && data.authenticated) {
         setSessionError(text.loggedInButNotAdmin);
       } else if (data.authenticated) {
         setSessionError('');
@@ -148,8 +155,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const handleAuthInvalidated = () => {
-      void loadSession();
+    const handleAuthInvalidated = (event: Event) => {
+      const detail = (event as CustomEvent<{ code?: string }>).detail;
+      void loadSession(detail?.code ?? '');
     };
 
     window.addEventListener(adminAuthInvalidatedEvent, handleAuthInvalidated);

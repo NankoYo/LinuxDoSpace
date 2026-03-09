@@ -109,6 +109,12 @@ func TestRequestClientIPIgnoresSpoofedProxyHeaders(t *testing.T) {
 	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "198.51.100.20" {
 		t.Fatalf("expected trusted local proxy hop to expose CF-Connecting-IP, got %q", got)
 	}
+
+	request.Header.Del("CF-Connecting-IP")
+	request.Header.Set("X-Forwarded-For", "198.51.100.99, 203.0.113.44")
+	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "203.0.113.44" {
+		t.Fatalf("expected trusted proxy parsing to prefer the rightmost forwarded IP, got %q", got)
+	}
 }
 
 // TestWithCORSRestrictsAdminEndpointsToAdminOrigin verifies that the public app

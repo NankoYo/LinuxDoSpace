@@ -22,8 +22,12 @@ const blankRouteDraft: UpsertEmailRouteInput = {
 // validateEmailRouteInput performs the small client-side checks that keep the
 // admin modal from hiding obvious mistakes behind a generic API failure.
 function validateEmailRouteInput(prefix: string, targetEmail: string): string {
-  if (!prefix.trim()) {
+  const normalizedPrefix = prefix.trim().toLowerCase();
+  if (!normalizedPrefix) {
     return '邮箱前缀不能为空。';
+  }
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalizedPrefix)) {
+    return '邮箱前缀必须是合法的 DNS Label。';
   }
   if (!targetEmail.trim()) {
     return '目标邮箱不能为空。';
@@ -100,12 +104,18 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
   }, []);
 
   async function submitCreate() {
-    const validationError = validateEmailRouteInput(draft.prefix, draft.target_email);
-    if (draft.owner_user_id <= 0) {
+    const normalizedDraft: UpsertEmailRouteInput = {
+      ...draft,
+      root_domain: draft.root_domain.trim(),
+      prefix: draft.prefix.trim(),
+      target_email: draft.target_email.trim(),
+    };
+    const validationError = validateEmailRouteInput(normalizedDraft.prefix, normalizedDraft.target_email);
+    if (normalizedDraft.owner_user_id <= 0) {
       setError('请选择所属用户。');
       return;
     }
-    if (!draft.root_domain.trim()) {
+    if (!normalizedDraft.root_domain) {
       setError('请选择根域名。');
       return;
     }
@@ -117,7 +127,7 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
     try {
       setSaving(true);
       setError('');
-      const created = await createEmailRoute(draft, csrfToken);
+      const created = await createEmailRoute(normalizedDraft, csrfToken);
       setRecords((current) => [created, ...current]);
       setDraft({ ...blankRouteDraft, root_domain: managedDomains[0]?.root_domain ?? '' });
     } catch (saveError) {
@@ -132,7 +142,8 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
       return;
     }
 
-    const validationError = validateEmailRouteInput(editingRecord.prefix, editingRecord.target_email);
+    const normalizedTargetEmail = editingRecord.target_email.trim();
+    const validationError = validateEmailRouteInput(editingRecord.prefix, normalizedTargetEmail);
     if (validationError) {
       setModalError(validationError);
       return;
@@ -143,7 +154,7 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
       setError('');
       setModalError('');
       const updateInput: UpdateEmailRouteInput = {
-        target_email: editingRecord.target_email,
+        target_email: normalizedTargetEmail,
         enabled: editingRecord.enabled,
       };
       const updated = await updateEmailRoute(

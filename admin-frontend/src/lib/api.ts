@@ -77,14 +77,17 @@ export class APIError extends Error {
 
 // notifyAdminAuthInvalidated broadcasts authentication-state failures back to
 // the admin shell so page-level loaders do not get stuck in a stale authorized UI.
-function notifyAdminAuthInvalidated(code: string, status: number): void {
+function notifyAdminAuthInvalidated(path: string, code: string, status: number, message: string): void {
   if (typeof window === 'undefined') {
     return;
   }
   if (!['unauthorized', 'forbidden', 'admin_password_required'].includes(code)) {
     return;
   }
-  window.dispatchEvent(new CustomEvent(adminAuthInvalidatedEvent, { detail: { code, status } }));
+  if (path === '/v1/admin/verify-password' && code === 'unauthorized') {
+    return
+  }
+  window.dispatchEvent(new CustomEvent(adminAuthInvalidatedEvent, { detail: { code, status, message } }));
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -113,7 +116,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (!isJSONResponse) {
       throw await buildNonJSONAPIError(path, response);
     }
-    notifyAdminAuthInvalidated(errorBody?.error.code ?? 'http_error', response.status);
+    notifyAdminAuthInvalidated(path, errorBody?.error.code ?? 'http_error', response.status, errorBody?.error.message ?? '');
     throw new APIError(
       errorBody?.error.message ?? `Request failed with status ${response.status}`,
       errorBody?.error.code ?? 'http_error',
