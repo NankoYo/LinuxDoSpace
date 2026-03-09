@@ -60,6 +60,31 @@ func (a *API) handleMyEmailRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// handleUpsertDefaultEmailRoute writes the authenticated user's forwarding
+// target for the always-owned default mailbox.
+func (a *API) handleUpsertDefaultEmailRoute(w http.ResponseWriter, r *http.Request) {
+	session, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	var request service.UpsertMyDefaultEmailRouteRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	item, err := a.permissionService.UpsertMyDefaultEmailRoute(r.Context(), *user, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 // handleUpsertCatchAllEmailRoute writes the authenticated user's catch-all
 // forwarding target after the permission has been approved.
 func (a *API) handleUpsertCatchAllEmailRoute(w http.ResponseWriter, r *http.Request) {

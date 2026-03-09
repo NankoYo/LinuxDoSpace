@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/mail"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +17,18 @@ const (
 	// PermissionKeyEmailCatchAll is the stable identifier used across the
 	// database, HTTP API, and frontends for the catch-all mailbox permission.
 	PermissionKeyEmailCatchAll = "email_catch_all"
+
+	// UserEmailRouteKindDefault marks the per-user default mailbox that always
+	// maps to <username>@linuxdo.space (or the configured default email root).
+	UserEmailRouteKindDefault = "default"
+
+	// UserEmailRouteKindCustom marks one extra mailbox alias already assigned to
+	// the current user and loaded from the database.
+	UserEmailRouteKindCustom = "custom"
+
+	// UserEmailRouteKindCatchAll marks the permission-gated catch-all mailbox
+	// that routes catch-all@<username>.<root> to one target inbox.
+	UserEmailRouteKindCatchAll = "catch_all"
 
 	// emailCatchAllPrefix is the fixed local-part prefix granted by this
 	// permission. The address always resolves to catch-all@<username>.<root>.
@@ -67,26 +78,48 @@ type UserPermissionView struct {
 	Application        *PermissionApplicationSummary `json:"application,omitempty"`
 }
 
-// UserEmailRouteView describes the one catch-all mailbox route that can be
-// configured by a user after the permission has been approved.
+// UserEmailRouteView describes one user-visible email forwarding row shown on
+// the public email page.
 type UserEmailRouteView struct {
 	ID               int64      `json:"id,omitempty"`
-	PermissionKey    string     `json:"permission_key"`
+	Kind             string     `json:"kind"`
+	PermissionKey    string     `json:"permission_key,omitempty"`
+	DisplayName      string     `json:"display_name"`
+	Description      string     `json:"description"`
 	Address          string     `json:"address"`
 	Prefix           string     `json:"prefix"`
 	RootDomain       string     `json:"root_domain"`
 	TargetEmail      string     `json:"target_email"`
 	Enabled          bool       `json:"enabled"`
 	Configured       bool       `json:"configured"`
-	PermissionStatus string     `json:"permission_status"`
+	PermissionStatus string     `json:"permission_status,omitempty"`
 	CanManage        bool       `json:"can_manage"`
+	CanDelete        bool       `json:"can_delete"`
 	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+}
+
+// EmailRouteAvailabilityResult mirrors the public email-prefix search result
+// rendered by the frontend search box.
+type EmailRouteAvailabilityResult struct {
+	RootDomain       string   `json:"root_domain"`
+	Prefix           string   `json:"prefix"`
+	NormalizedPrefix string   `json:"normalized_prefix"`
+	Address          string   `json:"address"`
+	Available        bool     `json:"available"`
+	Reasons          []string `json:"reasons"`
 }
 
 // SubmitPermissionApplicationRequest describes the single user-side mutation
 // currently supported by the permissions page.
 type SubmitPermissionApplicationRequest struct {
 	Key string `json:"key"`
+}
+
+// UpsertMyDefaultEmailRouteRequest describes the forwarding target saved for
+// the always-owned default mailbox <username>@linuxdo.space.
+type UpsertMyDefaultEmailRouteRequest struct {
+	TargetEmail string `json:"target_email"`
+	Enabled     bool   `json:"enabled"`
 }
 
 // UpsertMyCatchAllEmailRouteRequest describes the forwarding target configured
@@ -193,9 +226,15 @@ func (s *PermissionService) SubmitPermissionApplication(ctx context.Context, use
 	return s.loadEmailCatchAllPermission(ctx, user)
 }
 
-// ListMyEmailRoutes returns the single catch-all mailbox row shown on the user
-// email page. A placeholder row is returned even when no target has been saved.
+// ListMyEmailRoutes returns the full set of user-visible mailbox rows rendered
+// by the public email page: the default mailbox, any extra stored aliases, and
+// the permission-gated catch-all mailbox.
 func (s *PermissionService) ListMyEmailRoutes(ctx context.Context, user model.User) ([]UserEmailRouteView, error) {
+	defaultRoute, err := s.buildDefaultEmailRouteView(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+
 	permission, err := s.loadEmailCatchAllPermission(ctx, user)
 	if err != nil {
 		return nil, err
@@ -206,11 +245,29 @@ func (s *PermissionService) ListMyEmailRoutes(ctx context.Context, user model.Us
 		return nil, err
 	}
 
-	item, err := s.buildCatchAllEmailRouteView(ctx, permission, namespace)
+	catchAllRoute, err := s.buildCatchAllEmailRouteView(ctx, user, permission, namespace)
 	if err != nil {
 		return nil, err
 	}
-	return []UserEmailRouteView{item}, nil
+
+	persistedRoutes, err := s.db.ListEmailRoutesByOwner(ctx, user.ID)
+	if err != nil {
+		return nil, InternalError("failed to load user email routes", err)
+	}
+
+	items := make([]UserEmailRouteView, 0, len(persistedRoutes)+2)
+	items = append(items, defaultRoute)
+	for _, route := range persistedRoutes {
+		if route.Prefix == defaultRoute.Prefix && strings.EqualFold(route.RootDomain, defaultRoute.RootDomain) {
+			continue
+		}
+		if route.Prefix == emailCatchAllPrefix && strings.EqualFold(route.RootDomain, namespace.RootDomain) {
+			continue
+		}
+		items = append(items, buildCustomEmailRouteView(route))
+	}
+	items = append(items, catchAllRoute)
+	return items, nil
 }
 
 // UpsertMyCatchAllEmailRoute creates or updates the user's forwarding target
@@ -224,9 +281,9 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		return UserEmailRouteView{}, ForbiddenError("the catch-all email permission has not been approved")
 	}
 
-	targetEmail := strings.ToLower(strings.TrimSpace(request.TargetEmail))
-	if _, err := mail.ParseAddress(targetEmail); err != nil {
-		return UserEmailRouteView{}, ValidationError("target_email must be a valid email address")
+	targetEmail, err := normalizeTargetEmail(request.TargetEmail, false)
+	if err != nil {
+		return UserEmailRouteView{}, err
 	}
 
 	namespace, err := s.resolveCatchAllNamespace(ctx, user)
@@ -263,7 +320,10 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 	updatedAt := item.UpdatedAt
 	return UserEmailRouteView{
 		ID:               item.ID,
+		Kind:             UserEmailRouteKindCatchAll,
 		PermissionKey:    PermissionKeyEmailCatchAll,
+		DisplayName:      "邮箱泛解析",
+		Description:      "用于接收 catch-all@<username>.linuxdo.space 的泛解析邮件转发。",
 		Address:          emailCatchAllPrefix + "@" + namespace.RootDomain,
 		Prefix:           emailCatchAllPrefix,
 		RootDomain:       namespace.RootDomain,
@@ -272,6 +332,7 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		Configured:       strings.TrimSpace(item.TargetEmail) != "",
 		PermissionStatus: permission.Status,
 		CanManage:        true,
+		CanDelete:        false,
 		UpdatedAt:        &updatedAt,
 	}, nil
 }
@@ -475,11 +536,14 @@ func (s *PermissionService) loadEmailCatchAllPermission(ctx context.Context, use
 	}, nil
 }
 
-// buildCatchAllEmailRouteView loads the persisted route when it exists and
-// otherwise returns the placeholder row required by the user-facing email page.
-func (s *PermissionService) buildCatchAllEmailRouteView(ctx context.Context, permission UserPermissionView, namespace catchAllNamespace) (UserEmailRouteView, error) {
+// buildCatchAllEmailRouteView loads the persisted catch-all route when it
+// exists and otherwise returns the placeholder row required by the public page.
+func (s *PermissionService) buildCatchAllEmailRouteView(ctx context.Context, user model.User, permission UserPermissionView, namespace catchAllNamespace) (UserEmailRouteView, error) {
 	item := UserEmailRouteView{
+		Kind:             UserEmailRouteKindCatchAll,
 		PermissionKey:    PermissionKeyEmailCatchAll,
+		DisplayName:      "邮箱泛解析",
+		Description:      "用于接收 catch-all@<username>.linuxdo.space 的泛解析邮件转发。",
 		Address:          namespace.Address,
 		Prefix:           emailCatchAllPrefix,
 		RootDomain:       namespace.RootDomain,
@@ -488,6 +552,7 @@ func (s *PermissionService) buildCatchAllEmailRouteView(ctx context.Context, per
 		Configured:       false,
 		PermissionStatus: permission.Status,
 		CanManage:        permission.CanManageRoute,
+		CanDelete:        false,
 	}
 
 	route, err := s.db.GetEmailRouteByAddress(ctx, namespace.RootDomain, emailCatchAllPrefix)
@@ -496,6 +561,9 @@ func (s *PermissionService) buildCatchAllEmailRouteView(ctx context.Context, per
 			return item, nil
 		}
 		return UserEmailRouteView{}, InternalError("failed to load catch-all email route", err)
+	}
+	if route.OwnerUserID != user.ID {
+		return UserEmailRouteView{}, UnavailableError("catch-all mailbox is assigned to another user", fmt.Errorf("route %d belongs to user %d", route.ID, route.OwnerUserID))
 	}
 
 	updatedAt := route.UpdatedAt

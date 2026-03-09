@@ -50,3 +50,17 @@ func (a *API) handleAllocationAvailability(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+// handlePublicEmailRouteAvailability checks whether one mailbox local-part is
+// currently available on a managed email domain.
+func (a *API) handlePublicEmailRouteAvailability(w http.ResponseWriter, r *http.Request) {
+	rootDomain := r.URL.Query().Get("root_domain")
+	prefix := r.URL.Query().Get("prefix")
+
+	result, err := a.permissionService.CheckPublicEmailAvailability(r.Context(), rootDomain, prefix)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
