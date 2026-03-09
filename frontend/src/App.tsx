@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
 import { Footer } from './components/Footer';
 import { Navbar } from './components/Navbar';
 import {
@@ -174,6 +174,8 @@ export default function App() {
   const [publicDomains, setPublicDomains] = useState<ManagedDomain[]>([]);
   const [domainsLoading, setDomainsLoading] = useState(true);
   const [domainsError, setDomainsError] = useState('');
+  const sessionRequestTokenRef = useRef(0);
+  const domainsRequestTokenRef = useRef(0);
 
   useEffect(() => {
     if (isDark) {
@@ -244,6 +246,7 @@ export default function App() {
 
   useEffect(() => {
     const handleAuthInvalid = () => {
+      sessionRequestTokenRef.current += 1;
       setSession((current) => {
         if (!current.authenticated) {
           return current;
@@ -286,18 +289,25 @@ export default function App() {
 
   async function refreshSession(options: { silent?: boolean } = {}): Promise<void> {
     const { silent = false } = options;
+    const requestToken = ++sessionRequestTokenRef.current;
     if (!silent) {
       setSessionLoading(true);
     }
 
     try {
       const response = await getCurrentSession();
+      if (requestToken !== sessionRequestTokenRef.current) {
+        return;
+      }
       setSession(normalizeSessionResponse(response));
       if (response.authenticated) {
         setAuthBanner('');
       }
       setSessionError('');
     } catch (error) {
+      if (requestToken !== sessionRequestTokenRef.current) {
+        return;
+      }
       const shouldClearSession = error instanceof APIError && (error.code === 'unauthorized' || error.code === 'forbidden');
       setSession((current) => {
         if (shouldClearSession) {
@@ -318,24 +328,33 @@ export default function App() {
       });
       setSessionError(readableErrorMessage(error, '无法加载当前登录状态'));
     } finally {
-      if (!silent) {
+      if (!silent && requestToken === sessionRequestTokenRef.current) {
         setSessionLoading(false);
       }
     }
   }
 
   async function refreshPublicDomains(): Promise<void> {
+    const requestToken = ++domainsRequestTokenRef.current;
     setDomainsLoading(true);
 
     try {
       const domains = await listPublicDomains();
+      if (requestToken !== domainsRequestTokenRef.current) {
+        return;
+      }
       setPublicDomains(domains);
       setDomainsError('');
     } catch (error) {
+      if (requestToken !== domainsRequestTokenRef.current) {
+        return;
+      }
       setPublicDomains([]);
       setDomainsError(readableErrorMessage(error, '无法加载可分发域名列表'));
     } finally {
-      setDomainsLoading(false);
+      if (requestToken === domainsRequestTokenRef.current) {
+        setDomainsLoading(false);
+      }
     }
   }
 
@@ -355,6 +374,7 @@ export default function App() {
       return;
     }
 
+    sessionRequestTokenRef.current += 1;
     try {
       await logout(session.csrfToken);
       setSession({

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, CheckCircle2, Clock3, Key, Mail, ShieldAlert, Ticket, XCircle } from 'lucide-react';
 import { GlassCard } from '../components/GlassCard';
@@ -24,13 +24,16 @@ export function Permissions({ authenticated, sessionLoading, user, onLogin, onOp
   const [permission, setPermission] = useState<UserPermission | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const loadRequestTokenRef = useRef(0);
 
   // statusBadge keeps the permission-state copy consistent across the page.
   const statusBadge = useMemo(() => describePermissionStatus(permission?.status ?? 'not_requested'), [permission?.status]);
 
   useEffect(() => {
     if (!authenticated) {
+      loadRequestTokenRef.current += 1;
       setPermission(null);
+      setLoading(false);
       setError('');
       return;
     }
@@ -40,15 +43,24 @@ export function Permissions({ authenticated, sessionLoading, user, onLogin, onOp
 
   // loadPermissions fetches the currently supported permission cards from the backend.
   async function loadPermissions(): Promise<void> {
+    const requestToken = ++loadRequestTokenRef.current;
     try {
       setLoading(true);
       const items = await listMyPermissions();
+      if (requestToken !== loadRequestTokenRef.current) {
+        return;
+      }
       setPermission(items.find((item) => item.key === emailCatchAllPermissionKey) ?? null);
       setError('');
     } catch (loadError) {
+      if (requestToken !== loadRequestTokenRef.current) {
+        return;
+      }
       setError(readableErrorMessage(loadError, '无法加载权限列表。'));
     } finally {
-      setLoading(false);
+      if (requestToken === loadRequestTokenRef.current) {
+        setLoading(false);
+      }
     }
   }
 

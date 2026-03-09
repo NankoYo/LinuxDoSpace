@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
@@ -73,6 +73,8 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
   const [catchAllNotice, setCatchAllNotice] = useState<SectionNotice | null>(null);
   const [applyingPermission, setApplyingPermission] = useState(false);
   const [pledgeModalOpen, setPledgeModalOpen] = useState(false);
+  const loadRequestTokenRef = useRef(0);
+  const searchRequestTokenRef = useRef(0);
 
   const normalizedUsername = useMemo(() => normalizePrefix(user?.username ?? ''), [user?.username]);
   const configuredRootDomain = useMemo(() => {
@@ -104,6 +106,8 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
 
   useEffect(() => {
     if (!authenticated) {
+      loadRequestTokenRef.current += 1;
+      searchRequestTokenRef.current += 1;
       setPermission(null);
       setRoutes([]);
       setLoading(false);
@@ -133,11 +137,15 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
   }, [catchAllRoute?.address, catchAllRoute?.target_email, catchAllRoute?.enabled]);
 
   async function loadAuthenticatedData(): Promise<void> {
+    const requestToken = ++loadRequestTokenRef.current;
     setLoading(true);
     setPermissionError('');
     setRouteError('');
 
     const [permissionResult, routeResult] = await Promise.allSettled([listMyPermissions(), listMyEmailRoutes()]);
+    if (requestToken !== loadRequestTokenRef.current) {
+      return;
+    }
 
     if (permissionResult.status === 'fulfilled') {
       setPermission(permissionResult.value.find((item) => item.key === catchAllPermissionKey) ?? null);
@@ -161,12 +169,15 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setRouteError(readableErrorMessage(routeResult.reason, '无法加载我的邮箱列表。'));
     }
 
-    setLoading(false);
+    if (requestToken === loadRequestTokenRef.current) {
+      setLoading(false);
+    }
   }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const normalizedPrefix = normalizePrefix(searchPrefix);
+    const requestToken = ++searchRequestTokenRef.current;
     if (!normalizedPrefix) {
       setSearchResult(null);
       setSearchStatus('error');
@@ -180,10 +191,16 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setSearchMessage('');
       setSearchPrefix(normalizedPrefix);
       const result = await checkPublicEmailRouteAvailability(searchRootDomain, normalizedPrefix);
+      if (requestToken !== searchRequestTokenRef.current) {
+        return;
+      }
       setSearchResult(result);
       setSearchStatus(result.available ? 'available' : 'taken');
       setSearchMessage(buildSearchMessage(result, normalizedUsername, authenticated));
     } catch (error) {
+      if (requestToken !== searchRequestTokenRef.current) {
+        return;
+      }
       setSearchResult(null);
       setSearchStatus('error');
       setSearchMessage(readableErrorMessage(error, '邮箱查询失败，请稍后重试。'));
