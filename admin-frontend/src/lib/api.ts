@@ -34,12 +34,25 @@ interface APIErrorBody {
   };
 }
 
+function resolveAPIBaseURL(): string {
+  const configuredBaseURL = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configuredBaseURL) {
+    return configuredBaseURL.replace(/\/+$/, '');
+  }
+
+  const currentURL = new URL(window.location.origin);
+  const isFrontendSubdomain = currentURL.hostname.startsWith('app.') || currentURL.hostname.startsWith('admin.');
+  const isLocalHostname = currentURL.hostname === 'localhost' || currentURL.hostname.endsWith('.localhost');
+
+  if (isFrontendSubdomain && !isLocalHostname) {
+    return `${currentURL.protocol}//api.${currentURL.hostname.split('.').slice(1).join('.')}`.replace(/\/+$/, '');
+  }
+
+  return currentURL.origin.replace(/\/+$/, '');
+}
+
 // apiBaseURL points the standalone admin frontend at the shared backend origin.
-export const apiBaseURL = (
-  import.meta.env.VITE_API_BASE_URL && import.meta.env.VITE_API_BASE_URL.trim() !== ''
-    ? import.meta.env.VITE_API_BASE_URL
-    : window.location.origin
-).replace(/\/+$/, '');
+export const apiBaseURL = resolveAPIBaseURL();
 
 // APIError is thrown when the backend returns a non-2xx JSON error envelope.
 export class APIError extends Error {
@@ -65,18 +78,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
 
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  const isJSONResponse = contentType.includes('application/json');
+
   if (!response.ok) {
     let errorBody: APIErrorBody | null = null;
-    try {
-      errorBody = (await response.json()) as APIErrorBody;
-    } catch {
-      errorBody = null;
+    if (isJSONResponse) {
+      try {
+        errorBody = (await response.json()) as APIErrorBody;
+      } catch {
+        errorBody = null;
+      }
     }
     throw new APIError(
       errorBody?.error.message ?? `Request failed with status ${response.status}`,
       errorBody?.error.code ?? 'http_error',
       response.status,
     );
+  }
+
+  if (!isJSONResponse) {
+    throw new APIError('管理员前端收到非 JSON 响应，请检查 VITE_API_BASE_URL 或反向代理配置。', 'invalid_response_content_type', response.status);
   }
 
   const envelope = (await response.json()) as APIEnvelope<T>;

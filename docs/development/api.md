@@ -36,6 +36,10 @@ Only subdomain ownership is exposed. Concrete DNS values are never returned.
 ### `GET /v1/public/allocations/check?root_domain=linuxdo.space&prefix=alice`
 Checks whether a specific prefix is currently available under the selected root domain.
 
+### `GET /v1/public/email-routes/check?root_domain=linuxdo.space&prefix=alice`
+Checks whether a mailbox local-part is available on the selected managed email domain.
+The backend also treats existing Linux Do usernames as reserved so each user keeps their implicit default mailbox.
+
 ## User authentication and self-service endpoints
 
 ### `GET /v1/auth/login?next=/settings`
@@ -73,7 +77,22 @@ Request example:
 
 ### `GET /v1/my/email-routes`
 Returns the current user's visible email forwarding rows.
-At the moment this endpoint returns the placeholder or persisted row for `catch-all@<username>.linuxdo.space`.
+The current release returns:
+- the always-owned default mailbox row for `<username>@linuxdo.space`
+- any extra mailbox aliases already assigned to the user in the database
+- the permission-gated `catch-all@<username>.linuxdo.space` row
+
+### `PUT /v1/my/email-routes/default`
+Creates, updates, or clears the current user's default mailbox forwarding target.
+
+Request example:
+
+```json
+{
+  "target_email": "owner@example.com",
+  "enabled": true
+}
+```
 
 ### `PUT /v1/my/email-routes/catch-all`
 Creates or updates the current user's catch-all forwarding target after the permission has been approved.

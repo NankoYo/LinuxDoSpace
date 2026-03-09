@@ -81,6 +81,9 @@ export interface SupervisionEntry {
 // PermissionStatus mirrors the user-visible lifecycle of one permission request.
 export type PermissionStatus = 'not_requested' | 'pending' | 'approved' | 'rejected';
 
+// EmailRouteKind mirrors the different mailbox rows shown on the public email page.
+export type EmailRouteKind = 'default' | 'custom' | 'catch_all';
+
 // PermissionApplicationSummary mirrors the latest application snapshot returned
 // to the public frontend for one permission card.
 export interface PermissionApplicationSummary {
@@ -112,18 +115,32 @@ export interface UserPermission {
   application?: PermissionApplicationSummary;
 }
 
-// UserEmailRoute mirrors one user-manageable email forwarding row.
+// EmailRouteAvailabilityResult mirrors the public mailbox search result.
+export interface EmailRouteAvailabilityResult {
+  root_domain: string;
+  prefix: string;
+  normalized_prefix: string;
+  address: string;
+  available: boolean;
+  reasons: string[];
+}
+
+// UserEmailRoute mirrors one user-visible email forwarding row.
 export interface UserEmailRoute {
   id?: number;
-  permission_key: string;
+  kind: EmailRouteKind;
+  permission_key?: string;
+  display_name: string;
+  description: string;
   address: string;
   prefix: string;
   root_domain: string;
   target_email: string;
   enabled: boolean;
   configured: boolean;
-  permission_status: PermissionStatus;
+  permission_status?: PermissionStatus;
   can_manage: boolean;
+  can_delete: boolean;
   updated_at?: string;
 }
 
@@ -173,6 +190,12 @@ export interface UpsertDNSRecordInput {
 // application payload.
 export interface SubmitPermissionApplicationInput {
   key: string;
+}
+
+// UpsertMyDefaultEmailRouteInput mirrors the default mailbox save payload.
+export interface UpsertMyDefaultEmailRouteInput {
+  target_email: string;
+  enabled: boolean;
 }
 
 // UpsertMyCatchAllEmailRouteInput mirrors the email-forwarding form payload.

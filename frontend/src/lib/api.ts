@@ -5,26 +5,49 @@ import type {
   AvailabilityResult,
   CreateAllocationInput,
   DNSRecord,
+  EmailRouteAvailabilityResult,
   ManagedDomain,
   MeResponse,
   SubmitPermissionApplicationInput,
   SupervisionEntry,
   UpsertMyCatchAllEmailRouteInput,
+  UpsertMyDefaultEmailRouteInput,
   UpsertDNSRecordInput,
   UserEmailRoute,
   UserPermission,
 } from '../types/api';
 
-// apiBaseURL 用于保存当前前端应该连接的后端地址。
-// 在 Docker / 同源部署场景下，如果没有显式配置环境变量，就自动回退到当前页面所在源。
-export const apiBaseURL = (
-  import.meta.env.VITE_API_BASE_URL && import.meta.env.VITE_API_BASE_URL.trim() !== ''
-    ? import.meta.env.VITE_API_BASE_URL
-    : window.location.origin
-).replace(/\/+$/, '');
+// resolveAPIBaseURL keeps local development simple while still protecting the
+// deployed Pages frontend from accidentally talking to itself and parsing the
+// returned HTML as JSON.
+function resolveAPIBaseURL(): string {
+  const configuredBaseURL = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (configuredBaseURL) {
+    return configuredBaseURL.replace(/\/+$/, '');
+  }
 
-// APIError 是浏览器端统一使用的接口异常类型。
-// 我们额外保留了 `code` 和 `status`，方便页面层做更细的错误提示。
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const currentURL = new URL(window.location.origin);
+  const { hostname, origin, port, protocol } = currentURL;
+  const isFrontendSubdomain = hostname.startsWith('app.') || hostname.startsWith('admin.');
+  const isLocalHostname = hostname === 'localhost' || hostname.endsWith('.localhost');
+
+  if (isFrontendSubdomain && !isLocalHostname) {
+    const apiHostname = `api.${hostname.split('.').slice(1).join('.')}`;
+    const apiOrigin = `${protocol}//${apiHostname}${port ? `:${port}` : ''}`;
+    return apiOrigin.replace(/\/+$/, '');
+  }
+
+  return origin.replace(/\/+$/, '');
+}
+
+// apiBaseURL stores the backend origin used by the public frontend.
+export const apiBaseURL = resolveAPIBaseURL();
+
+// APIError is the shared frontend error shape used by public pages.
 export class APIError extends Error {
   code: string;
   status: number;
@@ -37,7 +60,8 @@ export class APIError extends Error {
   }
 }
 
-// request 负责统一封装 fetch、Cookie、JSON 解析与错误处理。
+// request wraps fetch so every page consistently gets cookies, JSON decoding,
+// and clearer messages when the deployment accidentally returns HTML instead of API data.
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiBaseURL}${path}`, {
     credentials: 'include',
@@ -49,12 +73,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
 
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  const isJSONResponse = contentType.includes('application/json');
+
   if (!response.ok) {
     let errorBody: APIErrorBody | null = null;
-    try {
-      errorBody = (await response.json()) as APIErrorBody;
-    } catch {
-      errorBody = null;
+    if (isJSONResponse) {
+      try {
+        errorBody = (await response.json()) as APIErrorBody;
+      } catch {
+        errorBody = null;
+      }
     }
 
     throw new APIError(
@@ -64,31 +93,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
 
+  if (!isJSONResponse) {
+    throw new APIError(
+      '后端返回了非 JSON 响应，请检查 VITE_API_BASE_URL 或反向代理配置。',
+      'invalid_response_content_type',
+      response.status,
+    );
+  }
+
   const envelope = (await response.json()) as APIEnvelope<T>;
   return envelope.data;
 }
 
-// getAuthLoginURL 根据后端地址拼出 OAuth 登录入口。
+// getAuthLoginURL builds the public Linux Do OAuth entrypoint.
 export function getAuthLoginURL(nextPath: string): string {
   return `${apiBaseURL}/v1/auth/login?next=${encodeURIComponent(nextPath)}`;
 }
 
-// getCurrentSession 获取当前浏览器对应的登录态与分配信息。
+// getCurrentSession loads the current browser session state.
 export function getCurrentSession(): Promise<MeResponse> {
   return request<MeResponse>('/v1/me');
 }
 
-// listPublicDomains 获取当前开放分发的根域名列表。
+// listPublicDomains returns the managed domains currently visible to the public site.
 export function listPublicDomains(): Promise<ManagedDomain[]> {
   return request<ManagedDomain[]>('/v1/public/domains');
 }
 
-// listPublicSupervisionEntries 获取公开监督页需要的脱敏子域归属数据。
+// listPublicSupervisionEntries returns the privacy-safe ownership list shown on the supervision page.
 export function listPublicSupervisionEntries(): Promise<SupervisionEntry[]> {
   return request<SupervisionEntry[]>('/v1/public/supervision');
 }
 
-// checkAllocationAvailability 调用后端检查某个前缀是否可用。
+// checkAllocationAvailability checks one subdomain prefix on a managed root domain.
 export function checkAllocationAvailability(rootDomain: string, prefix: string): Promise<AvailabilityResult> {
   const query = new URLSearchParams({
     root_domain: rootDomain,
@@ -97,7 +134,16 @@ export function checkAllocationAvailability(rootDomain: string, prefix: string):
   return request<AvailabilityResult>(`/v1/public/allocations/check?${query.toString()}`);
 }
 
-// createAllocation 为当前登录用户申请一个新的命名空间分配。
+// checkPublicEmailRouteAvailability checks whether one mailbox local-part is available.
+export function checkPublicEmailRouteAvailability(rootDomain: string, prefix: string): Promise<EmailRouteAvailabilityResult> {
+  const query = new URLSearchParams({
+    root_domain: rootDomain,
+    prefix,
+  });
+  return request<EmailRouteAvailabilityResult>(`/v1/public/email-routes/check?${query.toString()}`);
+}
+
+// createAllocation lets the current user request a new subdomain allocation.
 export function createAllocation(input: CreateAllocationInput, csrfToken: string): Promise<Allocation> {
   return request<Allocation>('/v1/my/allocations', {
     method: 'POST',
@@ -124,12 +170,23 @@ export function submitPermissionApplication(input: SubmitPermissionApplicationIn
   });
 }
 
-// listMyEmailRoutes returns the email forwarding rows visible to the current user.
+// listMyEmailRoutes returns the mailbox rows visible to the current user.
 export function listMyEmailRoutes(): Promise<UserEmailRoute[]> {
   return request<UserEmailRoute[]>('/v1/my/email-routes');
 }
 
-// upsertCatchAllEmailRoute creates or updates the user's catch-all forwarding target.
+// upsertDefaultEmailRoute saves the forwarding target for the implicit default mailbox.
+export function upsertDefaultEmailRoute(input: UpsertMyDefaultEmailRouteInput, csrfToken: string): Promise<UserEmailRoute> {
+  return request<UserEmailRoute>('/v1/my/email-routes/default', {
+    method: 'PUT',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+// upsertCatchAllEmailRoute saves the forwarding target for the permission-gated catch-all mailbox.
 export function upsertCatchAllEmailRoute(input: UpsertMyCatchAllEmailRouteInput, csrfToken: string): Promise<UserEmailRoute> {
   return request<UserEmailRoute>('/v1/my/email-routes/catch-all', {
     method: 'PUT',
@@ -140,12 +197,12 @@ export function upsertCatchAllEmailRoute(input: UpsertMyCatchAllEmailRouteInput,
   });
 }
 
-// listAllocationRecords 返回某个命名空间下的全部实时 DNS 记录。
+// listAllocationRecords returns the live DNS records currently attached to one allocation.
 export function listAllocationRecords(allocationID: number): Promise<DNSRecord[]> {
   return request<DNSRecord[]>(`/v1/my/allocations/${allocationID}/records`);
 }
 
-// createDNSRecord 在指定命名空间下创建一条新的 DNS 记录。
+// createDNSRecord adds one DNS record under the given allocation.
 export function createDNSRecord(
   allocationID: number,
   input: UpsertDNSRecordInput,
@@ -160,7 +217,7 @@ export function createDNSRecord(
   });
 }
 
-// updateDNSRecord 更新指定命名空间中的一条 DNS 记录。
+// updateDNSRecord updates one DNS record under the given allocation.
 export function updateDNSRecord(
   allocationID: number,
   recordID: string,
@@ -176,7 +233,7 @@ export function updateDNSRecord(
   });
 }
 
-// deleteDNSRecord 删除指定命名空间中的一条 DNS 记录。
+// deleteDNSRecord deletes one DNS record under the given allocation.
 export function deleteDNSRecord(allocationID: number, recordID: string, csrfToken: string): Promise<{ deleted: boolean }> {
   return request<{ deleted: boolean }>(`/v1/my/allocations/${allocationID}/records/${recordID}`, {
     method: 'DELETE',
@@ -186,7 +243,7 @@ export function deleteDNSRecord(allocationID: number, recordID: string, csrfToke
   });
 }
 
-// logout 销毁当前浏览器对应的后端会话。
+// logout destroys the current browser session on the backend.
 export function logout(csrfToken: string): Promise<{ logged_out: boolean }> {
   return request<{ logged_out: boolean }>('/v1/auth/logout', {
     method: 'POST',
