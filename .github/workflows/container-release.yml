@@ -22,6 +22,9 @@ jobs:
   build-and-push:
     name: Build And Push Image
     runs-on: ubuntu-latest
+    # Only the default branch refreshes the shared `latest` image. Tag pushes
+    # deploy the already-published latest image instead of rebuilding it again.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
       packages: write
@@ -69,9 +72,23 @@ jobs:
     name: Deploy To Debian
     needs: build-and-push
     runs-on: ubuntu-latest
+    concurrency:
+      group: linuxdospace-production-deploy
+      cancel-in-progress: true
     # Deploy automatically on tag pushes. Keep workflow_dispatch as a manual fallback
     # so the operator can still force a deployment without creating a new tag.
-    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.deploy_to_debian) }}
+    if: >-
+      ${{
+        always() &&
+        (
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+          (github.event_name == 'workflow_dispatch' && inputs.deploy_to_debian)
+        ) &&
+        (
+          needs.build-and-push.result == 'success' ||
+          needs.build-and-push.result == 'skipped'
+        )
+      }}
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
@@ -111,8 +128,8 @@ jobs:
         shell: bash
         env:
           TARGET_IMAGE_NAME: ghcr.io/moyeranqianzhi/linuxdospace
-          TARGET_IMAGE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
-          TARGET_IMAGE: ghcr.io/moyeranqianzhi/linuxdospace:${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+          TARGET_IMAGE_TAG: latest
+          TARGET_IMAGE: ghcr.io/moyeranqianzhi/linuxdospace:latest
           TARGET_REVISION: ${{ github.sha }}
           MAX_DEPLOY_ATTEMPTS: '10'
           MAX_OUTER_DEPLOY_ATTEMPTS: '10'
@@ -140,7 +157,7 @@ jobs:
           }
 
           # prepare_deployment_env_file rewrites the runtime env file from the current secret payload.
-          # It also pins the runtime image reference to the image tag that this workflow just published.
+          # Tag-triggered deployments always pull the shared latest image after the build job has refreshed it.
           prepare_deployment_env_file() {
             tmp_env_file="$(mktemp)"
 
@@ -197,8 +214,18 @@ jobs:
           : "${STATUS_FILE:?STATUS_FILE is required}"
           : "${DOCKER_PULL_TIMEOUT_SECONDS:=600}"
           : "${COMPOSE_UP_TIMEOUT_SECONDS:=300}"
+          : "${DEPLOY_LOCK_FILE:=${DEPLOY_PATH}/.remote-deploy.lock}"
 
           cd "$DEPLOY_PATH"
+
+          # Keep one advisory lock for the whole remote script lifetime so a
+          # cancelled workflow cannot leave behind concurrent detached deploys
+          # that fight over the same image and compose project.
+          exec 9>"$DEPLOY_LOCK_FILE"
+          if ! flock -n 9; then
+            echo 'Another remote deployment is already running.'
+            exit 1
+          fi
 
           # Report the current health state. Containers without a healthcheck return no-healthcheck.
           container_health_status() {
@@ -294,9 +321,23 @@ jobs:
               set -euo pipefail && \
               command -v docker >/dev/null && \
               docker compose version >/dev/null && \
+              command -v flock >/dev/null && \
               command -v setsid >/dev/null && \
               command -v timeout >/dev/null && \
               mkdir -p '$DEPLOY_PATH'"
+          }
+
+          # cleanup_remote_deployment_processes kills any detached deploy scripts or lingering docker pulls
+          # left behind by previously cancelled workflows. Without this guard, retries can DoS the server by
+          # spawning many concurrent pulls for the same image.
+          cleanup_remote_deployment_processes() {
+            ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+              set +e && \
+              ps -eo pid=,args= | \
+                grep -E 'remote-deploy\.sh|docker pull ghcr\.io/moyeranqianzhi/linuxdospace' | \
+                grep -v grep | \
+                while read -r pid _; do kill -9 \"\$pid\" 2>/dev/null || true; done && \
+              exit 0"
           }
 
           # upload_compose_bundle transfers every file needed by the remote script.
@@ -384,6 +425,7 @@ jobs:
             prepare_deployment_env_file
             prepare_remote_deployment_script
             check_remote_deployment_prerequisites
+            cleanup_remote_deployment_processes
             upload_compose_bundle
             start_remote_deployment_job
             wait_for_remote_deployment_result
