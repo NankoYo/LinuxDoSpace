@@ -91,6 +91,21 @@ func (s *PermissionService) CheckPublicEmailAvailability(ctx context.Context, ro
 		return EmailRouteAvailabilityResult{}, InternalError("failed to check existing email route conflicts", err)
 	}
 
+	// When the local database is missing or stale, Cloudflare remains the source
+	// of truth for whether the mailbox is already forwarding somewhere. This
+	// second check prevents the public search UI from advertising an address that
+	// still exists remotely after a partial failure.
+	if result.Available {
+		snapshot, snapshotErr := s.lookupCloudflareForwardingSnapshot(ctx, managedDomain.RootDomain, normalizedPrefix)
+		if snapshotErr != nil {
+			return EmailRouteAvailabilityResult{}, snapshotErr
+		}
+		if snapshot.Found {
+			result.Available = false
+			result.Reasons = append(result.Reasons, "existing_email_route")
+		}
+	}
+
 	return result, nil
 }
 
@@ -428,19 +443,12 @@ func isSystemReservedEmailPrefix(normalizedPrefix string) bool {
 // isEmailPrefixReservedByKnownUser prevents a visitor from claiming another
 // member's implicit default mailbox when that member already exists locally.
 func (s *PermissionService) isEmailPrefixReservedByKnownUser(ctx context.Context, normalizedPrefix string) (bool, error) {
-	users, err := s.db.ListAdminUsers(ctx)
-	if err != nil {
-		return false, InternalError("failed to load known users for email availability", err)
+	_, err := s.db.GetUserByUsername(ctx, normalizedPrefix)
+	if err == nil {
+		return true, nil
 	}
-
-	for _, item := range users {
-		candidatePrefix, err := normalizedUserPrefix(item.Username)
-		if err != nil {
-			continue
-		}
-		if candidatePrefix == normalizedPrefix {
-			return true, nil
-		}
+	if sqlite.IsNotFound(err) {
+		return false, nil
 	}
-	return false, nil
+	return false, InternalError("failed to load known users for email availability", err)
 }

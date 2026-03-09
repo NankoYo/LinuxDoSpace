@@ -28,25 +28,28 @@ func (a *API) handleOAuthLogin(w http.ResponseWriter, r *http.Request, target st
 	}
 
 	a.setOAuthStateCookie(w, result.StateID)
-	a.setOAuthTargetCookie(w, target)
+	a.setOAuthTargetCookie(w, result.StateID, target)
 	http.Redirect(w, r, result.RedirectURL, http.StatusFound)
 }
 
 // handleAuthCallback completes the shared Linux Do OAuth callback for both the app frontend and the admin frontend.
 func (a *API) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
-	target := a.currentOAuthTargetCookie(r)
+	stateID := r.URL.Query().Get("state")
+	target := a.currentOAuthTargetCookie(r, stateID)
 	result, err := a.authService.CompleteLogin(
 		r.Context(),
-		r.URL.Query().Get("state"),
-		a.currentOAuthStateCookie(r),
+		stateID,
+		a.currentOAuthStateCookie(r, stateID),
 		r.URL.Query().Get("code"),
 		security.FingerprintUserAgent(r),
 	)
 	if err != nil {
 		log.Printf("linuxdo oauth callback failed: %v", err)
-		a.clearOAuthStateCookie(w)
-		a.clearOAuthTargetCookie(w)
 		normalized := service.NormalizeError(err)
+		if shouldClearOAuthCookies(normalized.Code) {
+			a.clearOAuthStateCookie(w, stateID)
+			a.clearOAuthTargetCookie(w, stateID)
+		}
 		redirectTarget := oauthTargetApp
 		if normalizeOAuthTarget(target) == oauthTargetAdmin {
 			redirectTarget = oauthTargetAdmin
@@ -59,8 +62,8 @@ func (a *API) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		if logoutErr := a.authService.Logout(r.Context(), result.Session.ID, result.User.ID); logoutErr != nil {
 			log.Printf("cleanup unauthorized admin session failed: %v", logoutErr)
 		}
-		a.clearOAuthStateCookie(w)
-		a.clearOAuthTargetCookie(w)
+		a.clearOAuthStateCookie(w, stateID)
+		a.clearOAuthTargetCookie(w, stateID)
 		http.Redirect(w, r, a.frontendRedirectURL(oauthTargetAdmin, "/?auth_error=admin_required"), http.StatusFound)
 		return
 	}
@@ -71,9 +74,20 @@ func (a *API) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.setSessionCookie(w, result.Session.ID)
-	a.clearOAuthStateCookie(w)
-	a.clearOAuthTargetCookie(w)
+	a.clearOAuthStateCookie(w, stateID)
+	a.clearOAuthTargetCookie(w, stateID)
 	http.Redirect(w, r, a.frontendRedirectURL(target, result.NextPath), http.StatusFound)
+}
+
+// shouldClearOAuthCookies distinguishes between retryable upstream failures and
+// permanently invalid callbacks so transient outages do not burn the local flow.
+func shouldClearOAuthCookies(code string) bool {
+	switch code {
+	case "service_unavailable", "internal_error":
+		return false
+	default:
+		return true
+	}
 }
 
 // handleAuthLogout destroys the current authenticated session.

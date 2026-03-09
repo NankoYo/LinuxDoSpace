@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -14,11 +15,18 @@ import (
 	"linuxdospace/backend/internal/service"
 )
 
-// oauthStateCookieName stores the one-time OAuth state identifier on the browser.
-const oauthStateCookieName = "linuxdospace_oauth_state"
+// oauthStateCookiePrefix namespaces one cookie per OAuth state so concurrent
+// login attempts in multiple tabs do not overwrite each other.
+const oauthStateCookiePrefix = "linuxdospace_oauth_state_"
 
-// oauthTargetCookieName stores which frontend should receive the post-login redirect.
-const oauthTargetCookieName = "linuxdospace_oauth_target"
+// oauthTargetCookiePrefix mirrors the per-state cookie layout for the frontend
+// target that should receive the post-login redirect.
+const oauthTargetCookiePrefix = "linuxdospace_oauth_target_"
+
+// The legacy shared cookie names remain readable during the deployment window
+// so callbacks that started before this change can still finish successfully.
+const legacyOAuthStateCookieName = "linuxdospace_oauth_state"
+const legacyOAuthTargetCookieName = "linuxdospace_oauth_target"
 
 const (
 	oauthTargetApp   = "app"
@@ -103,10 +111,10 @@ func (a *API) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// setOAuthStateCookie writes the short-lived OAuth state cookie.
+// setOAuthStateCookie writes the short-lived per-state OAuth cookie.
 func (a *API) setOAuthStateCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName,
+		Name:     oauthStateCookieName(stateID),
 		Value:    stateID,
 		Path:     "/",
 		HttpOnly: true,
@@ -116,10 +124,20 @@ func (a *API) setOAuthStateCookie(w http.ResponseWriter, stateID string) {
 	})
 }
 
-// clearOAuthStateCookie removes the short-lived OAuth state cookie.
-func (a *API) clearOAuthStateCookie(w http.ResponseWriter) {
+// clearOAuthStateCookie removes the short-lived OAuth state cookie for the
+// specified state and also clears the legacy shared cookie names.
+func (a *API) clearOAuthStateCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName,
+		Name:     oauthStateCookieName(stateID),
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.config.App.SessionSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     legacyOAuthStateCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -129,19 +147,26 @@ func (a *API) clearOAuthStateCookie(w http.ResponseWriter) {
 	})
 }
 
-// currentOAuthStateCookie reads the short-lived OAuth state cookie.
-func (a *API) currentOAuthStateCookie(r *http.Request) string {
-	cookie, err := r.Cookie(oauthStateCookieName)
-	if err != nil {
-		return ""
+// currentOAuthStateCookie reads the short-lived OAuth state cookie bound to the
+// current callback's state identifier.
+func (a *API) currentOAuthStateCookie(r *http.Request, stateID string) string {
+	if cookie, err := r.Cookie(oauthStateCookieName(stateID)); err == nil {
+		return strings.TrimSpace(cookie.Value)
 	}
-	return strings.TrimSpace(cookie.Value)
+	if cookie, err := r.Cookie(legacyOAuthStateCookieName); err == nil {
+		value := strings.TrimSpace(cookie.Value)
+		if value == stateID {
+			return value
+		}
+	}
+	return ""
 }
 
-// setOAuthTargetCookie writes the short-lived login target cookie.
-func (a *API) setOAuthTargetCookie(w http.ResponseWriter, target string) {
+// setOAuthTargetCookie writes the short-lived login target cookie for one
+// specific OAuth state so separate tabs can complete independently.
+func (a *API) setOAuthTargetCookie(w http.ResponseWriter, stateID string, target string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthTargetCookieName,
+		Name:     oauthTargetCookieName(stateID),
 		Value:    normalizeOAuthTarget(target),
 		Path:     "/",
 		HttpOnly: true,
@@ -151,10 +176,20 @@ func (a *API) setOAuthTargetCookie(w http.ResponseWriter, target string) {
 	})
 }
 
-// clearOAuthTargetCookie removes the short-lived login target cookie.
-func (a *API) clearOAuthTargetCookie(w http.ResponseWriter) {
+// clearOAuthTargetCookie removes the short-lived login target cookie for the
+// specified state and clears the legacy shared cookie name too.
+func (a *API) clearOAuthTargetCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthTargetCookieName,
+		Name:     oauthTargetCookieName(stateID),
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.config.App.SessionSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     legacyOAuthTargetCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -164,13 +199,22 @@ func (a *API) clearOAuthTargetCookie(w http.ResponseWriter) {
 	})
 }
 
-// currentOAuthTargetCookie reads the short-lived login target cookie.
-func (a *API) currentOAuthTargetCookie(r *http.Request) string {
-	cookie, err := r.Cookie(oauthTargetCookieName)
-	if err != nil {
-		return oauthTargetApp
+// currentOAuthTargetCookie reads the short-lived login target cookie for the
+// callback's state, falling back to the legacy shared cookie while old flows
+// are still in flight during deployment.
+func (a *API) currentOAuthTargetCookie(r *http.Request, stateID string) string {
+	if cookie, err := r.Cookie(oauthTargetCookieName(stateID)); err == nil {
+		return normalizeOAuthTarget(cookie.Value)
 	}
-	return normalizeOAuthTarget(cookie.Value)
+	if a.currentOAuthStateCookie(r, stateID) == stateID {
+		if cookie, err := r.Cookie(legacyOAuthTargetCookieName); err == nil {
+			return normalizeOAuthTarget(cookie.Value)
+		}
+	}
+	if cookie, err := r.Cookie(legacyOAuthTargetCookieName); err == nil && strings.TrimSpace(stateID) == "" {
+		return normalizeOAuthTarget(cookie.Value)
+	}
+	return oauthTargetApp
 }
 
 // normalizeOAuthTarget restricts login targets to the two supported frontend applications.
@@ -181,6 +225,23 @@ func normalizeOAuthTarget(raw string) string {
 	default:
 		return oauthTargetApp
 	}
+}
+
+// oauthStateCookieName derives the per-state cookie name used for callback
+// verification without reintroducing cross-tab overwrites.
+func oauthStateCookieName(stateID string) string {
+	if strings.TrimSpace(stateID) == "" {
+		return legacyOAuthStateCookieName
+	}
+	return oauthStateCookiePrefix + strings.TrimSpace(stateID)
+}
+
+// oauthTargetCookieName derives the matching per-state target cookie name.
+func oauthTargetCookieName(stateID string) string {
+	if strings.TrimSpace(stateID) == "" {
+		return legacyOAuthTargetCookieName
+	}
+	return oauthTargetCookiePrefix + strings.TrimSpace(stateID)
 }
 
 // optionalActor attempts to resolve the current user but gracefully treats invalid sessions as signed out.
@@ -277,10 +338,18 @@ func (a *API) frontendRedirectURL(target string, nextPath string) string {
 	return base + path
 }
 
+// defaultTrustedProxyCIDRs keeps tests and hand-built configs fail-closed even
+// when they do not call config.Load. Only loopback hops are trusted by default.
+var defaultTrustedProxyCIDRs = []netip.Prefix{
+	netip.MustParsePrefix("127.0.0.1/32"),
+	netip.MustParsePrefix("::1/128"),
+}
+
 // requestClientIP extracts the best available client IP from trusted reverse-
-// proxy headers and finally falls back to RemoteAddr for local development.
-func requestClientIP(r *http.Request) string {
-	if trustedProxyPeer(r.RemoteAddr) {
+// proxy headers and finally falls back to RemoteAddr. Only explicitly allowed
+// proxy CIDRs may influence the resolved address.
+func requestClientIP(r *http.Request, trustedProxyCIDRs []netip.Prefix) string {
+	if trustedProxyPeer(r.RemoteAddr, trustedProxyCIDRs) {
 		if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
 			return value
 		}
@@ -304,31 +373,26 @@ func requestClientIP(r *http.Request) string {
 	return strings.TrimSpace(r.RemoteAddr)
 }
 
-// trustedProxyPeer reports whether the direct peer is one of the local reverse
-// proxies that is allowed to supply client-IP forwarding headers.
-func trustedProxyPeer(remoteAddr string) bool {
+// trustedProxyPeer reports whether the direct peer belongs to the configured
+// reverse-proxy allowlist.
+func trustedProxyPeer(remoteAddr string, trustedProxyCIDRs []netip.Prefix) bool {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
 	if err != nil {
 		host = strings.TrimSpace(remoteAddr)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
+	address, err := netip.ParseAddr(host)
+	if err != nil {
 		return false
 	}
-	if ip.IsLoopback() {
-		return true
+
+	effectiveCIDRs := trustedProxyCIDRs
+	if len(effectiveCIDRs) == 0 {
+		effectiveCIDRs = defaultTrustedProxyCIDRs
 	}
-	if ipv4 := ip.To4(); ipv4 != nil {
-		switch {
-		case ipv4[0] == 10:
+	for _, prefix := range effectiveCIDRs {
+		if prefix.Contains(address) {
 			return true
-		case ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31:
-			return true
-		case ipv4[0] == 192 && ipv4[1] == 168:
-			return true
-		default:
-			return false
 		}
 	}
-	return ip.IsPrivate()
+	return false
 }

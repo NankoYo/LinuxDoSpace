@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -101,5 +102,32 @@ func TestLoadAcceptsExplicitAdminConfigInProduction(t *testing.T) {
 	}
 	if cfg.App.AdminPassword != "strong-password" {
 		t.Fatalf("expected configured admin password to survive load, got %q", cfg.App.AdminPassword)
+	}
+}
+
+// TestLoadDefaultsTrustedProxyCIDRs verifies that the backend only trusts
+// loopback reverse proxies unless the deployment explicitly expands the list.
+func TestLoadDefaultsTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_ADMIN_USERNAMES", "")
+	t.Setenv("APP_ADMIN_PASSWORD", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config with default trusted proxies: %v", err)
+	}
+
+	expected := []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.1/32"),
+		netip.MustParsePrefix("::1/128"),
+	}
+	if len(cfg.App.TrustedProxyCIDRs) != len(expected) {
+		t.Fatalf("expected %d trusted proxy cidrs, got %+v", len(expected), cfg.App.TrustedProxyCIDRs)
+	}
+	for index, prefix := range expected {
+		if cfg.App.TrustedProxyCIDRs[index] != prefix {
+			t.Fatalf("expected trusted proxy prefix %v at index %d, got %v", prefix, index, cfg.App.TrustedProxyCIDRs[index])
+		}
 	}
 }

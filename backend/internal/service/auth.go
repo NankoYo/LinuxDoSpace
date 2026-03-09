@@ -147,7 +147,7 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, InternalError("failed to generate csrf token", err)
 	}
 
-	session, err := s.store.CreateSession(ctx, sqlite.CreateSessionInput{
+	session, err := s.store.CreateSessionFromOAuthState(ctx, stateFromQuery, sqlite.CreateSessionInput{
 		ID:                   sessionID,
 		UserID:               user.ID,
 		CSRFToken:            csrfToken,
@@ -155,11 +155,10 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		ExpiresAt:            time.Now().UTC().Add(s.cfg.App.SessionTTL),
 	})
 	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return LoginCompleteResult{}, UnauthorizedError("oauth state is invalid or already consumed")
+		}
 		return LoginCompleteResult{}, InternalError("failed to create session", err)
-	}
-
-	if err := s.store.DeleteOAuthState(ctx, stateFromQuery); err != nil {
-		return LoginCompleteResult{}, InternalError("failed to consume oauth state", err)
 	}
 
 	logAuditWriteFailure("auth.login", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
@@ -205,6 +204,10 @@ func (s *AuthService) AuthenticateSession(ctx context.Context, sessionID string,
 		_ = s.store.DeleteSession(ctx, session.ID)
 		return model.Session{}, model.User{}, ForbiddenError("your account has been banned")
 	}
+
+	// Re-evaluate the administrator allowlist at request time so removing a
+	// username from configuration takes effect for already-issued sessions too.
+	user.IsAppAdmin = isAppAdmin(user.Username, s.cfg.App.AdminUsernames)
 
 	if err := s.store.TouchSession(ctx, session.ID); err != nil {
 		return model.Session{}, model.User{}, InternalError("failed to touch session", err)

@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/config"
 )
+
+// emailRoutingRollbackTimeout gives the best-effort rollback a fresh timeout so
+// the cleanup still has a chance to run after the original request context has
+// already expired while persisting the local database mutation.
+const emailRoutingRollbackTimeout = 20 * time.Second
 
 // emailRoutingProvisioner centralizes the Cloudflare Email Routing orchestration
 // shared by both the public user flows and the administrator console.
@@ -71,7 +77,10 @@ func (p emailRoutingProvisioner) SyncForwardingState(ctx context.Context, before
 	}
 
 	if err := persist(); err != nil {
-		if rollbackErr := p.applyForwardingState(ctx, before); rollbackErr != nil {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), emailRoutingRollbackTimeout)
+		defer cancel()
+
+		if rollbackErr := p.applyForwardingState(rollbackCtx, before); rollbackErr != nil {
 			return InternalError(
 				"failed to persist email route after syncing cloudflare email routing; rollback also failed",
 				fmt.Errorf("persist database change: %w; rollback cloudflare route %s: %v", err, before.Address(), rollbackErr),

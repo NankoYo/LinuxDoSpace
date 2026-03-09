@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,6 +203,125 @@ func TestCompleteLoginKeepsOAuthStateReusableAfterTransientFailure(t *testing.T)
 	}
 	if _, err := store.GetOAuthState(ctx, stateID); !sqlite.IsNotFound(err) {
 		t.Fatalf("expected oauth state to be consumed after successful login, got %v", err)
+	}
+}
+
+// TestCompleteLoginConsumesOAuthStateOnlyOnce verifies that two concurrent
+// callbacks racing with the same state can only create a single server session.
+func TestCompleteLoginConsumesOAuthStateOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	service := NewAuthService(config.Config{
+		App: config.AppConfig{
+			SessionTTL:           time.Hour,
+			SessionBindUserAgent: true,
+			AdminVerificationTTL: 30 * time.Minute,
+			AdminUsernames:       []string{"MoYeRanQianZhi", "user2996"},
+		},
+	}, store, staticOAuthClient{
+		profile: model.LinuxDOProfile{
+			ID:             404,
+			Username:       "user2996",
+			Name:           "User 2996",
+			AvatarTemplate: "/user_avatar/linux.do/user2996/{size}/1.png",
+			TrustLevel:     4,
+		},
+	})
+
+	stateID := "state-concurrent-login"
+	if err := store.SaveOAuthState(ctx, model.OAuthState{
+		ID:        stateID,
+		NextPath:  "/settings",
+		ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("save oauth state: %v", err)
+	}
+
+	var successCount atomic.Int32
+	var unauthorizedCount atomic.Int32
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := service.CompleteLogin(ctx, stateID, stateID, "oauth-code", "test-user-agent")
+			if err == nil {
+				successCount.Add(1)
+				return
+			}
+
+			normalized := NormalizeError(err)
+			if normalized.Code == "unauthorized" {
+				unauthorizedCount.Add(1)
+				return
+			}
+			t.Errorf("unexpected concurrent login error: %v", err)
+		}()
+	}
+	wg.Wait()
+
+	if successCount.Load() != 1 {
+		t.Fatalf("expected exactly one successful login, got %d", successCount.Load())
+	}
+	if unauthorizedCount.Load() != 1 {
+		t.Fatalf("expected the second callback to be rejected once the state is consumed, got %d unauthorized errors", unauthorizedCount.Load())
+	}
+
+	var sessionCount int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("expected exactly one session row, got %d", sessionCount)
+	}
+}
+
+// TestAuthenticateSessionReevaluatesAdminAllowlist verifies that removing a
+// username from runtime configuration immediately revokes admin-only access for
+// already-issued sessions without forcing a re-login first.
+func TestAuthenticateSessionReevaluatesAdminAllowlist(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+
+	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
+		LinuxDOUserID:  505,
+		Username:       "user2996",
+		DisplayName:    "User 2996",
+		AvatarURL:      "https://example.com/avatar.png",
+		TrustLevel:     4,
+		IsLinuxDOAdmin: false,
+		IsAppAdmin:     true,
+	})
+	if err != nil {
+		t.Fatalf("upsert admin user: %v", err)
+	}
+
+	session, err := store.CreateSession(ctx, sqlite.CreateSessionInput{
+		ID:                   "runtime-admin-session",
+		UserID:               user.ID,
+		CSRFToken:            "csrf-runtime-admin",
+		UserAgentFingerprint: "test-user-agent",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	service := NewAuthService(config.Config{
+		App: config.AppConfig{
+			SessionTTL:           time.Hour,
+			SessionBindUserAgent: true,
+			AdminUsernames:       []string{"someone-else"},
+		},
+	}, store, nil)
+
+	_, authenticatedUser, err := service.AuthenticateSession(ctx, session.ID, "test-user-agent")
+	if err != nil {
+		t.Fatalf("authenticate session: %v", err)
+	}
+	if authenticatedUser.IsAppAdmin {
+		t.Fatalf("expected runtime admin allowlist revocation to win over the persisted flag")
 	}
 }
 

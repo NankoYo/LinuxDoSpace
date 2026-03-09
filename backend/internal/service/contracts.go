@@ -17,6 +17,7 @@ type Store interface {
 	GetUserByID(ctx context.Context, userID int64) (model.User, error)
 	GetUserByUsername(ctx context.Context, username string) (model.User, error)
 	CreateSession(ctx context.Context, input sqlite.CreateSessionInput) (model.Session, error)
+	CreateSessionFromOAuthState(ctx context.Context, stateID string, input sqlite.CreateSessionInput) (model.Session, error)
 	GetSessionWithUserByID(ctx context.Context, sessionID string) (model.Session, model.User, error)
 	MarkSessionAdminVerified(ctx context.Context, sessionID string, verifiedAt time.Time) error
 	TouchSession(ctx context.Context, sessionID string) error

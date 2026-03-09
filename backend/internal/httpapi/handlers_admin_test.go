@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,6 +51,7 @@ func TestHandleAdminVerifyPasswordRateLimitsRepeatedFailures(t *testing.T) {
 			SessionBindUserAgent: false,
 			SessionTTL:           time.Hour,
 			AdminPassword:        "correct-horse-battery-staple",
+			AdminUsernames:       []string{"user2996"},
 		},
 	}
 
@@ -99,12 +101,12 @@ func TestRequestClientIPIgnoresSpoofedProxyHeaders(t *testing.T) {
 	request.Header.Set("CF-Connecting-IP", "198.51.100.20")
 	request.Header.Set("X-Forwarded-For", "198.51.100.21")
 
-	if got := requestClientIP(request); got != "203.0.113.10" {
+	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "203.0.113.10" {
 		t.Fatalf("expected public remote address to win over spoofed proxy headers, got %q", got)
 	}
 
 	request.RemoteAddr = "127.0.0.1:4567"
-	if got := requestClientIP(request); got != "198.51.100.20" {
+	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "198.51.100.20" {
 		t.Fatalf("expected trusted local proxy hop to expose CF-Connecting-IP, got %q", got)
 	}
 }

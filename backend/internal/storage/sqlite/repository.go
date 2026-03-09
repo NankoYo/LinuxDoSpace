@@ -211,6 +211,75 @@ RETURNING
 	return scanSession(row)
 }
 
+// CreateSessionFromOAuthState atomically consumes one OAuth state and creates
+// the authenticated session in the same SQLite transaction. This prevents two
+// concurrent callbacks from both minting sessions while still allowing retries
+// after upstream failures because the state is only deleted once the session
+// insert succeeds.
+func (s *Store) CreateSessionFromOAuthState(ctx context.Context, stateID string, input CreateSessionInput) (model.Session, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Session{}, err
+	}
+	defer tx.Rollback()
+
+	deleteResult, err := tx.ExecContext(ctx, `DELETE FROM oauth_states WHERE id = ?`, stateID)
+	if err != nil {
+		return model.Session{}, err
+	}
+
+	deletedCount, err := deleteResult.RowsAffected()
+	if err != nil {
+		return model.Session{}, err
+	}
+	if deletedCount == 0 {
+		return model.Session{}, sql.ErrNoRows
+	}
+
+	now := time.Now().UTC()
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO sessions (
+    id,
+    user_id,
+    csrf_token,
+    user_agent_fingerprint,
+    admin_verified_at,
+    expires_at,
+    created_at,
+    last_seen_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING
+    id,
+    user_id,
+    csrf_token,
+    user_agent_fingerprint,
+    admin_verified_at,
+    expires_at,
+    created_at,
+    last_seen_at
+`,
+		input.ID,
+		input.UserID,
+		input.CSRFToken,
+		input.UserAgentFingerprint,
+		formatNullableTime(input.AdminVerifiedAt),
+		formatTime(input.ExpiresAt.UTC()),
+		formatTime(now),
+		formatTime(now),
+	)
+
+	session, err := scanSession(row)
+	if err != nil {
+		return model.Session{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return model.Session{}, err
+	}
+
+	return session, nil
+}
+
 // GetSessionWithUserByID 根据会话 ID 读取会话及其对应的用户信息。
 func (s *Store) GetSessionWithUserByID(ctx context.Context, sessionID string) (model.Session, model.User, error) {
 	row := s.db.QueryRowContext(ctx, `
