@@ -64,7 +64,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -281,7 +281,7 @@ jobs:
           for attempt in $(seq 1 "$MAX_DEPLOY_ATTEMPTS"); do
             echo "Deploy attempt ${attempt}/${MAX_DEPLOY_ATTEMPTS}"
 
-            if timeout "$DOCKER_PULL_TIMEOUT_SECONDS" docker pull "$TARGET_IMAGE" && timeout "$DOCKER_PULL_TIMEOUT_SECONDS" docker compose pull linuxdospace && timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d; then
+            if timeout "$DOCKER_PULL_TIMEOUT_SECONDS" docker pull "$TARGET_IMAGE" && timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d --force-recreate; then
               for health_check_round in $(seq 1 12); do
                 echo "Health check round ${health_check_round}/12"
                 sleep 10
