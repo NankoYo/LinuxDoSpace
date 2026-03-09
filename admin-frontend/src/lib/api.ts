@@ -9,9 +9,11 @@
   AdminUserRecord,
   GenerateRedeemCodesInput,
   ManagedDomain,
+  PermissionPolicy,
   SetUserQuotaInput,
   UpdateAdminUserInput,
   UpdateApplicationInput,
+  UpdatePermissionPolicyInput,
   UpsertAdminDomainRecordInput,
   UpsertEmailRouteInput,
   UpsertManagedDomainInput,
@@ -200,6 +202,18 @@ export function listApplications(): Promise<AdminApplicationRecord[]> {
 
 export function updateApplication(applicationID: number, input: UpdateApplicationInput, csrfToken: string): Promise<AdminApplicationRecord> {
   return request<AdminApplicationRecord>(`/v1/admin/applications/${applicationID}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listPermissionPolicies(): Promise<PermissionPolicy[]> {
+  return request<PermissionPolicy[]>('/v1/admin/permission-policies');
+}
+
+export function updatePermissionPolicy(policyKey: string, input: UpdatePermissionPolicyInput, csrfToken: string): Promise<PermissionPolicy> {
+  return request<PermissionPolicy>(`/v1/admin/permission-policies/${encodeURIComponent(policyKey)}`, {
     method: 'PATCH',
     headers: { 'X-CSRF-Token': csrfToken },
     body: JSON.stringify(input),

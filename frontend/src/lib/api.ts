@@ -7,8 +7,12 @@ import type {
   DNSRecord,
   ManagedDomain,
   MeResponse,
+  SubmitPermissionApplicationInput,
   SupervisionEntry,
+  UpsertMyCatchAllEmailRouteInput,
   UpsertDNSRecordInput,
+  UserEmailRoute,
+  UserPermission,
 } from '../types/api';
 
 // apiBaseURL 用于保存当前前端应该连接的后端地址。
@@ -97,6 +101,38 @@ export function checkAllocationAvailability(rootDomain: string, prefix: string):
 export function createAllocation(input: CreateAllocationInput, csrfToken: string): Promise<Allocation> {
   return request<Allocation>('/v1/my/allocations', {
     method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+// listMyPermissions returns the current authenticated user's permission cards.
+export function listMyPermissions(): Promise<UserPermission[]> {
+  return request<UserPermission[]>('/v1/my/permissions');
+}
+
+// submitPermissionApplication stores one permission application for the current user.
+export function submitPermissionApplication(input: SubmitPermissionApplicationInput, csrfToken: string): Promise<UserPermission> {
+  return request<UserPermission>('/v1/my/permissions/applications', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+// listMyEmailRoutes returns the email forwarding rows visible to the current user.
+export function listMyEmailRoutes(): Promise<UserEmailRoute[]> {
+  return request<UserEmailRoute[]>('/v1/my/email-routes');
+}
+
+// upsertCatchAllEmailRoute creates or updates the user's catch-all forwarding target.
+export function upsertCatchAllEmailRoute(input: UpsertMyCatchAllEmailRouteInput, csrfToken: string): Promise<UserEmailRoute> {
+  return request<UserEmailRoute>('/v1/my/email-routes/catch-all', {
+    method: 'PUT',
     headers: {
       'X-CSRF-Token': csrfToken,
     },

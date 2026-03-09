@@ -301,7 +301,15 @@ export default function App() {
           />
         );
       case 'emails':
-        return <Emails />;
+        return (
+          <Emails
+            authenticated={session.authenticated}
+            sessionLoading={sessionLoading}
+            user={session.user}
+            csrfToken={session.csrfToken}
+            onLogin={() => beginLogin('emails')}
+          />
+        );
       case 'settings':
         return (
           <Settings
@@ -317,7 +325,15 @@ export default function App() {
           />
         );
       case 'permissions':
-        return <Permissions />;
+        return (
+          <Permissions
+            authenticated={session.authenticated}
+            sessionLoading={sessionLoading}
+            user={session.user}
+            onLogin={() => beginLogin('permissions')}
+            onOpenEmails={() => navigateToTab('emails')}
+          />
+        );
       case 'supervision':
         return <Supervision />;
       case 'login':

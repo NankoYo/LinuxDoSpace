@@ -78,6 +78,55 @@ export interface SupervisionEntry {
   owner_display_name: string;
 }
 
+// PermissionStatus mirrors the user-visible lifecycle of one permission request.
+export type PermissionStatus = 'not_requested' | 'pending' | 'approved' | 'rejected';
+
+// PermissionApplicationSummary mirrors the latest application snapshot returned
+// to the public frontend for one permission card.
+export interface PermissionApplicationSummary {
+  id: number;
+  status: Exclude<PermissionStatus, 'not_requested'>;
+  reason: string;
+  review_note: string;
+  reviewed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// UserPermission mirrors one user-visible permission card returned by the
+// backend user-facing permission endpoints.
+export interface UserPermission {
+  key: string;
+  display_name: string;
+  description: string;
+  target: string;
+  pledge_text: string;
+  policy_enabled: boolean;
+  auto_approve: boolean;
+  min_trust_level: number;
+  eligible: boolean;
+  eligibility_reasons: string[];
+  status: PermissionStatus;
+  can_apply: boolean;
+  can_manage_route: boolean;
+  application?: PermissionApplicationSummary;
+}
+
+// UserEmailRoute mirrors one user-manageable email forwarding row.
+export interface UserEmailRoute {
+  id?: number;
+  permission_key: string;
+  address: string;
+  prefix: string;
+  root_domain: string;
+  target_email: string;
+  enabled: boolean;
+  configured: boolean;
+  permission_status: PermissionStatus;
+  can_manage: boolean;
+  updated_at?: string;
+}
+
 // MeResponse 表示 `/v1/me` 返回的数据结构。
 export interface MeResponse {
   authenticated: boolean;
@@ -118,4 +167,16 @@ export interface UpsertDNSRecordInput {
   proxied: boolean;
   comment: string;
   priority?: number;
+}
+
+// SubmitPermissionApplicationInput mirrors the currently supported permission
+// application payload.
+export interface SubmitPermissionApplicationInput {
+  key: string;
+}
+
+// UpsertMyCatchAllEmailRouteInput mirrors the email-forwarding form payload.
+export interface UpsertMyCatchAllEmailRouteInput {
+  target_email: string;
+  enabled: boolean;
 }

@@ -10,6 +10,10 @@ export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
 // RedeemPermissionType mirrors the backend redeem code type field.
 export type RedeemPermissionType = 'single' | 'multiple' | 'wildcard';
 
+// AdminPermissionType extends redeem types with the user-facing permission keys
+// that can also appear inside administrator application records.
+export type AdminPermissionType = RedeemPermissionType | 'email_catch_all';
+
 // AdminUser mirrors the authenticated user/session payload returned by the backend.
 export interface AdminUser {
   id: number;
@@ -158,7 +162,7 @@ export interface AdminApplicationRecord {
   applicant_user_id: number;
   applicant_username: string;
   applicant_name: string;
-  type: RedeemPermissionType;
+  type: AdminPermissionType;
   target: string;
   reason: string;
   status: ApplicationStatus;
@@ -212,6 +216,26 @@ export interface UpdateAdminUserInput {
 export interface UpdateApplicationInput {
   status: ApplicationStatus;
   review_note: string;
+}
+
+// PermissionPolicy mirrors one administrator-editable permission policy row.
+export interface PermissionPolicy {
+  key: string;
+  display_name: string;
+  description: string;
+  enabled: boolean;
+  auto_approve: boolean;
+  min_trust_level: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// UpdatePermissionPolicyInput mirrors the PATCH payload accepted by the
+// permission-policy update endpoint.
+export interface UpdatePermissionPolicyInput {
+  enabled?: boolean;
+  auto_approve?: boolean;
+  min_trust_level?: number;
 }
 
 // GenerateRedeemCodesInput mirrors the batch generation payload.

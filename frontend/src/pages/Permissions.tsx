@@ -1,330 +1,261 @@
-import { useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import {
-  ArrowLeft,
-  CheckCircle,
-  Clock,
-  Key,
-  List,
-  Send,
-  ShieldPlus,
-  Ticket,
-  Trash2,
-  XCircle,
-} from 'lucide-react';
-import confetti from 'canvas-confetti';
+import { useEffect, useMemo, useState } from 'react';
+import { motion } from 'motion/react';
+import { ArrowRight, CheckCircle2, Clock3, Key, Mail, ShieldAlert, Ticket, XCircle } from 'lucide-react';
 import { GlassCard } from '../components/GlassCard';
-import { GlassSelect } from '../components/GlassSelect';
+import { APIError, listMyPermissions } from '../lib/api';
+import type { User, UserPermission } from '../types/api';
 
-// PermissionViewMode 控制权限页在“申请主页”和“记录列表”之间切换。
-type PermissionViewMode = 'main' | 'list';
-
-// PreviewPermission 表示一条本地已获得权限记录。
-interface PreviewPermission {
-  id: number;
-  type: string;
-  target: string;
-  acquiredAt: string;
+// PermissionsProps describes the authenticated session state required by the
+// public permissions page.
+interface PermissionsProps {
+  authenticated: boolean;
+  sessionLoading: boolean;
+  user?: User;
+  onLogin: () => void;
+  onOpenEmails: () => void;
 }
 
-// PreviewApplication 表示一条本地权限申请记录。
-interface PreviewApplication {
-  id: number;
-  type: string;
-  target: string;
-  status: 'approved' | 'pending' | 'rejected';
-  appliedAt: string;
-}
+const emailCatchAllPermissionKey = 'email_catch_all';
 
-// permissionOptions 对应设计稿里可申请的权限类型。
-const permissionOptions = [
-  { value: 'single', label: '某个特定二级域名' },
-  { value: 'multiple', label: '某个域名的任意 X 次注册' },
-  { value: 'wildcard', label: '某个二级域名及其全部子域名 (泛解析)' },
-];
+// Permissions renders the current permission snapshot for the signed-in user.
+// The actual application action lives on the Emails page because that is where
+// the user also reads the pledge text and configures the forwarding target.
+export function Permissions({ authenticated, sessionLoading, user, onLogin, onOpenEmails }: PermissionsProps) {
+  const [permission, setPermission] = useState<UserPermission | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-// Permissions 负责承接新 UI 里的“权限申请”页面。
-// 当前仍是前端预览，兑换和申请不会触发真实后端动作。
-export function Permissions() {
-  const [viewMode, setViewMode] = useState<PermissionViewMode>('main');
-  const [redeemCode, setRedeemCode] = useState('');
-  const [permissionType, setPermissionType] = useState('single');
-  const [targetDomain, setTargetDomain] = useState('');
-  const [applyReason, setApplyReason] = useState('');
-  const [isRedeeming, setIsRedeeming] = useState(false);
-  const [isApplying, setIsApplying] = useState(false);
-  const [redeemedPermissions, setRedeemedPermissions] = useState<PreviewPermission[]>([
-    { id: 1, type: 'single', target: 'api.linuxdo.space', acquiredAt: '2026-03-01' },
-    { id: 2, type: 'multiple', target: '5 次注册额度', acquiredAt: '2026-03-02' },
-  ]);
-  const [applications, setApplications] = useState<PreviewApplication[]>([
-    { id: 1, type: 'wildcard', target: '*.dev.linuxdo.space', status: 'approved', appliedAt: '2026-03-05' },
-    { id: 2, type: 'single', target: 'test.linuxdo.space', status: 'pending', appliedAt: '2026-03-06' },
-    { id: 3, type: 'multiple', target: '10 次注册额度', status: 'rejected', appliedAt: '2026-03-04' },
-  ]);
+  // statusBadge keeps the permission-state copy consistent across the page.
+  const statusBadge = useMemo(() => describePermissionStatus(permission?.status ?? 'not_requested'), [permission?.status]);
 
-  // triggerCelebration 在本地预览动作完成后给出统一的成功反馈。
-  function triggerCelebration(): void {
-    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#2dd4bf', '#34d399', '#0ea5e9'] });
-  }
-
-  // handleRedeem 模拟兑换码兑换流程，并写入本地记录列表。
-  function handleRedeem(event: React.FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    if (redeemCode.trim() === '') {
+  useEffect(() => {
+    if (!authenticated) {
+      setPermission(null);
+      setError('');
       return;
     }
 
-    setIsRedeeming(true);
-    window.setTimeout(() => {
-      setRedeemedPermissions((currentRecords) => [
-        {
-          id: Date.now(),
-          type: 'single',
-          target: `预览兑换：${redeemCode.trim().toUpperCase()}`,
-          acquiredAt: new Date().toISOString().slice(0, 10),
-        },
-        ...currentRecords,
-      ]);
-      setRedeemCode('');
-      setIsRedeeming(false);
-      triggerCelebration();
-    }, 700);
-  }
+    void loadPermissions();
+  }, [authenticated]);
 
-  // handleApply 模拟高级权限申请流程，并跳转到本地记录页。
-  function handleApply(event: React.FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    if (targetDomain.trim() === '' || applyReason.trim().length < 30) {
-      return;
+  // loadPermissions fetches the currently supported permission cards from the backend.
+  async function loadPermissions(): Promise<void> {
+    try {
+      setLoading(true);
+      const items = await listMyPermissions();
+      setPermission(items.find((item) => item.key === emailCatchAllPermissionKey) ?? null);
+      setError('');
+    } catch (loadError) {
+      setError(readableErrorMessage(loadError, '无法加载权限列表。'));
+    } finally {
+      setLoading(false);
     }
-
-    setIsApplying(true);
-    window.setTimeout(() => {
-      setApplications((currentRecords) => [
-        {
-          id: Date.now(),
-          type: permissionType,
-          target: targetDomain.trim(),
-          status: 'pending',
-          appliedAt: new Date().toISOString().slice(0, 10),
-        },
-        ...currentRecords,
-      ]);
-      setTargetDomain('');
-      setApplyReason('');
-      setIsApplying(false);
-      triggerCelebration();
-      setViewMode('list');
-    }, 900);
-  }
-
-  // getTypeLabel 把内部权限类型转换成可读文字。
-  function getTypeLabel(type: string): string {
-    switch (type) {
-      case 'single':
-        return '特定二级域名';
-      case 'multiple':
-        return '多次注册额度';
-      case 'wildcard':
-        return '泛解析';
-      default:
-        return type;
-    }
-  }
-
-  // getStatusMeta 返回当前申请状态的图标和颜色信息。
-  function getStatusMeta(status: PreviewApplication['status']) {
-    if (status === 'approved') {
-      return { label: '已通过', icon: <CheckCircle size={14} />, className: 'bg-emerald-100/80 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300' };
-    }
-    if (status === 'rejected') {
-      return { label: '已拒绝', icon: <XCircle size={14} />, className: 'bg-red-100/80 dark:bg-red-950/40 text-red-700 dark:text-red-300' };
-    }
-    return { label: '审核中', icon: <Clock size={14} />, className: 'bg-amber-100/80 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300' };
-  }
-
-  if (viewMode === 'list') {
-    return (
-      <div className="max-w-6xl mx-auto pt-32 pb-24 px-6">
-        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="mb-8">
-          <button type="button" onClick={() => setViewMode('main')} className="flex items-center gap-2 text-teal-600 dark:text-teal-400 hover:text-teal-700 dark:hover:text-teal-300 transition-colors mb-6 font-medium">
-            <ArrowLeft size={20} />
-            返回申请页
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="p-3 rounded-xl bg-teal-100 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400">
-              <List size={28} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">我的权限记录</h1>
-              <p className="text-gray-500 dark:text-gray-400 text-sm">当前为前端预览列表，用于确认新 UI 的分组和信息密度</p>
-            </div>
-          </div>
-        </motion.div>
-
-        <div className="space-y-8">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">已获得权限</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {redeemedPermissions.map((item) => (
-                <GlassCard key={item.id}>
-                  <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold bg-teal-100/80 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300">
-                    <Ticket size={13} />
-                    已兑换
-                  </div>
-                  <h3 className="mt-4 text-lg font-bold text-gray-900 dark:text-white">{getTypeLabel(item.type)}</h3>
-                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-300 break-all">{item.target}</p>
-                  <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">获得时间：{item.acquiredAt}</div>
-                </GlassCard>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">申请进度</h2>
-            <div className="space-y-4">
-              <AnimatePresence>
-                {applications.map((application) => {
-                  const statusMeta = getStatusMeta(application.status);
-                  return (
-                    <motion.div key={application.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                      <GlassCard>
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                          <div>
-                            <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold bg-white/45 dark:bg-black/35 text-gray-700 dark:text-gray-300">
-                              <ShieldPlus size={13} />
-                              {getTypeLabel(application.type)}
-                            </div>
-                            <h3 className="mt-3 text-lg font-bold text-gray-900 dark:text-white break-all">{application.target}</h3>
-                            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">申请时间：{application.appliedAt}</p>
-                          </div>
-                          <div className="flex items-center gap-3 justify-between md:justify-end">
-                            <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${statusMeta.className}`}>
-                              {statusMeta.icon}
-                              {statusMeta.label}
-                            </div>
-                            <button type="button" onClick={() => setApplications((currentRecords) => currentRecords.filter((record) => record.id !== application.id))} className="p-2 rounded-lg hover:bg-white/50 dark:hover:bg-white/10 text-red-600 dark:text-red-400 transition-colors" aria-label={`删除 ${application.target}`}>
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </div>
-                      </GlassCard>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
-    <div className="max-w-6xl mx-auto pt-32 pb-24 px-6">
-      <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="mb-10 text-center">
-        <div className="inline-flex items-center justify-center p-3 mb-4 rounded-full bg-teal-100 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400">
-          <ShieldPlus size={32} />
+    <div className="mx-auto max-w-6xl px-6 pb-24 pt-32">
+      <motion.div initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="mb-10 text-center">
+        <div className="mb-4 inline-flex items-center justify-center rounded-full bg-emerald-100 p-3 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+          <Key size={32} />
         </div>
-        <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 dark:text-white mb-4">权限申请</h1>
-        <p className="text-lg text-gray-700 dark:text-gray-300 max-w-3xl mx-auto">新设计稿页面已接入前端，兑换码和高级权限申请暂时只提供本地预览，不会触发真实审批。</p>
+        <h1 className="mb-4 text-3xl font-extrabold text-gray-900 dark:text-white md:text-4xl">权限中心</h1>
+        <p className="mx-auto max-w-3xl text-lg text-gray-700 dark:text-gray-300">
+          当前页面展示你已经拥有或正在申请中的高级能力。现阶段已接入的真实功能是邮箱泛解析权限，其他权限入口会在后续版本逐步开放。
+        </p>
       </motion.div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
-        <div className="lg:col-span-2 space-y-6">
-          <GlassCard>
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 p-2 rounded-2xl bg-amber-100/80 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300">
-                <Ticket size={18} />
-              </div>
-              <div>
-                <div className="text-base font-bold text-gray-900 dark:text-white">当前为前端预览页</div>
-                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300 leading-relaxed">当前页面用于确认新 UI 下的兑换、申请、记录查看三块结构是否合理。后端接口将在后续版本接入。</div>
-              </div>
-            </div>
-            <button type="button" onClick={() => setViewMode('list')} className="mt-5 w-full flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-white/45 dark:bg-black/35 hover:bg-white/60 dark:hover:bg-black/50 text-gray-900 dark:text-white font-medium transition-all">
-              <List size={18} />
-              查看我的预览记录
-            </button>
-          </GlassCard>
-
-          <GlassCard>
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 rounded-xl bg-teal-100 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400">
-                <Key size={24} />
-              </div>
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">兑换权限码</h2>
-            </div>
-            <form onSubmit={handleRedeem} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">兑换码</label>
-                <input
-                  type="text"
-                  value={redeemCode}
-                  onChange={(event) => setRedeemCode(event.target.value)}
-                  placeholder="输入兑换码，例如：LINUXDO-2026"
-                  className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white font-mono"
-                />
-              </div>
-              <button type="submit" disabled={redeemCode.trim() === '' || isRedeeming} className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium shadow-lg transition-all">
-                <Key size={18} />
-                {isRedeeming ? '兑换中...' : '立即兑换'}
-              </button>
-            </form>
-          </GlassCard>
+      {error ? (
+        <div className="mb-6 rounded-2xl border border-red-300/50 bg-red-50/80 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-950/30 dark:text-red-200">
+          {error}
         </div>
+      ) : null}
 
-        <div className="lg:col-span-3">
-          <GlassCard>
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400">
-                <Send size={24} />
+      {!authenticated ? (
+        <GlassCard className="mx-auto max-w-3xl text-center">
+          <div className="mb-4 inline-flex items-center justify-center rounded-full bg-white/60 p-3 text-emerald-600 dark:bg-white/10 dark:text-emerald-300">
+            <ShieldAlert size={28} />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">登录后查看你的权限状态</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-gray-600 dark:text-gray-300">
+            权限申请和审核记录与 Linux Do OAuth 身份绑定，未登录时不会展示任何个人申请信息。
+          </p>
+          <button
+            type="button"
+            onClick={onLogin}
+            className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-[#1a1a1a] px-6 py-3 font-bold text-white shadow-lg transition-all hover:bg-black dark:bg-white dark:text-black dark:hover:bg-gray-100"
+          >
+            <ArrowRight size={18} />
+            使用 Linux Do 登录
+          </button>
+        </GlassCard>
+      ) : (
+        <>
+          {(sessionLoading || loading) && (
+            <GlassCard className="mb-6 text-sm text-gray-600 dark:text-gray-300">正在加载你的权限状态...</GlassCard>
+          )}
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <GlassCard className="lg:col-span-2">
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <span className="rounded-full bg-white/55 px-3 py-1 text-xs font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">当前可用权限</span>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge.className}`}>{statusBadge.label}</span>
               </div>
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">申请高级权限</h2>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{permission?.display_name ?? 'catch-all@<username>.linuxdo.space'}</h2>
+              <div className="mt-3 font-mono text-sm text-emerald-700 dark:text-emerald-300">{permission?.target ?? `catch-all@${user?.username ?? 'username'}.linuxdo.space`}</div>
+              <p className="mt-4 text-sm leading-7 text-gray-600 dark:text-gray-300">
+                {permission?.description ?? '为与你用户名同名的默认二级域名开启一个 catch-all 邮箱转发入口。'}
+              </p>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="rounded-3xl border border-white/20 bg-white/35 p-5 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                    <Ticket size={18} />
+                    自动通过条件
+                  </div>
+                  <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">
+                    Linux Do 等级需至少达到 <span className="font-bold text-emerald-600 dark:text-emerald-300">{permission?.min_trust_level ?? 2}</span>，并且需要已经持有与用户名同名的默认二级域名。
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-white/20 bg-white/35 p-5 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white">
+                    <Mail size={18} />
+                    申请入口
+                  </div>
+                  <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">
+                    该权限需要在“邮箱泛解析”页面中手动点击申请，并确认承诺书后提交。申请记录会同步保留在管理员后台。
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenEmails}
+                    className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 px-5 py-3 font-medium text-white shadow-lg transition-all hover:from-emerald-600 hover:to-teal-700"
+                  >
+                    <ArrowRight size={18} />
+                    前往邮箱页面
+                  </button>
+                </div>
+              </div>
+
+              {permission?.eligibility_reasons?.length ? (
+                <div className="mt-6 rounded-2xl border border-amber-300/40 bg-amber-50/80 p-4 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-950/25 dark:text-amber-200">
+                  <div className="mb-2 flex items-center gap-2 font-semibold">
+                    <ShieldAlert size={16} />
+                    当前不可直接申请
+                  </div>
+                  <div className="space-y-2 leading-6">
+                    {permission.eligibility_reasons.map((reason) => (
+                      <div key={reason}>- {reason}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </GlassCard>
+
+            <GlassCard>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">状态概览</h2>
+              <div className="mt-4 space-y-3 text-sm leading-7 text-gray-600 dark:text-gray-300">
+                <div className="rounded-2xl bg-white/40 px-4 py-3 dark:bg-white/5">
+                  当前状态：<span className="font-semibold text-gray-900 dark:text-white">{statusBadge.label}</span>
+                </div>
+                <div className="rounded-2xl bg-white/40 px-4 py-3 dark:bg-white/5">
+                  自动通过：<span className="font-semibold text-gray-900 dark:text-white">{permission?.auto_approve ? '开启' : '关闭'}</span>
+                </div>
+                <div className="rounded-2xl bg-white/40 px-4 py-3 dark:bg-white/5">
+                  当前账号：<span className="font-semibold text-gray-900 dark:text-white">{user?.username ?? '-'}</span>
+                </div>
+              </div>
+            </GlassCard>
+          </div>
+
+          <GlassCard className="mt-6">
+            <div className="mb-5 flex items-center gap-3">
+              <div className="rounded-2xl bg-amber-100 p-3 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                <Clock3 size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white">最新申请记录</h2>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">这里只显示当前权限的最新状态快照，管理员后台会保留审核轨迹。</p>
+              </div>
             </div>
 
-            <form onSubmit={handleApply} className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">申请权限类型</label>
-                  <GlassSelect options={permissionOptions} value={permissionType} onChange={setPermissionType} />
+            {permission?.application ? (
+              <div className="grid gap-4 lg:grid-cols-4">
+                <div className="rounded-2xl border border-white/20 bg-white/35 px-4 py-4 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-1 text-xs uppercase tracking-[0.24em] text-gray-400">申请状态</div>
+                  <div className="flex items-center gap-2 font-semibold text-gray-900 dark:text-white">
+                    {permission.application.status === 'approved' ? <CheckCircle2 size={18} className="text-emerald-500" /> : permission.application.status === 'rejected' ? <XCircle size={18} className="text-red-500" /> : <Clock3 size={18} className="text-amber-500" />}
+                    {describePermissionStatus(permission.application.status).label}
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">目标域名/前缀</label>
-                  <input
-                    type="text"
-                    value={targetDomain}
-                    onChange={(event) => setTargetDomain(event.target.value)}
-                    placeholder="例如：api.linuxdo.space"
-                    className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
-                    required
-                  />
+                <div className="rounded-2xl border border-white/20 bg-white/35 px-4 py-4 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-1 text-xs uppercase tracking-[0.24em] text-gray-400">提交时间</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">{formatDate(permission.application.created_at)}</div>
+                </div>
+                <div className="rounded-2xl border border-white/20 bg-white/35 px-4 py-4 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-1 text-xs uppercase tracking-[0.24em] text-gray-400">最近变更</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">{formatDate(permission.application.updated_at)}</div>
+                </div>
+                <div className="rounded-2xl border border-white/20 bg-white/35 px-4 py-4 dark:border-white/10 dark:bg-black/20">
+                  <div className="mb-1 text-xs uppercase tracking-[0.24em] text-gray-400">审核备注</div>
+                  <div className="text-sm text-gray-700 dark:text-gray-200">{permission.application.review_note || '暂无审核备注'}</div>
                 </div>
               </div>
-
-              <div>
-                <div className="flex justify-between items-end mb-2 gap-3">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">申请原因 (不少于 30 字)</label>
-                  <span className={`text-xs font-mono ${applyReason.length >= 30 ? 'text-teal-600 dark:text-teal-400' : 'text-red-500'}`}>{applyReason.length} / 30</span>
-                </div>
-                <textarea
-                  value={applyReason}
-                  onChange={(event) => setApplyReason(event.target.value)}
-                  placeholder="请描述申请用途、项目背景和预期使用方式，便于后续接入真实审核流程时复用这块 UI。"
-                  rows={5}
-                  className="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white resize-none"
-                />
+            ) : (
+              <div className="rounded-2xl border border-dashed border-white/25 bg-white/25 px-5 py-8 text-sm text-gray-600 dark:border-white/10 dark:bg-black/15 dark:text-gray-300">
+                当前还没有提交过该权限申请。需要时请前往邮箱页面发起申请。
               </div>
-
-              <button type="submit" disabled={applyReason.trim().length < 30 || targetDomain.trim() === '' || isApplying} className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium shadow-lg transition-all">
-                <Send size={18} />
-                {isApplying ? '提交中...' : '提交申请'}
-              </button>
-            </form>
+            )}
           </GlassCard>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
+}
+
+// describePermissionStatus keeps wording and visual tone aligned with the email page.
+function describePermissionStatus(status: UserPermission['status']) {
+  switch (status) {
+    case 'approved':
+      return {
+        label: '已通过',
+        className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300',
+      };
+    case 'pending':
+      return {
+        label: '待审核',
+        className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300',
+      };
+    case 'rejected':
+      return {
+        label: '未通过',
+        className: 'bg-red-100 text-red-700 dark:bg-red-900/25 dark:text-red-300',
+      };
+    default:
+      return {
+        label: '尚未申请',
+        className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+      };
+  }
+}
+
+// readableErrorMessage extracts the most relevant message from one request failure.
+function readableErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof APIError) {
+    return error.message;
+  }
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
+  }
+  return fallback;
+}
+
+// formatDate renders timestamps with one shared locale-aware formatter.
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
 }

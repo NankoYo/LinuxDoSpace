@@ -55,6 +55,38 @@ Returns the current public-site session, user payload, CSRF token, and visible a
 ### `GET /v1/my/allocations`
 Lists the current user's visible allocation namespaces.
 
+### `GET /v1/my/permissions`
+Returns the current authenticated user's visible permission cards.
+The current release exposes the `email_catch_all` permission used by the public email page.
+
+### `POST /v1/my/permissions/applications`
+Creates or refreshes one permission application for the current user.
+For `email_catch_all`, the backend stores a canonical pledge text server-side and may auto-approve the request when the configured policy allows it.
+
+Request example:
+
+```json
+{
+  "key": "email_catch_all"
+}
+```
+
+### `GET /v1/my/email-routes`
+Returns the current user's visible email forwarding rows.
+At the moment this endpoint returns the placeholder or persisted row for `catch-all@<username>.linuxdo.space`.
+
+### `PUT /v1/my/email-routes/catch-all`
+Creates or updates the current user's catch-all forwarding target after the permission has been approved.
+
+Request example:
+
+```json
+{
+  "target_email": "owner@example.com",
+  "enabled": true
+}
+```
+
 ### `POST /v1/my/allocations`
 Creates a new allocation namespace for the current user.
 
@@ -199,6 +231,22 @@ Deletes one email forwarding rule.
 
 ### `GET /v1/admin/applications`
 Returns all moderation requests visible to the administrator console.
+
+### `GET /v1/admin/permission-policies`
+Returns the administrator-configurable policy rows that control permission eligibility and auto-approval.
+
+### `PATCH /v1/admin/permission-policies/{policyKey}`
+Updates one permission-policy row.
+
+Request example:
+
+```json
+{
+  "enabled": true,
+  "auto_approve": true,
+  "min_trust_level": 2
+}
+```
 
 ### `PATCH /v1/admin/applications/{applicationID}`
 Updates one moderation request state.
