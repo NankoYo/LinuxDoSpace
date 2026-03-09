@@ -85,6 +85,13 @@ type UpsertEmailRouteRequest struct {
 	Enabled     bool   `json:"enabled"`
 }
 
+// UpdateEmailRouteRequest describes the actually mutable fields supported by
+// the administrator email-route PATCH endpoint.
+type UpdateEmailRouteRequest struct {
+	TargetEmail string `json:"target_email"`
+	Enabled     bool   `json:"enabled"`
+}
+
 // UpdateApplicationRequest describes the moderation action performed on one request row.
 type UpdateApplicationRequest struct {
 	Status     string `json:"status"`
@@ -631,20 +638,18 @@ func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.create", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.create",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return model.EmailRoute{}, InternalError("failed to write email route audit log", err)
-	}
+	}))
 	return item, nil
 }
 
 // UpdateEmailRoute updates the mutable fields of one email forwarding rule.
-func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, routeID int64, request UpsertEmailRouteRequest) (model.EmailRoute, error) {
+func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, routeID int64, request UpdateEmailRouteRequest) (model.EmailRoute, error) {
 	routing := newEmailRoutingProvisioner(s.cfg, s.cf)
 
 	if _, err := mail.ParseAddress(strings.TrimSpace(request.TargetEmail)); err != nil {
@@ -685,15 +690,13 @@ func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.update",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return model.EmailRoute{}, InternalError("failed to write email route update audit log", err)
-	}
+	}))
 	return item, nil
 }
 
@@ -732,15 +735,13 @@ func (s *AdminService) DeleteEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": routeID})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.delete", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.delete",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(routeID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return InternalError("failed to write email route delete audit log", err)
-	}
+	}))
 	return nil
 }
 
@@ -760,6 +761,19 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 		return model.AdminApplication{}, ValidationError("status must be pending, approved, or rejected")
 	}
 
+	currentApplication, err := s.findAdminApplicationByID(ctx, applicationID)
+	if err != nil {
+		return model.AdminApplication{}, err
+	}
+
+	nextApplication := currentApplication
+	nextApplication.Status = status
+	nextApplication.ReviewNote = strings.TrimSpace(request.ReviewNote)
+	nextApplication.ReviewedByUserID = &actor.ID
+	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, nextApplication); err != nil {
+		return model.AdminApplication{}, err
+	}
+
 	item, err := s.db.UpdateAdminApplication(ctx, sqlite.UpdateAdminApplicationInput{
 		ID:               applicationID,
 		Status:           status,
@@ -772,20 +786,14 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 		}
 		return model.AdminApplication{}, InternalError("failed to update admin application", err)
 	}
-	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, item); err != nil {
-		return model.AdminApplication{}, err
-	}
-
 	metadata, _ := json.Marshal(map[string]any{"application_id": item.ID, "status": item.Status})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.application.update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.application.update",
 		ResourceType: "admin_application",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return model.AdminApplication{}, InternalError("failed to write application audit log", err)
-	}
+	}))
 	return item, nil
 }
 
@@ -836,16 +844,30 @@ func (s *AdminService) disableCatchAllEmailRouteForApplication(ctx context.Conte
 		"address":        updated.Prefix + "@" + updated.RootDomain,
 		"status":         application.Status,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.disable_on_permission_update",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(updated.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return InternalError("failed to write catch-all disable audit log", err)
-	}
+	}))
 	return nil
+}
+
+// findAdminApplicationByID locates one moderation request without mutating it.
+// The moderation flow uses this to disable privileged side effects before the
+// stored status flips away from approved.
+func (s *AdminService) findAdminApplicationByID(ctx context.Context, applicationID int64) (model.AdminApplication, error) {
+	items, err := s.db.ListAdminApplications(ctx)
+	if err != nil {
+		return model.AdminApplication{}, InternalError("failed to load admin applications", err)
+	}
+	for _, item := range items {
+		if item.ID == applicationID {
+			return item, nil
+		}
+	}
+	return model.AdminApplication{}, NotFoundError("application not found")
 }
 
 // ListRedeemCodes returns all generated redeem codes.

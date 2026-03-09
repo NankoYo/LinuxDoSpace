@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,7 +16,9 @@ import (
 // staticOAuthClient is a deterministic OAuth stub used to exercise the real
 // login completion path against a temporary SQLite database.
 type staticOAuthClient struct {
-	profile model.LinuxDOProfile
+	profile     model.LinuxDOProfile
+	exchangeErr error
+	userErr     error
 }
 
 // Configured reports that the stub is ready to exchange and resolve the fixed profile.
@@ -32,11 +35,17 @@ func (c staticOAuthClient) BuildAuthorizationURL(state string, codeChallenge str
 // ExchangeCode returns one fixed access token because these tests only care
 // about the authorization result stored after callback completion.
 func (c staticOAuthClient) ExchangeCode(ctx context.Context, code string, codeVerifier string) (linuxdo.TokenResponse, error) {
+	if c.exchangeErr != nil {
+		return linuxdo.TokenResponse{}, c.exchangeErr
+	}
 	return linuxdo.TokenResponse{AccessToken: "test-access-token"}, nil
 }
 
 // GetCurrentUser returns the fixed Linux Do profile configured for the test case.
 func (c staticOAuthClient) GetCurrentUser(ctx context.Context, accessToken string) (model.LinuxDOProfile, error) {
+	if c.userErr != nil {
+		return model.LinuxDOProfile{}, c.userErr
+	}
 	return c.profile, nil
 }
 
@@ -121,6 +130,77 @@ func TestCompleteLoginOnlyGrantsAdminToConfiguredUsernames(t *testing.T) {
 				t.Fatalf("expected persisted app admin=%v, got %v", testCase.expectedIsAppAdmin, persistedUser.IsAppAdmin)
 			}
 		})
+	}
+}
+
+// TestCompleteLoginKeepsOAuthStateReusableAfterTransientFailure verifies that
+// an upstream Linux Do timeout does not permanently burn the local OAuth state.
+func TestCompleteLoginKeepsOAuthStateReusableAfterTransientFailure(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+
+	serviceWithFailure := NewAuthService(config.Config{
+		App: config.AppConfig{
+			SessionTTL:           time.Hour,
+			SessionBindUserAgent: true,
+			AdminVerificationTTL: 30 * time.Minute,
+			AdminUsernames:       []string{"MoYeRanQianZhi", "user2996"},
+		},
+	}, store, staticOAuthClient{
+		profile: model.LinuxDOProfile{
+			ID:             303,
+			Username:       "user2996",
+			Name:           "User 2996",
+			AvatarTemplate: "/user_avatar/linux.do/user2996/{size}/1.png",
+			TrustLevel:     4,
+		},
+		exchangeErr: errors.New("linuxdo timeout"),
+	})
+
+	stateID := "state-retryable-login"
+	if err := store.SaveOAuthState(ctx, model.OAuthState{
+		ID:        stateID,
+		NextPath:  "/settings",
+		ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("save oauth state: %v", err)
+	}
+
+	if _, err := serviceWithFailure.CompleteLogin(ctx, stateID, stateID, "oauth-code", "test-user-agent"); err == nil {
+		t.Fatalf("expected transient oauth exchange failure")
+	}
+
+	if _, err := store.GetOAuthState(ctx, stateID); err != nil {
+		t.Fatalf("expected oauth state to remain reusable after transient failure, got %v", err)
+	}
+
+	serviceWithSuccess := NewAuthService(config.Config{
+		App: config.AppConfig{
+			SessionTTL:           time.Hour,
+			SessionBindUserAgent: true,
+			AdminVerificationTTL: 30 * time.Minute,
+			AdminUsernames:       []string{"MoYeRanQianZhi", "user2996"},
+		},
+	}, store, staticOAuthClient{
+		profile: model.LinuxDOProfile{
+			ID:             303,
+			Username:       "user2996",
+			Name:           "User 2996",
+			AvatarTemplate: "/user_avatar/linux.do/user2996/{size}/1.png",
+			TrustLevel:     4,
+		},
+	})
+
+	result, err := serviceWithSuccess.CompleteLogin(ctx, stateID, stateID, "oauth-code", "test-user-agent")
+	if err != nil {
+		t.Fatalf("retry complete login: %v", err)
+	}
+	if result.NextPath != "/settings" {
+		t.Fatalf("expected next path /settings, got %q", result.NextPath)
+	}
+	if _, err := store.GetOAuthState(ctx, stateID); !sqlite.IsNotFound(err) {
+		t.Fatalf("expected oauth state to be consumed after successful login, got %v", err)
 	}
 }
 

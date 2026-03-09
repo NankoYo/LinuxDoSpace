@@ -241,7 +241,7 @@ func (a *API) requireVerifiedAdmin(w http.ResponseWriter, r *http.Request) (*mod
 	if !ok {
 		return nil, nil, false
 	}
-	if session.AdminVerifiedAt == nil {
+	if !service.AdminVerificationIsFresh(session.AdminVerifiedAt, a.config.App.AdminVerificationTTL, time.Now().UTC()) {
 		writeError(w, &service.Error{
 			StatusCode: http.StatusForbidden,
 			Code:       "admin_password_required",
@@ -280,23 +280,55 @@ func (a *API) frontendRedirectURL(target string, nextPath string) string {
 // requestClientIP extracts the best available client IP from trusted reverse-
 // proxy headers and finally falls back to RemoteAddr for local development.
 func requestClientIP(r *http.Request) string {
-	if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
-		return value
-	}
-	if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
-		parts := strings.Split(forwardedFor, ",")
-		if len(parts) > 0 {
-			if candidate := strings.TrimSpace(parts[0]); candidate != "" {
-				return candidate
+	if trustedProxyPeer(r.RemoteAddr) {
+		if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
+			return value
+		}
+		if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
+			parts := strings.Split(forwardedFor, ",")
+			if len(parts) > 0 {
+				if candidate := strings.TrimSpace(parts[0]); candidate != "" {
+					return candidate
+				}
 			}
 		}
+		if value := strings.TrimSpace(r.Header.Get("X-Real-IP")); value != "" {
+			return value
+		}
 	}
-	if value := strings.TrimSpace(r.Header.Get("X-Real-IP")); value != "" {
-		return value
-	}
+
 	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err == nil && strings.TrimSpace(host) != "" {
 		return strings.TrimSpace(host)
 	}
 	return strings.TrimSpace(r.RemoteAddr)
+}
+
+// trustedProxyPeer reports whether the direct peer is one of the local reverse
+// proxies that is allowed to supply client-IP forwarding headers.
+func trustedProxyPeer(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		switch {
+		case ipv4[0] == 10:
+			return true
+		case ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31:
+			return true
+		case ipv4[0] == 192 && ipv4[1] == 168:
+			return true
+		default:
+			return false
+		}
+	}
+	return ip.IsPrivate()
 }

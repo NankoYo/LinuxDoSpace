@@ -22,7 +22,9 @@ type Store interface {
 	TouchSession(ctx context.Context, sessionID string) error
 	DeleteSession(ctx context.Context, sessionID string) error
 	SaveOAuthState(ctx context.Context, state model.OAuthState) error
+	GetOAuthState(ctx context.Context, stateID string) (model.OAuthState, error)
 	ConsumeOAuthState(ctx context.Context, stateID string) (model.OAuthState, error)
+	DeleteOAuthState(ctx context.Context, stateID string) error
 	GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error)
 	UpsertUserControl(ctx context.Context, input sqlite.UpsertUserControlInput) (model.UserControl, error)
 	ListAdminUsers(ctx context.Context) ([]model.AdminUserSummary, error)

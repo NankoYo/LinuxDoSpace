@@ -141,6 +141,22 @@ function readableErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+// authErrorMessage converts OAuth callback error codes into public-site copy.
+function authErrorMessage(raw: string | null): string {
+  switch ((raw || '').trim().toLowerCase()) {
+    case 'forbidden':
+      return '当前账号暂时无法登录 LinuxDoSpace。';
+    case 'service_unavailable':
+      return 'Linux Do 登录暂时不可用，请稍后重试。';
+    case 'unauthorized':
+      return '登录状态校验失败，请重新发起登录。';
+    case 'validation_error':
+      return '登录回调参数不完整，请重新发起登录。';
+    default:
+      return raw ? `登录失败：${raw}` : '';
+  }
+}
+
 // App coordinates page switching, session refresh, and the shared public layout.
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>(() => pathToTab(window.location.pathname));
@@ -152,7 +168,7 @@ export default function App() {
     allocations: [],
   });
   const [sessionLoading, setSessionLoading] = useState(true);
-  const [sessionError, setSessionError] = useState('');
+  const [sessionError, setSessionError] = useState(() => authErrorMessage(new URLSearchParams(window.location.search).get('auth_error')));
   const [publicDomains, setPublicDomains] = useState<ManagedDomain[]>([]);
   const [domainsLoading, setDomainsLoading] = useState(true);
   const [domainsError, setDomainsError] = useState('');
@@ -172,6 +188,16 @@ export default function App() {
       // Ignore storage write failures and keep the current in-memory choice.
     }
   }, [animeBackgroundEnabled]);
+
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    if (search.has('auth_error')) {
+      search.delete('auth_error');
+      const nextSearch = search.toString();
+      const nextURL = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', nextURL);
+    }
+  }, []);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
@@ -220,10 +246,23 @@ export default function App() {
       setSession(normalizeSessionResponse(response));
       setSessionError('');
     } catch (error) {
-      setSession({
-        authenticated: false,
-        oauthConfigured: false,
-        allocations: [],
+      const shouldClearSession = error instanceof APIError && (error.code === 'unauthorized' || error.code === 'forbidden');
+      setSession((current) => {
+        if (shouldClearSession) {
+          return {
+            authenticated: false,
+            oauthConfigured: current.oauthConfigured,
+            allocations: [],
+          };
+        }
+        if (current.authenticated) {
+          return current;
+        }
+        return {
+          authenticated: false,
+          oauthConfigured: current.oauthConfigured,
+          allocations: [],
+        };
       });
       setSessionError(readableErrorMessage(error, '无法加载当前登录状态'));
     } finally {
@@ -306,6 +345,7 @@ export default function App() {
             authenticated={session.authenticated}
             sessionLoading={sessionLoading}
             user={session.user}
+            publicDomains={publicDomains}
             csrfToken={session.csrfToken}
             onLogin={() => beginLogin('emails')}
           />

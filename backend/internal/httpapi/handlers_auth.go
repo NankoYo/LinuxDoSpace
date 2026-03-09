@@ -46,12 +46,12 @@ func (a *API) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("linuxdo oauth callback failed: %v", err)
 		a.clearOAuthStateCookie(w)
 		a.clearOAuthTargetCookie(w)
+		normalized := service.NormalizeError(err)
+		redirectTarget := oauthTargetApp
 		if normalizeOAuthTarget(target) == oauthTargetAdmin {
-			normalized := service.NormalizeError(err)
-			http.Redirect(w, r, a.frontendRedirectURL(oauthTargetAdmin, "/?auth_error="+url.QueryEscape(normalized.Code)), http.StatusFound)
-			return
+			redirectTarget = oauthTargetAdmin
 		}
-		writeError(w, err)
+		http.Redirect(w, r, a.frontendRedirectURL(redirectTarget, "/?auth_error="+url.QueryEscape(normalized.Code)), http.StatusFound)
 		return
 	}
 

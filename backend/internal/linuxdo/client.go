@@ -113,7 +113,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier str
 		return TokenResponse{}, fmt.Errorf("read linuxdo token response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return TokenResponse{}, fmt.Errorf("linuxdo token request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return TokenResponse{}, fmt.Errorf("linuxdo token request failed with status %d", response.StatusCode)
 	}
 
 	var token TokenResponse
@@ -121,7 +121,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, codeVerifier str
 		return TokenResponse{}, fmt.Errorf("decode linuxdo token response: %w", err)
 	}
 	if strings.TrimSpace(token.AccessToken) == "" {
-		return TokenResponse{}, fmt.Errorf("linuxdo token response did not contain access_token: %s", strings.TrimSpace(string(body)))
+		return TokenResponse{}, fmt.Errorf("linuxdo token response did not contain access_token")
 	}
 
 	return token, nil
@@ -147,7 +147,7 @@ func (c *Client) GetCurrentUser(ctx context.Context, accessToken string) (model.
 		return model.LinuxDOProfile{}, fmt.Errorf("read linuxdo userinfo response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo request failed with status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo request failed with status %d", response.StatusCode)
 	}
 
 	var direct model.LinuxDOProfile
@@ -160,7 +160,7 @@ func (c *Client) GetCurrentUser(ctx context.Context, accessToken string) (model.
 		return model.LinuxDOProfile{}, fmt.Errorf("decode linuxdo userinfo response: %w", err)
 	}
 	if envelope.User.Username == "" {
-		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo response did not contain username: %s", strings.TrimSpace(string(body)))
+		return model.LinuxDOProfile{}, fmt.Errorf("linuxdo userinfo response did not contain username")
 	}
 	return envelope.User, nil
 }

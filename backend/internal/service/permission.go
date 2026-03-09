@@ -226,15 +226,13 @@ func (s *PermissionService) SubmitPermissionApplication(ctx context.Context, use
 		"target":         item.Target,
 		"status":         item.Status,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("permission.application.submit", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "permission.application.submit",
 		ResourceType: "admin_application",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return UserPermissionView{}, InternalError("failed to write permission application audit log", err)
-	}
+	}))
 
 	return s.loadEmailCatchAllPermission(ctx, user)
 }
@@ -344,15 +342,13 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		"permission_key": PermissionKeyEmailCatchAll,
 		"address":        item.Prefix + "@" + item.RootDomain,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("email_route.catch_all.upsert", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "email_route.catch_all.upsert",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return UserEmailRouteView{}, InternalError("failed to write catch-all email route audit log", err)
-	}
+	}))
 
 	updatedAt := item.UpdatedAt
 	return normalizeUserEmailRouteCopy(UserEmailRouteView{
@@ -485,6 +481,19 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 	}
 
 	now := time.Now().UTC()
+	nextApplication := model.AdminApplication{
+		ID:     0,
+		Type:   PermissionKeyEmailCatchAll,
+		Target: permission.Target,
+		Status: status,
+	}
+	if permission.Application != nil {
+		nextApplication.ID = permission.Application.ID
+	}
+	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, nextApplication); err != nil {
+		return UserPermissionView{}, err
+	}
+
 	item, err := s.db.UpsertAdminApplication(ctx, sqlite.UpsertAdminApplicationInput{
 		ApplicantUserID:  user.ID,
 		Type:             PermissionKeyEmailCatchAll,
@@ -499,25 +508,19 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 		return UserPermissionView{}, InternalError("failed to set target user permission", err)
 	}
 
-	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, item); err != nil {
-		return UserPermissionView{}, err
-	}
-
 	metadata, _ := json.Marshal(map[string]any{
 		"application_id": item.ID,
 		"permission_key": PermissionKeyEmailCatchAll,
 		"target_user_id": user.ID,
 		"status":         item.Status,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.permission.user_set", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.permission.user_set",
 		ResourceType: "admin_application",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return UserPermissionView{}, InternalError("failed to write admin permission audit log", err)
-	}
+	}))
 
 	return s.loadEmailCatchAllPermission(ctx, user)
 }
@@ -813,14 +816,12 @@ func (s *PermissionService) disableCatchAllEmailRouteForApplication(ctx context.
 		"address":        updated.Prefix + "@" + updated.RootDomain,
 		"status":         application.Status,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.disable_on_permission_update",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(updated.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return InternalError("failed to write catch-all disable audit log", err)
-	}
+	}))
 	return nil
 }

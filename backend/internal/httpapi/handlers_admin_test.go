@@ -90,6 +90,56 @@ WHERE action = 'admin.session.verify_password_failed'
 	}
 }
 
+// TestRequestClientIPIgnoresSpoofedProxyHeaders verifies that the limiter no
+// longer trusts client-supplied forwarding headers unless the direct peer is a
+// trusted local proxy hop.
+func TestRequestClientIPIgnoresSpoofedProxyHeaders(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/v1/admin/verify-password", nil)
+	request.RemoteAddr = "203.0.113.10:4567"
+	request.Header.Set("CF-Connecting-IP", "198.51.100.20")
+	request.Header.Set("X-Forwarded-For", "198.51.100.21")
+
+	if got := requestClientIP(request); got != "203.0.113.10" {
+		t.Fatalf("expected public remote address to win over spoofed proxy headers, got %q", got)
+	}
+
+	request.RemoteAddr = "127.0.0.1:4567"
+	if got := requestClientIP(request); got != "198.51.100.20" {
+		t.Fatalf("expected trusted local proxy hop to expose CF-Connecting-IP, got %q", got)
+	}
+}
+
+// TestWithCORSRestrictsAdminEndpointsToAdminOrigin verifies that the public app
+// origin cannot call administrator JSON endpoints through browser CORS.
+func TestWithCORSRestrictsAdminEndpointsToAdminOrigin(t *testing.T) {
+	handler := withCORS(config.Config{
+		App: config.AppConfig{
+			AllowedOrigins:   []string{"https://app.example.com", "https://admin.example.com"},
+			AdminFrontendURL: "https://admin.example.com",
+		},
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	publicOriginRequest := httptest.NewRequest(http.MethodOptions, "/v1/admin/me", nil)
+	publicOriginRequest.Header.Set("Origin", "https://app.example.com")
+	publicOriginRequest.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	publicOriginRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(publicOriginRecorder, publicOriginRequest)
+	if got := publicOriginRecorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected app origin to be rejected for admin endpoint CORS, got %q", got)
+	}
+
+	adminOriginRequest := httptest.NewRequest(http.MethodOptions, "/v1/admin/me", nil)
+	adminOriginRequest.Header.Set("Origin", "https://admin.example.com")
+	adminOriginRequest.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	adminOriginRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(adminOriginRecorder, adminOriginRequest)
+	if got := adminOriginRecorder.Header().Get("Access-Control-Allow-Origin"); got != "https://admin.example.com" {
+		t.Fatalf("expected admin origin to be allowed for admin endpoint CORS, got %q", got)
+	}
+}
+
 // performAdminPasswordRequest sends one JSON password verification request into
 // the real handler with the session cookie and CSRF token already attached.
 func performAdminPasswordRequest(t *testing.T, api *API, sessionID string, csrfToken string, password string) *httptest.ResponseRecorder {

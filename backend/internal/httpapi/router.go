@@ -90,11 +90,12 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	})
 	mux.Handle("/", spaHandler)
 
-	return withCORS(deps.Config.App.AllowedOrigins, mux)
+	return withCORS(deps.Config, mux)
 }
 
 // withCORS provides the minimum browser cross-origin support required by the frontends.
-func withCORS(allowedOrigins []string, next http.Handler) http.Handler {
+func withCORS(cfg config.Config, next http.Handler) http.Handler {
+	allowedOrigins := cfg.App.AllowedOrigins
 	originSet := make(map[string]struct{}, len(allowedOrigins))
 	for _, origin := range allowedOrigins {
 		trimmed := strings.TrimSpace(origin)
@@ -103,11 +104,16 @@ func withCORS(allowedOrigins []string, next http.Handler) http.Handler {
 		}
 		originSet[trimmed] = struct{}{}
 	}
+	adminOrigin := strings.TrimRight(strings.TrimSpace(cfg.App.AdminFrontendURL), "/")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
-			if _, allowed := originSet[origin]; allowed {
+			_, allowed := originSet[origin]
+			if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+				allowed = allowed && adminOrigin != "" && origin == adminOrigin
+			}
+			if allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Vary", "Origin")

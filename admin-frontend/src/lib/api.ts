@@ -15,6 +15,7 @@
   PermissionPolicy,
   SetAdminUserPermissionInput,
   SetUserQuotaInput,
+  UpdateEmailRouteInput,
   UpdateAdminUserInput,
   UpdateApplicationInput,
   UpdatePermissionPolicyInput,
@@ -41,11 +42,13 @@ function resolveAPIBaseURL(): string {
   }
 
   const currentURL = new URL(window.location.origin);
+  const { port } = currentURL;
   const isFrontendSubdomain = currentURL.hostname.startsWith('app.') || currentURL.hostname.startsWith('admin.');
   const isLocalHostname = currentURL.hostname === 'localhost' || currentURL.hostname.endsWith('.localhost');
 
   if (isFrontendSubdomain && !isLocalHostname) {
-    return `${currentURL.protocol}//api.${currentURL.hostname.split('.').slice(1).join('.')}`.replace(/\/+$/, '');
+    const apiOrigin = `${currentURL.protocol}//api.${currentURL.hostname.split('.').slice(1).join('.')}${port ? `:${port}` : ''}`;
+    return apiOrigin.replace(/\/+$/, '');
   }
 
   return currentURL.origin.replace(/\/+$/, '');
@@ -90,6 +93,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         errorBody = null;
       }
     }
+    if (!isJSONResponse) {
+      throw await buildNonJSONAPIError(path, response);
+    }
     throw new APIError(
       errorBody?.error.message ?? `Request failed with status ${response.status}`,
       errorBody?.error.code ?? 'http_error',
@@ -98,11 +104,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (!isJSONResponse) {
-    throw new APIError('管理员前端收到非 JSON 响应，请检查 VITE_API_BASE_URL 或反向代理配置。', 'invalid_response_content_type', response.status);
+    throw await buildNonJSONAPIError(path, response);
   }
 
-  const envelope = (await response.json()) as APIEnvelope<T>;
-  return envelope.data;
+  try {
+    const envelope = (await response.json()) as APIEnvelope<T>;
+    return envelope.data;
+  } catch {
+    throw new APIError(
+      `管理员前端收到无法解析的 JSON 数据：${path}（HTTP ${response.status}）。`,
+      'invalid_json',
+      response.status,
+    );
+  }
+}
+
+async function buildNonJSONAPIError(path: string, response: Response): Promise<APIError> {
+  let responsePreview = '';
+  try {
+    responsePreview = (await response.text()).trim().slice(0, 120).toLowerCase();
+  } catch {
+    responsePreview = '';
+  }
+
+  const responseURL = response.url || `${apiBaseURL}${path}`;
+  const htmlHint = responsePreview.startsWith('<!doctype html') || responsePreview.startsWith('<html')
+    ? ' 返回内容看起来像 HTML 页面。'
+    : '';
+
+  return new APIError(
+    `管理员前端收到非 JSON 响应，请检查 VITE_API_BASE_URL 或反向代理配置。请求：${path}；响应地址：${responseURL}；状态码：${response.status}。${htmlHint}`,
+    'invalid_response_content_type',
+    response.status,
+  );
 }
 
 export function getAdminLoginURL(nextPath: string): string {
@@ -240,7 +274,7 @@ export function createEmailRoute(input: UpsertEmailRouteInput, csrfToken: string
   });
 }
 
-export function updateEmailRoute(routeID: number, input: UpsertEmailRouteInput, csrfToken: string): Promise<AdminEmailRecord> {
+export function updateEmailRoute(routeID: number, input: UpdateEmailRouteInput, csrfToken: string): Promise<AdminEmailRecord> {
   return request<AdminEmailRecord>(`/v1/admin/email-routes/${routeID}`, {
     method: 'PATCH',
     headers: { 'X-CSRF-Token': csrfToken },

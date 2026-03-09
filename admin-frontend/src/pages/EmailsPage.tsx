@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { APIError, createEmailRoute, deleteEmailRoute, listAdminUsers, listEmailRoutes, updateEmailRoute } from '../lib/api';
 import { AdminSelect } from '../components/AdminSelect';
 import { GlassCard } from '../components/GlassCard';
-import type { AdminEmailRecord, AdminUserRecord, ManagedDomain, UpsertEmailRouteInput } from '../types/admin';
+import type { AdminEmailRecord, AdminUserRecord, ManagedDomain, UpdateEmailRouteInput, UpsertEmailRouteInput } from '../types/admin';
 
 interface EmailsPageProps {
   csrfToken: string;
@@ -88,15 +88,13 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
     }
     try {
       setSaving(true);
+      const updateInput: UpdateEmailRouteInput = {
+        target_email: editingRecord.target_email,
+        enabled: editingRecord.enabled,
+      };
       const updated = await updateEmailRoute(
         editingRecord.id,
-        {
-          owner_user_id: editingRecord.owner_user_id,
-          root_domain: editingRecord.root_domain,
-          prefix: editingRecord.prefix,
-          target_email: editingRecord.target_email,
-          enabled: editingRecord.enabled,
-        },
+        updateInput,
         csrfToken,
       );
       setRecords((current) => current.map((item) => (item.id === updated.id ? updated : item)));

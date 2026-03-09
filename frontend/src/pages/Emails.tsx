@@ -21,12 +21,13 @@ import {
   upsertCatchAllEmailRoute,
   upsertDefaultEmailRoute,
 } from '../lib/api';
-import type { EmailRouteAvailabilityResult, PermissionStatus, User, UserEmailRoute, UserPermission } from '../types/api';
+import type { EmailRouteAvailabilityResult, ManagedDomain, PermissionStatus, User, UserEmailRoute, UserPermission } from '../types/api';
 
 interface EmailsProps {
   authenticated: boolean;
   sessionLoading: boolean;
   user?: User;
+  publicDomains: ManagedDomain[];
   csrfToken?: string;
   onLogin: () => void;
 }
@@ -49,7 +50,7 @@ const fallbackRootDomain = 'linuxdo.space';
 
 // Emails keeps public search open while separating authenticated mailbox
 // management into independent sections with their own loading and error states.
-export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin }: EmailsProps) {
+export function Emails({ authenticated, sessionLoading, user, publicDomains, csrfToken, onLogin }: EmailsProps) {
   const [permission, setPermission] = useState<UserPermission | null>(null);
   const [routes, setRoutes] = useState<UserEmailRoute[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,10 +75,14 @@ export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin
   const [pledgeModalOpen, setPledgeModalOpen] = useState(false);
 
   const normalizedUsername = useMemo(() => normalizePrefix(user?.username ?? ''), [user?.username]);
+  const configuredRootDomain = useMemo(() => {
+    const defaultManagedDomain = publicDomains.find((item) => item.is_default) ?? publicDomains[0];
+    return defaultManagedDomain?.root_domain?.trim() || fallbackRootDomain;
+  }, [publicDomains]);
   const defaultRoute = useMemo(() => {
     const existingRoute = routes.find((item) => item.kind === 'default');
-    return existingRoute ?? (user ? buildImplicitDefaultRoute(user) : null);
-  }, [routes, user]);
+    return existingRoute ?? (user ? buildImplicitDefaultRoute(user, configuredRootDomain) : null);
+  }, [configuredRootDomain, routes, user]);
   const catchAllRoute = useMemo(() => routes.find((item) => item.kind === 'catch_all') ?? null, [routes]);
   const customRoutes = useMemo(() => routes.filter((item) => item.kind === 'custom'), [routes]);
   const tableRows = useMemo(() => {
@@ -88,13 +93,13 @@ export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin
     return nextRows;
   }, [catchAllRoute, customRoutes, defaultRoute]);
 
-  const defaultAddress = defaultRoute?.address ?? (normalizedUsername ? `${normalizedUsername}@${fallbackRootDomain}` : '');
+  const defaultAddress = defaultRoute?.address ?? (normalizedUsername ? `${normalizedUsername}@${configuredRootDomain}` : '');
   const catchAllAddress = useMemo(() => {
     if (catchAllRoute?.address) return catchAllRoute.address;
     if (permission?.target?.trim()) return permission.target.trim();
-    return normalizedUsername ? `catch-all@${normalizedUsername}.${fallbackRootDomain}` : `catch-all@<用户名>.${fallbackRootDomain}`;
-  }, [catchAllRoute?.address, normalizedUsername, permission?.target]);
-  const searchRootDomain = defaultRoute?.root_domain ?? searchResult?.root_domain ?? fallbackRootDomain;
+    return normalizedUsername ? `catch-all@${normalizedUsername}.${configuredRootDomain}` : `catch-all@<用户名>.${configuredRootDomain}`;
+  }, [catchAllRoute?.address, configuredRootDomain, normalizedUsername, permission?.target]);
+  const searchRootDomain = defaultRoute?.root_domain ?? searchResult?.root_domain ?? configuredRootDomain;
   const pledgeText = permission?.pledge_text?.trim() ?? '';
 
   useEffect(() => {
@@ -138,8 +143,14 @@ export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin
       setPermission(permissionResult.value.find((item) => item.key === catchAllPermissionKey) ?? null);
       setPermissionError('');
     } else {
-      setPermission(null);
-      setPermissionError(readableErrorMessage(permissionResult.reason, '无法加载 catch-all 权限数据。'));
+      const maybePermissionError = permissionResult.reason;
+      if (maybePermissionError instanceof APIError && (maybePermissionError.code === 'invalid_response_content_type' || maybePermissionError.code === 'not_found')) {
+        setPermission(null);
+        setPermissionError('');
+      } else {
+        setPermission(null);
+        setPermissionError(readableErrorMessage(permissionResult.reason, '无法加载 catch-all 权限数据。'));
+      }
     }
 
     if (routeResult.status === 'fulfilled') {
@@ -168,7 +179,7 @@ export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin
       setSearchResult(null);
       setSearchMessage('');
       setSearchPrefix(normalizedPrefix);
-      const result = await checkPublicEmailRouteAvailability(fallbackRootDomain, normalizedPrefix);
+      const result = await checkPublicEmailRouteAvailability(searchRootDomain, normalizedPrefix);
       setSearchResult(result);
       setSearchStatus(result.available ? 'available' : 'taken');
       setSearchMessage(buildSearchMessage(result, normalizedUsername, authenticated));
@@ -346,7 +357,7 @@ export function Emails({ authenticated, sessionLoading, user, csrfToken, onLogin
               </div>
             </div>
 
-            <InfoBlock title="默认邮箱" description={normalizedUsername ? `每位用户默认保留 ${normalizedUsername}@${fallbackRootDomain}，你只需要填写转发目标邮箱。` : '每位用户都会默认保留一个与用户名同名的邮箱地址。'} />
+            <InfoBlock title="默认邮箱" description={normalizedUsername ? `每位用户默认保留 ${normalizedUsername}@${configuredRootDomain}，你只需要填写转发目标邮箱。` : '每位用户都会默认保留一个与用户名同名的邮箱地址。'} />
             <InfoBlock title="我的邮箱列表" description="这里会展示当前账号已经存在或默认保留的邮箱行，包括默认邮箱、已存在的自定义邮箱以及已配置的 catch-all。" />
             <InfoBlock title="catch-all 权限" description="catch-all 不是默认开放功能。只有满足权限条件的用户才可以申请，并在通过后配置转发目标。" />
             <InfoBlock title="Cloudflare 目标邮箱验证" description="首次把某个新邮箱设置为转发目标时，Cloudflare 可能会发验证邮件到该目标邮箱。完成验证后，再回到这里保存即可。" />
@@ -691,15 +702,15 @@ function ToggleRow({ title, description, enabled, onToggle }: ToggleRowProps) {
   );
 }
 
-function buildImplicitDefaultRoute(user: User): UserEmailRoute {
+function buildImplicitDefaultRoute(user: User, rootDomain: string): UserEmailRoute {
   const prefix = normalizePrefix(user.username);
   return {
     kind: 'default',
     display_name: '默认邮箱',
     description: '每位用户自动保留一个与用户名同名的邮箱地址。',
-    address: `${prefix}@${fallbackRootDomain}`,
+    address: `${prefix}@${rootDomain}`,
     prefix,
-    root_domain: fallbackRootDomain,
+    root_domain: rootDomain,
     target_email: '',
     enabled: false,
     configured: false,

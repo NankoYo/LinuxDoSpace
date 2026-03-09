@@ -49,6 +49,7 @@ For the split deployment model, the important public URLs are:
 - `APP_BASE_URL=https://api.example.com`
 - `APP_FRONTEND_URL=https://app.example.com`
 - `APP_ADMIN_FRONTEND_URL=https://admin.example.com`
+- `APP_ADMIN_VERIFICATION_TTL=30m`
 - `LINUXDO_OAUTH_REDIRECT_URL=https://api.example.com/v1/auth/callback`
 
 `APP_ALLOWED_ORIGINS` must include both frontend origins.
@@ -75,6 +76,7 @@ Server deployment requires these secrets when the workflow is configured to depl
 - `DEPLOY_PORT` (optional, default `22`)
 - `DEPLOY_USER`
 - `DEPLOY_PATH` (optional, default `/opt/linuxdospace`)
+- `DEPLOY_SSH_KNOWN_HOSTS`
 - `DEPLOY_SSH_PRIVATE_KEY`
 - `DEPLOY_ENV_FILE`
 - `DEPLOY_GHCR_USERNAME`
@@ -83,6 +85,7 @@ Server deployment requires these secrets when the workflow is configured to depl
 Notes:
 
 - `DEPLOY_ENV_FILE` should contain the full multi-line `.env` file content.
+- `DEPLOY_SSH_KNOWN_HOSTS` must contain the pinned SSH host key lines for the Debian server. Do not rely on live `ssh-keyscan` during deployment.
 - `DEPLOY_GHCR_TOKEN` must have permission to pull the GHCR image.
 
 ## Post-deploy verification

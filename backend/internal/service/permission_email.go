@@ -91,17 +91,6 @@ func (s *PermissionService) CheckPublicEmailAvailability(ctx context.Context, ro
 		return EmailRouteAvailabilityResult{}, InternalError("failed to check existing email route conflicts", err)
 	}
 
-	if result.Available {
-		snapshot, err := s.lookupCloudflareForwardingSnapshot(ctx, managedDomain.RootDomain, normalizedPrefix)
-		if err != nil {
-			return EmailRouteAvailabilityResult{}, err
-		}
-		if snapshot.Found {
-			result.Available = false
-			result.Reasons = append(result.Reasons, "existing_email_route")
-		}
-	}
-
 	return result, nil
 }
 
@@ -150,15 +139,13 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 				"email_route_id": existingRoute.ID,
 				"address":        spec.Address,
 			})
-			if auditErr := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+			logAuditWriteFailure("email_route.default.clear", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 				ActorUserID:  &user.ID,
 				Action:       "email_route.default.clear",
 				ResourceType: "email_route",
 				ResourceID:   strconv.FormatInt(existingRoute.ID, 10),
 				MetadataJSON: string(metadata),
-			}); auditErr != nil {
-				return UserEmailRouteView{}, InternalError("failed to write default email clear audit log", auditErr)
-			}
+			}))
 		}
 
 		return s.buildDefaultEmailRouteView(ctx, user)
@@ -187,15 +174,13 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 		"email_route_id": item.ID,
 		"address":        item.Prefix + "@" + item.RootDomain,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("email_route.default.upsert", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "email_route.default.upsert",
 		ResourceType: "email_route",
 		ResourceID:   strconv.FormatInt(item.ID, 10),
 		MetadataJSON: string(metadata),
-	}); err != nil {
-		return UserEmailRouteView{}, InternalError("failed to write default email route audit log", err)
-	}
+	}))
 
 	return userEmailRouteFromModel(
 		item,

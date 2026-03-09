@@ -77,6 +77,7 @@ jobs:
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
 
@@ -92,6 +93,7 @@ jobs:
           for secret_name in \
             DEPLOY_HOST \
             DEPLOY_USER \
+            DEPLOY_SSH_KNOWN_HOSTS \
             DEPLOY_SSH_PRIVATE_KEY \
             DEPLOY_ENV_FILE
           do
@@ -109,8 +111,8 @@ jobs:
         shell: bash
         env:
           TARGET_IMAGE_NAME: ghcr.io/moyeranqianzhi/linuxdospace
-          TARGET_IMAGE_TAG: latest
-          TARGET_IMAGE: ghcr.io/moyeranqianzhi/linuxdospace:latest
+          TARGET_IMAGE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
+          TARGET_IMAGE: ghcr.io/moyeranqianzhi/linuxdospace:${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}
           TARGET_REVISION: ${{ github.sha }}
           MAX_DEPLOY_ATTEMPTS: '10'
           MAX_OUTER_DEPLOY_ATTEMPTS: '10'
@@ -127,41 +129,14 @@ jobs:
           REMOTE_PID_FILE="${REMOTE_DEPLOY_BASENAME}.pid"
           SSH_OPTS="-o ServerAliveInterval=15 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes -o ConnectTimeout=20"
 
-          # prepare_ssh_key refreshes the private key and host keys before each outer retry.
-          # Keeping SSH bootstrap inside the retry loop makes the whole deploy pipeline self-healing.
+          # prepare_ssh_key refreshes the private key and restores the pinned host keys before each outer retry.
+          # Keeping SSH bootstrap inside the retry loop makes the whole deploy pipeline self-healing without trusting live keyscan results.
           prepare_ssh_key() {
             install -m 700 -d ~/.ssh
             printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
             chmod 600 ~/.ssh/id_ed25519
-            : > ~/.ssh/known_hosts
-
-            keyscan_success=0
-            for attempt in $(seq 1 10); do
-              keyscan_file="$(mktemp)"
-
-              if ssh-keyscan -T 10 -t rsa,ecdsa,ed25519 -p "$DEPLOY_PORT" "$DEPLOY_HOST" > "$keyscan_file" 2>/dev/null && [ -s "$keyscan_file" ]; then
-                cat "$keyscan_file" >> ~/.ssh/known_hosts
-                rm -f "$keyscan_file"
-                keyscan_success=1
-                break
-              fi
-
-              if [ -s "$keyscan_file" ]; then
-                cat "$keyscan_file" >> ~/.ssh/known_hosts
-                rm -f "$keyscan_file"
-                keyscan_success=1
-                break
-              fi
-
-              rm -f "$keyscan_file"
-              echo "ssh-keyscan attempt ${attempt}/10 did not return a host key."
-              sleep 3
-            done
-
-            if [ "$keyscan_success" -ne 1 ]; then
-              echo '::error::Failed to collect the SSH host key after 10 attempts.'
-              return 1
-            fi
+            printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
           }
 
           # prepare_deployment_env_file rewrites the runtime env file from the current secret payload.
@@ -207,7 +182,7 @@ jobs:
 
           # prepare_remote_deployment_script builds the server-side deploy script for this attempt.
           # The remote script keeps the inner 10 pull and health retries.
-          # It always pulls the freshly published latest image before compose recreates the service.
+          # It always pulls the freshly published target image before compose recreates the service.
           prepare_remote_deployment_script() {
             cat > deploy/remote-deploy.sh <<'REMOTE_SCRIPT'
           #!/usr/bin/env bash

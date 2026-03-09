@@ -45,7 +45,8 @@ func (a *API) handleAdminMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if session.AdminVerifiedAt == nil {
+	adminPasswordVerified := service.AdminVerificationIsFresh(session.AdminVerifiedAt, a.config.App.AdminVerificationTTL, time.Now().UTC())
+	if !adminPasswordVerified {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authenticated":      true,
 			"authorized":         true,
@@ -67,7 +68,7 @@ func (a *API) handleAdminMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated":      true,
 		"authorized":         true,
-		"password_verified":  true,
+		"password_verified":  adminPasswordVerified,
 		"oauth_configured":   a.config.OAuthConfigured(),
 		"user":               user,
 		"csrf_token":         session.CSRFToken,
@@ -493,7 +494,7 @@ func (a *API) handleAdminUpdateEmailRoute(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var request service.UpsertEmailRouteRequest
+	var request service.UpdateEmailRouteRequest
 	if err := decodeJSONBody(r, &request); err != nil {
 		writeError(w, err)
 		return

@@ -289,6 +289,21 @@ INSERT INTO oauth_states (
 	return err
 }
 
+// GetOAuthState 读取一条仍未消费的 OAuth state。
+func (s *Store) GetOAuthState(ctx context.Context, stateID string) (model.OAuthState, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+    id,
+    code_verifier,
+    next_path,
+    expires_at,
+    created_at
+FROM oauth_states
+WHERE id = ?
+`, stateID)
+	return scanOAuthState(row)
+}
+
 // ConsumeOAuthState 原子地读取并删除一次性 OAuth state。
 func (s *Store) ConsumeOAuthState(ctx context.Context, stateID string) (model.OAuthState, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -322,6 +337,12 @@ WHERE id = ?
 	}
 
 	return state, nil
+}
+
+// DeleteOAuthState 删除一条已完成或已废弃的 OAuth state。
+func (s *Store) DeleteOAuthState(ctx context.Context, stateID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM oauth_states WHERE id = ?`, stateID)
+	return err
 }
 
 // ListManagedDomains 列出当前系统中的根域名配置。

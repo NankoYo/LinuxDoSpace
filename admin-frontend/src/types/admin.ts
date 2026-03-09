@@ -179,6 +179,13 @@ export interface UpsertEmailRouteInput {
   enabled: boolean;
 }
 
+// UpdateEmailRouteInput mirrors the actually mutable fields accepted by the
+// email route PATCH endpoint.
+export interface UpdateEmailRouteInput {
+  target_email: string;
+  enabled: boolean;
+}
+
 // AdminApplicationRecord mirrors one moderation request row.
 export interface AdminApplicationRecord {
   id: number;

@@ -95,14 +95,15 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, UnauthorizedError("oauth state mismatch")
 	}
 
-	state, err := s.store.ConsumeOAuthState(ctx, stateFromQuery)
+	state, err := s.store.GetOAuthState(ctx, stateFromQuery)
 	if err != nil {
 		if sqlite.IsNotFound(err) {
 			return LoginCompleteResult{}, UnauthorizedError("oauth state is invalid or already consumed")
 		}
-		return LoginCompleteResult{}, InternalError("failed to consume oauth state", err)
+		return LoginCompleteResult{}, InternalError("failed to load oauth state", err)
 	}
 	if state.ExpiresAt.Before(time.Now().UTC()) {
+		_ = s.store.DeleteOAuthState(ctx, stateFromQuery)
 		return LoginCompleteResult{}, UnauthorizedError("oauth state has expired")
 	}
 
@@ -157,15 +158,17 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, InternalError("failed to create session", err)
 	}
 
-	if err := s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.store.DeleteOAuthState(ctx, stateFromQuery); err != nil {
+		return LoginCompleteResult{}, InternalError("failed to consume oauth state", err)
+	}
+
+	logAuditWriteFailure("auth.login", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "auth.login",
 		ResourceType: "session",
 		ResourceID:   session.ID,
 		MetadataJSON: `{"provider":"linuxdo"}`,
-	}); err != nil {
-		return LoginCompleteResult{}, InternalError("failed to write auth login audit log", err)
-	}
+	}))
 
 	return LoginCompleteResult{User: user, Session: session, NextPath: state.NextPath}, nil
 }
@@ -216,15 +219,13 @@ func (s *AuthService) Logout(ctx context.Context, sessionID string, actorUserID 
 		return InternalError("failed to delete session", err)
 	}
 
-	if err := s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("auth.logout", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actorUserID,
 		Action:       "auth.logout",
 		ResourceType: "session",
 		ResourceID:   sessionID,
 		MetadataJSON: `{}`,
-	}); err != nil {
-		return InternalError("failed to write auth logout audit log", err)
-	}
+	}))
 	return nil
 }
 
@@ -237,38 +238,35 @@ func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Ses
 	if strings.TrimSpace(password) == "" {
 		return time.Time{}, ValidationError("admin password is required")
 	}
-	if session.AdminVerifiedAt != nil {
+	now := time.Now().UTC()
+	if AdminVerificationIsFresh(session.AdminVerifiedAt, s.cfg.App.AdminVerificationTTL, now) {
 		return session.AdminVerifiedAt.UTC(), nil
 	}
 
 	expected := s.cfg.App.AdminPassword
 	if subtle.ConstantTimeCompare([]byte(password), []byte(expected)) != 1 {
-		if err := s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		logAuditWriteFailure("admin.session.verify_password_failed", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
 			ActorUserID:  &actor.ID,
 			Action:       "admin.session.verify_password_failed",
 			ResourceType: "session",
 			ResourceID:   session.ID,
 			MetadataJSON: `{"second_factor":"password","result":"rejected"}`,
-		}); err != nil {
-			return time.Time{}, InternalError("failed to write admin password rejection audit log", err)
-		}
+		}))
 		return time.Time{}, UnauthorizedError("invalid admin password")
 	}
 
-	verifiedAt := time.Now().UTC()
+	verifiedAt := now
 	if err := s.store.MarkSessionAdminVerified(ctx, session.ID, verifiedAt); err != nil {
 		return time.Time{}, InternalError("failed to persist admin password verification", err)
 	}
 
-	if err := s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.session.verify_password", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.session.verify_password",
 		ResourceType: "session",
 		ResourceID:   session.ID,
 		MetadataJSON: `{"second_factor":"password","result":"verified"}`,
-	}); err != nil {
-		return time.Time{}, InternalError("failed to write admin password verification audit log", err)
-	}
+	}))
 
 	return verifiedAt, nil
 }
