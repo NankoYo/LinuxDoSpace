@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restored the public anime background as an opt-out browser preference, defaulting to enabled and exposing the toggle from a new navbar settings button beside the GitHub icon.
 - Hardened administrator configuration so the backend now fails closed unless `APP_ADMIN_USERNAMES` and `APP_ADMIN_PASSWORD` are explicitly configured together.
 - Added configuration tests that verify development defaults stay locked down and production rejects incomplete admin protection settings.
 - Tightened admin identity resolution so only the local administrator allowlist can unlock the admin console, even if Linux Do marks a user as a forum administrator.

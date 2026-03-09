@@ -20,6 +20,11 @@ import type { Allocation, ManagedDomain, MeResponse, User } from './types/api';
 // TabKey enumerates every client-side page supported by the public frontend.
 type TabKey = 'home' | 'domains' | 'emails' | 'settings' | 'permissions' | 'supervision' | 'login';
 
+// The anime background preference is browser-local so each visitor can decide
+// whether they want the third-party image layer without affecting anyone else.
+const animeBackgroundStorageKey = 'linuxdospace.preferences.anime-background-enabled';
+const animeBackgroundImageURL = 'https://www.loliapi.com/acg/';
+
 // SessionState mirrors the normalized `/v1/me` payload consumed across pages.
 interface SessionState {
   authenticated: boolean;
@@ -74,12 +79,47 @@ function normalizeSessionResponse(response: MeResponse): SessionState {
   };
 }
 
-// SiteBackground renders a fully local background so the public site no longer
-// leaks visitor metadata to an external image host.
-function SiteBackground() {
+// readAnimeBackgroundPreference restores the persisted browser preference. The
+// default intentionally stays enabled so the previous anime-style design remains
+// the out-of-box experience unless the visitor turns it off.
+function readAnimeBackgroundPreference(): boolean {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+
+  try {
+    const storedPreference = window.localStorage.getItem(animeBackgroundStorageKey);
+    if (storedPreference === null) {
+      return true;
+    }
+
+    return storedPreference === 'true';
+  } catch {
+    return true;
+  }
+}
+
+interface SiteBackgroundProps {
+  animeBackgroundEnabled: boolean;
+}
+
+// SiteBackground keeps the current local gradient composition in all cases.
+// When anime mode is enabled, the remote image sits underneath the local layers
+// so the site still looks like the current design instead of reverting to a raw photo background.
+function SiteBackground({ animeBackgroundEnabled }: SiteBackgroundProps) {
   return (
     <>
-      <div className="fixed inset-0 z-[-3] bg-[radial-gradient(circle_at_top_left,_rgba(250,204,21,0.26),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(56,189,248,0.18),_transparent_34%),linear-gradient(160deg,_#f8fafc_0%,_#e2e8f0_46%,_#cbd5e1_100%)] transition-colors duration-500 dark:bg-[radial-gradient(circle_at_top_left,_rgba(234,179,8,0.16),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(34,211,238,0.12),_transparent_34%),linear-gradient(160deg,_#020617_0%,_#0f172a_54%,_#111827_100%)]" />
+      {animeBackgroundEnabled && (
+        <div
+          className="fixed inset-0 z-[-4] bg-cover bg-center bg-no-repeat transition-opacity duration-700 dark:brightness-[0.3]"
+          style={{ backgroundImage: `url(${animeBackgroundImageURL})` }}
+        />
+      )}
+      <div
+        className={`fixed inset-0 z-[-3] bg-[radial-gradient(circle_at_top_left,_rgba(250,204,21,0.26),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(56,189,248,0.18),_transparent_34%),linear-gradient(160deg,_#f8fafc_0%,_#e2e8f0_46%,_#cbd5e1_100%)] transition-all duration-500 dark:bg-[radial-gradient(circle_at_top_left,_rgba(234,179,8,0.16),_transparent_38%),radial-gradient(circle_at_top_right,_rgba(34,211,238,0.12),_transparent_34%),linear-gradient(160deg,_#020617_0%,_#0f172a_54%,_#111827_100%)] ${
+          animeBackgroundEnabled ? 'opacity-70' : 'opacity-100'
+        }`}
+      />
       <div className="fixed inset-0 z-[-2] overflow-hidden">
         <div className="absolute -left-20 top-12 h-64 w-64 rounded-full bg-amber-300/35 blur-3xl dark:bg-amber-500/18" />
         <div className="absolute right-[-5rem] top-1/4 h-72 w-72 rounded-full bg-sky-300/30 blur-3xl dark:bg-cyan-400/16" />
@@ -105,6 +145,7 @@ function readableErrorMessage(error: unknown, fallback: string): string {
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>(() => pathToTab(window.location.pathname));
   const [isDark, setIsDark] = useState(false);
+  const [animeBackgroundEnabled, setAnimeBackgroundEnabled] = useState<boolean>(() => readAnimeBackgroundPreference());
   const [session, setSession] = useState<SessionState>({
     authenticated: false,
     oauthConfigured: false,
@@ -123,6 +164,27 @@ export default function App() {
     }
     document.documentElement.classList.remove('dark');
   }, [isDark]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(animeBackgroundStorageKey, String(animeBackgroundEnabled));
+    } catch {
+      // Ignore storage write failures and keep the current in-memory choice.
+    }
+  }, [animeBackgroundEnabled]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== animeBackgroundStorageKey) {
+        return;
+      }
+
+      setAnimeBackgroundEnabled(event.newValue !== 'false');
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -278,13 +340,15 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-x-hidden font-sans text-gray-900 transition-colors duration-500 dark:text-white">
-      <SiteBackground />
+      <SiteBackground animeBackgroundEnabled={animeBackgroundEnabled} />
 
       <Navbar
         activeTab={activeTab}
         setActiveTab={navigateToTab}
         isDark={isDark}
-        toggleTheme={() => setIsDark(!isDark)}
+        toggleTheme={() => setIsDark((currentValue) => !currentValue)}
+        animeBackgroundEnabled={animeBackgroundEnabled}
+        onAnimeBackgroundEnabledChange={setAnimeBackgroundEnabled}
         authenticated={session.authenticated}
         displayName={session.user?.display_name || session.user?.username}
         onAuthAction={() => {
