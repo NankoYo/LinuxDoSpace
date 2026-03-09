@@ -40,6 +40,38 @@ type UpdateAdminApplicationInput struct {
 	ReviewedByUserID int64
 }
 
+// UpsertAdminApplicationInput describes one user-side permission application.
+// The unique applicant/type/target tuple lets one row act as both the latest
+// application snapshot and the currently effective approval state.
+type UpsertAdminApplicationInput struct {
+	ApplicantUserID int64
+	Type            string
+	Target          string
+	Reason          string
+	Status          string
+}
+
+// UpsertEmailRouteByAddressInput describes an idempotent email-route write keyed
+// by the full local address instead of the local row identifier.
+type UpsertEmailRouteByAddressInput struct {
+	OwnerUserID int64
+	RootDomain  string
+	Prefix      string
+	TargetEmail string
+	Enabled     bool
+}
+
+// UpsertPermissionPolicyInput describes the mutable fields of one permission
+// policy row stored in SQLite.
+type UpsertPermissionPolicyInput struct {
+	Key           string
+	DisplayName   string
+	Description   string
+	Enabled       bool
+	AutoApprove   bool
+	MinTrustLevel int
+}
+
 // CreateRedeemCodeInput describes one redeem code emitted by the administrator console.
 type CreateRedeemCodeInput struct {
 	Code            string
@@ -235,6 +267,65 @@ ORDER BY er.created_at DESC, er.id DESC
 	return items, nil
 }
 
+// ListEmailRoutesByOwner returns all email forwarding rules owned by one user.
+func (s *Store) ListEmailRoutesByOwner(ctx context.Context, ownerUserID int64) ([]model.EmailRoute, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    er.id,
+    er.owner_user_id,
+    u.username,
+    u.display_name,
+    er.root_domain,
+    er.prefix,
+    er.target_email,
+    er.enabled,
+    er.created_at,
+    er.updated_at
+FROM email_routes er
+INNER JOIN users u ON u.id = er.owner_user_id
+WHERE er.owner_user_id = ?
+ORDER BY er.created_at DESC, er.id DESC
+`, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.EmailRoute, 0, 8)
+	for rows.Next() {
+		item, scanErr := scanEmailRoute(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// GetEmailRouteByAddress loads one email forwarding rule by the routed address.
+func (s *Store) GetEmailRouteByAddress(ctx context.Context, rootDomain string, prefix string) (model.EmailRoute, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+    er.id,
+    er.owner_user_id,
+    u.username,
+    u.display_name,
+    er.root_domain,
+    er.prefix,
+    er.target_email,
+    er.enabled,
+    er.created_at,
+    er.updated_at
+FROM email_routes er
+INNER JOIN users u ON u.id = er.owner_user_id
+WHERE er.root_domain = ? AND er.prefix = ?
+`, strings.ToLower(strings.TrimSpace(rootDomain)), strings.ToLower(strings.TrimSpace(prefix)))
+	return scanEmailRoute(row)
+}
+
 // CreateEmailRoute inserts one administrator-managed email forwarding rule.
 func (s *Store) CreateEmailRoute(ctx context.Context, input CreateEmailRouteInput) (model.EmailRoute, error) {
 	now := time.Now().UTC()
@@ -248,6 +339,43 @@ INSERT INTO email_routes (
     created_at,
     updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
+RETURNING id
+`,
+		input.OwnerUserID,
+		strings.ToLower(strings.TrimSpace(input.RootDomain)),
+		strings.ToLower(strings.TrimSpace(input.Prefix)),
+		strings.ToLower(strings.TrimSpace(input.TargetEmail)),
+		boolToInt(input.Enabled),
+		formatTime(now),
+		formatTime(now),
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		return model.EmailRoute{}, err
+	}
+	return s.getEmailRouteByID(ctx, id)
+}
+
+// UpsertEmailRouteByAddress inserts or updates one email forwarding rule keyed
+// by its routed local address.
+func (s *Store) UpsertEmailRouteByAddress(ctx context.Context, input UpsertEmailRouteByAddressInput) (model.EmailRoute, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO email_routes (
+    owner_user_id,
+    root_domain,
+    prefix,
+    target_email,
+    enabled,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(root_domain, prefix) DO UPDATE SET
+    owner_user_id = excluded.owner_user_id,
+    target_email = excluded.target_email,
+    enabled = excluded.enabled,
+    updated_at = excluded.updated_at
 RETURNING id
 `,
 		input.OwnerUserID,
@@ -350,6 +478,89 @@ ORDER BY
 	return items, nil
 }
 
+// ListAdminApplicationsByApplicant returns all moderation requests submitted by
+// one user, ordered with the newest state first.
+func (s *Store) ListAdminApplicationsByApplicant(ctx context.Context, applicantUserID int64) ([]model.AdminApplication, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    ap.id,
+    ap.applicant_user_id,
+    u.username,
+    u.display_name,
+    ap.type,
+    ap.target,
+    ap.reason,
+    ap.status,
+    ap.review_note,
+    ap.reviewed_by_user_id,
+    ap.reviewed_at,
+    ap.created_at,
+    ap.updated_at
+FROM admin_applications ap
+INNER JOIN users u ON u.id = ap.applicant_user_id
+WHERE ap.applicant_user_id = ?
+ORDER BY ap.updated_at DESC, ap.id DESC
+`, applicantUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.AdminApplication, 0, 8)
+	for rows.Next() {
+		item, scanErr := scanAdminApplication(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// UpsertAdminApplication inserts or refreshes one permission application row.
+func (s *Store) UpsertAdminApplication(ctx context.Context, input UpsertAdminApplicationInput) (model.AdminApplication, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO admin_applications (
+    applicant_user_id,
+    type,
+    target,
+    reason,
+    status,
+    review_note,
+    reviewed_by_user_id,
+    reviewed_at,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, '', NULL, NULL, ?, ?)
+ON CONFLICT(applicant_user_id, type, target) DO UPDATE SET
+    reason = excluded.reason,
+    status = excluded.status,
+    review_note = excluded.review_note,
+    reviewed_by_user_id = excluded.reviewed_by_user_id,
+    reviewed_at = excluded.reviewed_at,
+    updated_at = excluded.updated_at
+RETURNING id
+`,
+		input.ApplicantUserID,
+		strings.TrimSpace(input.Type),
+		strings.TrimSpace(input.Target),
+		strings.TrimSpace(input.Reason),
+		strings.TrimSpace(input.Status),
+		formatTime(now),
+		formatTime(now),
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		return model.AdminApplication{}, err
+	}
+	return s.getAdminApplicationByID(ctx, id)
+}
+
 // UpdateAdminApplication updates one moderation request decision.
 func (s *Store) UpdateAdminApplication(ctx context.Context, input UpdateAdminApplicationInput) (model.AdminApplication, error) {
 	now := time.Now().UTC()
@@ -377,6 +588,98 @@ RETURNING id
 		return model.AdminApplication{}, err
 	}
 	return s.getAdminApplicationByID(ctx, id)
+}
+
+// ListPermissionPolicies returns all stored permission-policy rules.
+func (s *Store) ListPermissionPolicies(ctx context.Context) ([]model.PermissionPolicy, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+    key,
+    display_name,
+    description,
+    enabled,
+    auto_approve,
+    min_trust_level,
+    created_at,
+    updated_at
+FROM permission_policies
+ORDER BY key ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.PermissionPolicy, 0, 8)
+	for rows.Next() {
+		item, scanErr := scanPermissionPolicy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// GetPermissionPolicy loads one permission policy by its stable key.
+func (s *Store) GetPermissionPolicy(ctx context.Context, key string) (model.PermissionPolicy, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+    key,
+    display_name,
+    description,
+    enabled,
+    auto_approve,
+    min_trust_level,
+    created_at,
+    updated_at
+FROM permission_policies
+WHERE key = ?
+`, strings.TrimSpace(key))
+	return scanPermissionPolicy(row)
+}
+
+// UpsertPermissionPolicy inserts or updates one permission-policy row.
+func (s *Store) UpsertPermissionPolicy(ctx context.Context, input UpsertPermissionPolicyInput) (model.PermissionPolicy, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRowContext(ctx, `
+INSERT INTO permission_policies (
+    key,
+    display_name,
+    description,
+    enabled,
+    auto_approve,
+    min_trust_level,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(key) DO UPDATE SET
+    display_name = excluded.display_name,
+    description = excluded.description,
+    enabled = excluded.enabled,
+    auto_approve = excluded.auto_approve,
+    min_trust_level = excluded.min_trust_level,
+    updated_at = excluded.updated_at
+RETURNING key
+`,
+		strings.TrimSpace(input.Key),
+		strings.TrimSpace(input.DisplayName),
+		strings.TrimSpace(input.Description),
+		boolToInt(input.Enabled),
+		boolToInt(input.AutoApprove),
+		input.MinTrustLevel,
+		formatTime(now),
+		formatTime(now),
+	)
+
+	var key string
+	if err := row.Scan(&key); err != nil {
+		return model.PermissionPolicy{}, err
+	}
+	return s.GetPermissionPolicy(ctx, key)
 }
 
 // ListRedeemCodes returns all generated redeem codes together with creator and consumer identity when available.
@@ -506,6 +809,39 @@ INNER JOIN users u ON u.id = ap.applicant_user_id
 WHERE ap.id = ?
 `, id)
 	return scanAdminApplication(row)
+}
+
+// scanPermissionPolicy maps one permission policy row into the model package.
+func scanPermissionPolicy(scanner interface{ Scan(dest ...any) error }) (model.PermissionPolicy, error) {
+	var item model.PermissionPolicy
+	var enabled int
+	var autoApprove int
+	var createdAt string
+	var updatedAt string
+
+	err := scanner.Scan(
+		&item.Key,
+		&item.DisplayName,
+		&item.Description,
+		&enabled,
+		&autoApprove,
+		&item.MinTrustLevel,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		return model.PermissionPolicy{}, err
+	}
+
+	item.Enabled = enabled == 1
+	item.AutoApprove = autoApprove == 1
+	if item.CreatedAt, err = parseTime(createdAt); err != nil {
+		return model.PermissionPolicy{}, err
+	}
+	if item.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		return model.PermissionPolicy{}, err
+	}
+	return item, nil
 }
 
 // getRedeemCodeByID loads one generated redeem code by its local identifier.

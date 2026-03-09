@@ -12,5 +12,6 @@ type API struct {
 	authService          *service.AuthService
 	domainService        *service.DomainService
 	adminService         *service.AdminService
+	permissionService    *service.PermissionService
 	adminPasswordLimiter *adminPasswordLimiter
 }

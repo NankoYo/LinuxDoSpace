@@ -553,6 +553,9 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 		}
 		return model.AdminApplication{}, InternalError("failed to update admin application", err)
 	}
+	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, item); err != nil {
+		return model.AdminApplication{}, err
+	}
 
 	metadata, _ := json.Marshal(map[string]any{"application_id": item.ID, "status": item.Status})
 	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
@@ -565,6 +568,56 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 		return model.AdminApplication{}, InternalError("failed to write application audit log", err)
 	}
 	return item, nil
+}
+
+// disableCatchAllEmailRouteForApplication ensures that revoking or re-pending an
+// approved catch-all permission immediately disables the corresponding forward.
+func (s *AdminService) disableCatchAllEmailRouteForApplication(ctx context.Context, actor model.User, application model.AdminApplication) error {
+	if application.Type != PermissionKeyEmailCatchAll || application.Status == "approved" {
+		return nil
+	}
+
+	_, rootDomain, err := parseCatchAllTargetAddress(application.Target)
+	if err != nil {
+		return InternalError("failed to parse catch-all permission target", err)
+	}
+
+	route, err := s.db.GetEmailRouteByAddress(ctx, rootDomain, emailCatchAllPrefix)
+	if err != nil {
+		if sqlite.IsNotFound(err) {
+			return nil
+		}
+		return InternalError("failed to load catch-all email route", err)
+	}
+	if !route.Enabled {
+		return nil
+	}
+
+	updated, err := s.db.UpdateEmailRoute(ctx, sqlite.UpdateEmailRouteInput{
+		ID:          route.ID,
+		TargetEmail: route.TargetEmail,
+		Enabled:     false,
+	})
+	if err != nil {
+		return InternalError("failed to disable catch-all email route", err)
+	}
+
+	metadata, _ := json.Marshal(map[string]any{
+		"email_route_id": updated.ID,
+		"application_id": application.ID,
+		"address":        updated.Prefix + "@" + updated.RootDomain,
+		"status":         application.Status,
+	})
+	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		ActorUserID:  &actor.ID,
+		Action:       "admin.email_route.disable_on_permission_update",
+		ResourceType: "email_route",
+		ResourceID:   strconv.FormatInt(updated.ID, 10),
+		MetadataJSON: string(metadata),
+	}); err != nil {
+		return InternalError("failed to write catch-all disable audit log", err)
+	}
+	return nil
 }
 
 // ListRedeemCodes returns all generated redeem codes.

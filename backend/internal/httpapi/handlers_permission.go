@@ -1,0 +1,132 @@
+package httpapi
+
+import (
+	"net/http"
+
+	"linuxdospace/backend/internal/service"
+)
+
+// handleMyPermissions returns the current authenticated user's permission cards.
+func (a *API) handleMyPermissions(w http.ResponseWriter, r *http.Request) {
+	_, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+
+	items, err := a.permissionService.ListMyPermissions(r.Context(), *user)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// handleSubmitPermissionApplication stores or refreshes one permission request.
+func (a *API) handleSubmitPermissionApplication(w http.ResponseWriter, r *http.Request) {
+	session, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	var request service.SubmitPermissionApplicationRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	item, err := a.permissionService.SubmitPermissionApplication(r.Context(), *user, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+// handleMyEmailRoutes returns the current user's user-manageable email routes.
+func (a *API) handleMyEmailRoutes(w http.ResponseWriter, r *http.Request) {
+	_, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+
+	items, err := a.permissionService.ListMyEmailRoutes(r.Context(), *user)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// handleUpsertCatchAllEmailRoute writes the authenticated user's catch-all
+// forwarding target after the permission has been approved.
+func (a *API) handleUpsertCatchAllEmailRoute(w http.ResponseWriter, r *http.Request) {
+	session, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	var request service.UpsertMyCatchAllEmailRouteRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	item, err := a.permissionService.UpsertMyCatchAllEmailRoute(r.Context(), *user, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+// handleAdminPermissionPolicies returns all administrator-configurable policy
+// rows that control permission eligibility and auto-approval.
+func (a *API) handleAdminPermissionPolicies(w http.ResponseWriter, r *http.Request) {
+	_, _, ok := a.requireVerifiedAdmin(w, r)
+	if !ok {
+		return
+	}
+
+	items, err := a.permissionService.ListPermissionPolicies(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// handleAdminUpdatePermissionPolicy updates one permission-policy row.
+func (a *API) handleAdminUpdatePermissionPolicy(w http.ResponseWriter, r *http.Request) {
+	session, actor, ok := a.requireVerifiedAdmin(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	policyKey := r.PathValue("policyKey")
+	if policyKey == "" {
+		writeError(w, service.ValidationError("policyKey is required"))
+		return
+	}
+
+	var request service.UpdatePermissionPolicyRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	item, err := a.permissionService.UpdatePermissionPolicy(r.Context(), *actor, policyKey, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}

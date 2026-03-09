@@ -58,17 +58,19 @@ func main() {
 	authService := service.NewAuthService(cfg, store, oauthClient)
 	domainService := service.NewDomainService(cfg, store, cloudflareClient)
 	adminService := service.NewAdminService(cfg, store, cloudflareClient)
+	permissionService := service.NewPermissionService(cfg, store)
 
 	if err := domainService.EnsureDefaultManagedDomain(ctx); err != nil {
 		log.Fatalf("bootstrap default managed domain: %v", err)
 	}
 
 	handler := httpapi.NewRouter(httpapi.RouterDependencies{
-		Config:        cfg,
-		Version:       version,
-		AuthService:   authService,
-		DomainService: domainService,
-		AdminService:  adminService,
+		Config:            cfg,
+		Version:           version,
+		AuthService:       authService,
+		DomainService:     domainService,
+		AdminService:      adminService,
+		PermissionService: permissionService,
 	})
 
 	server := &http.Server{
