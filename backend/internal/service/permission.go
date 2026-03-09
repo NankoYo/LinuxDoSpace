@@ -38,7 +38,7 @@ const (
 // EmailCatchAllPledgeText is the canonical server-side pledge text recorded on
 // every application. The backend stores this value directly so the audit trail
 // does not depend on client-side wording.
-const EmailCatchAllPledgeText = "I promise to use this email catch-all permission only for lawful and reasonable purposes, not to abuse platform resources, and to accept full responsibility for any consequences caused by my own actions. If I benefit from it, I am willing to give back to the Linux Do community."
+const EmailCatchAllPledgeText = "我承诺仅将此邮箱泛解析权限用于合法、正当且合理的用途，不实施违法违纪行为，不滥用平台资源；如因本人使用导致任何后果，均由本人自行承担，与开发者无关；若因此获得收益，我也愿意无私反馈 Linux Do 社区。"
 
 // PermissionService owns user-facing permission application flows together with
 // the administrator-configurable policy rules that govern those flows.
@@ -49,15 +49,15 @@ type PermissionService struct {
 }
 
 const (
-	emailCatchAllPermissionDisplayName = "Catch-all forwarding"
-	emailCatchAllPermissionDescription = "Enable one catch-all forwarding entry for the default subdomain that matches your username."
-	emailCatchAllPledgeTextClean       = "I promise to use this email catch-all permission only for lawful and reasonable purposes, not to abuse platform resources, and to accept full responsibility for any consequences caused by my own actions. If I benefit from it, I am willing to give back to the Linux Do community."
-	defaultEmailRouteDisplayName       = "Default mailbox"
-	defaultEmailRouteDescription       = "Each user automatically owns one mailbox that matches the Linux Do username."
-	customEmailRouteDisplayName        = "Additional mailbox"
-	customEmailRouteDescription        = "This mailbox was already assigned to your account and is currently shown as read-only on the public page."
-	catchAllEmailRouteDisplayName      = "Catch-all forwarding"
-	catchAllEmailRouteDescription      = "Receives mail sent to catch-all@<username>.linuxdo.space."
+	emailCatchAllPermissionDisplayName = "邮箱泛解析"
+	emailCatchAllPermissionDescription = "为与你用户名同名的默认二级域名开启一个 catch-all 邮箱转发入口。"
+	emailCatchAllPledgeTextClean       = "我承诺仅将此邮箱泛解析权限用于合法、正当且合理的用途，不实施违法违纪行为，不滥用平台资源；如因本人使用导致任何后果，均由本人自行承担，与开发者无关；若因此获得收益，我也愿意无私反馈 Linux Do 社区。"
+	defaultEmailRouteDisplayName       = "默认邮箱"
+	defaultEmailRouteDescription       = "每位用户默认拥有一个与 Linux Do 用户名同名的邮箱转发地址。"
+	customEmailRouteDisplayName        = "附加邮箱"
+	customEmailRouteDescription        = "这是已经分配到你名下的额外邮箱地址，当前页面先以只读方式展示。"
+	catchAllEmailRouteDisplayName      = "邮箱泛解析"
+	catchAllEmailRouteDescription      = "用于接收 catch-all@<username>.linuxdo.space 的泛解析邮件转发。"
 )
 
 // PermissionApplicationSummary is the normalized subset of one application row
@@ -480,7 +480,7 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 		if permission.Application != nil && strings.TrimSpace(permission.Application.Reason) != "" {
 			reason = permission.Application.Reason
 		} else {
-			reason = "Administrator manually set this permission state."
+			reason = "管理员手动设置该权限状态。"
 		}
 	}
 
@@ -755,13 +755,13 @@ func normalizeUserEmailRouteCopy(item UserEmailRouteView) UserEmailRouteView {
 func buildCatchAllEligibilityReasons(user model.User, policy model.PermissionPolicy, namespace catchAllNamespace) []string {
 	reasons := make([]string, 0, 3)
 	if !policy.Enabled {
-		reasons = append(reasons, "This permission is currently disabled by the administrator.")
+		reasons = append(reasons, "管理员当前已暂时关闭该权限申请。")
 	}
 	if !namespace.HasOwnedAllocation {
-		reasons = append(reasons, "You do not currently own the default subdomain that matches your username, so the catch-all permission cannot be requested yet.")
+		reasons = append(reasons, "你当前尚未持有与你用户名同名的默认子域名，暂时无法申请该邮箱泛解析权限。")
 	}
 	if user.TrustLevel < policy.MinTrustLevel {
-		reasons = append(reasons, fmt.Sprintf("Your Linux Do trust level must be at least %d, but the current level is %d.", policy.MinTrustLevel, user.TrustLevel))
+		reasons = append(reasons, fmt.Sprintf("你的 Linux Do 信任等级需要至少达到 %d，当前为 %d。", policy.MinTrustLevel, user.TrustLevel))
 	}
 	return reasons
 }
