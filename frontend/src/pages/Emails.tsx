@@ -768,7 +768,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                       <button
                         type="button"
                         onClick={() => setPledgeModalOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/60 px-4 py-2.5 font-medium text-gray-900 transition hover:bg-white/80 dark:border-white/10 dark:bg-black/30 dark:text-white dark:hover:bg-black/45"
+                        className="inline-flex min-w-[10rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-2xl border border-white/20 bg-white/60 px-4 py-2.5 font-medium text-gray-900 transition hover:bg-white/80 dark:border-white/10 dark:bg-black/30 dark:text-white dark:hover:bg-black/45"
                       >
                         查看承诺书
                         <ArrowRight size={16} />

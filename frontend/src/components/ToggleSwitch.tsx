@@ -40,17 +40,20 @@ export function ToggleSwitch({
         disabled={disabled}
         onClick={() => onCheckedChange(!checked)}
         className={[
-          'relative h-7 w-14 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-teal-400/40',
-          checked ? 'bg-teal-500' : 'bg-slate-300 dark:bg-slate-700',
-          disabled ? 'cursor-not-allowed' : '',
+          'relative inline-flex h-8 w-14 shrink-0 items-center rounded-full border p-0.5 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-teal-400/40',
+          checked
+            ? 'border-teal-300/70 bg-teal-500 shadow-[0_8px_20px_rgba(20,184,166,0.28)]'
+            : 'border-white/35 bg-slate-300/90 shadow-inner dark:border-white/15 dark:bg-slate-700/90',
+          disabled ? 'cursor-not-allowed opacity-70' : 'hover:scale-[1.02]',
         ].join(' ').trim()}
       >
         <span
           className={[
-            'absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200',
-            checked ? 'translate-x-8' : 'translate-x-1',
+            'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_4px_12px_rgba(15,23,42,0.18)] transition-transform duration-200 will-change-transform',
+            checked ? 'translate-x-7' : 'translate-x-0',
           ].join(' ').trim()}
         />
+        <span className="sr-only">{checked ? '已开启' : '已关闭'}</span>
       </button>
     </div>
   );
