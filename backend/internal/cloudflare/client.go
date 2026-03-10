@@ -126,6 +126,7 @@ type EmailRoutingDNSRecord struct {
 type EmailRoutingDNSSettings struct {
 	Name    string                  `json:"name,omitempty"`
 	Enabled bool                    `json:"enabled,omitempty"`
+	Status  string                  `json:"status,omitempty"`
 	Records []EmailRoutingDNSRecord `json:"records,omitempty"`
 }
 
@@ -618,8 +619,16 @@ func parseEmailRoutingDNSRecords(raw json.RawMessage) ([]EmailRoutingDNSRecord, 
 	}
 
 	var settings EmailRoutingDNSSettings
-	if err := json.Unmarshal(trimmed, &settings); err == nil && settings.Records != nil {
-		return settings.Records, nil
+	if err := json.Unmarshal(trimmed, &settings); err == nil {
+		if settings.Records != nil {
+			return settings.Records, nil
+		}
+		// `POST /zones/{zone_id}/email/routing/dns` returns the Email Routing
+		// enablement object rather than a DNS record list. A successful response
+		// still means the feature is enabled, so the caller should continue.
+		if strings.TrimSpace(settings.Name) != "" || strings.TrimSpace(settings.Status) != "" || settings.Enabled {
+			return nil, nil
+		}
 	}
 
 	var single EmailRoutingDNSRecord
