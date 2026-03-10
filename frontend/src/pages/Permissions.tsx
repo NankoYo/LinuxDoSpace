@@ -35,6 +35,8 @@ interface OverviewRow {
 }
 
 const emailCatchAllPermissionKey = 'email_catch_all';
+const emailCatchAllMaintenanceEnabled = true;
+const emailCatchAllMaintenanceMessage = '邮箱泛解析功能还在修 bug，敬请期待。';
 
 // builtinCatalog 恢复原权限页的多入口结构，同时明确哪些入口已经真实接入。
 const builtinCatalog: CatalogItem[] = [
@@ -44,8 +46,8 @@ const builtinCatalog: CatalogItem[] = [
     selectLabel: '二级域名邮箱泛解析',
     typeLabel: '邮箱泛解析',
     stage: 'live',
-    description: '为与你用户名同名的默认二级域名开放整个邮箱命名空间的泛解析能力。真实申请入口位于邮箱页面，因为还需要填写转发邮箱并确认承诺书。',
-    hint: '该权限已接入后端，当前权限页只负责恢复总入口设计，不会重复实现邮箱页中的提交逻辑。',
+    description: '该权限当前正在修复实现问题，前端入口已临时切换为维护状态。真实 catch-all 方案确认后会恢复申请与配置流程。',
+    hint: '还在修 bug，敬请期待。',
     target: (user) => `*@${normalizeIdentity(user?.username ?? 'username')}.linuxdo.space`,
   },
   {
@@ -163,6 +165,7 @@ export function Permissions({ authenticated, sessionLoading, user, onLogin, onOp
       onLogin();
       return;
     }
+    if (emailCatchAllMaintenanceEnabled && selectedItem?.key === emailCatchAllPermissionKey) return;
     if (selectedItem?.key === emailCatchAllPermissionKey) onOpenEmails();
   }
 
@@ -273,10 +276,22 @@ export function Permissions({ authenticated, sessionLoading, user, onLogin, onOp
                 ) : null}
 
                 <div className="mt-6 flex flex-wrap gap-3">
-                  <button type="button" onClick={openLiveEntry} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-3 font-medium text-white shadow-lg transition hover:from-emerald-600 hover:to-teal-700">
-                    <ArrowRight size={18} />
-                    {buildLiveEntryButtonLabel(authenticated, selectedPermission)}
-                  </button>
+                  {emailCatchAllMaintenanceEnabled && selectedItem.key === emailCatchAllPermissionKey ? (
+                    <>
+                      <div className="w-full rounded-2xl border border-amber-300/35 bg-amber-50/80 px-4 py-4 text-sm leading-7 text-amber-900 dark:border-amber-500/20 dark:bg-amber-950/25 dark:text-amber-100">
+                        {emailCatchAllMaintenanceMessage}
+                      </div>
+                      <button type="button" disabled className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-3 font-medium text-white opacity-60">
+                        <ArrowRight size={18} />
+                        维护中，暂不可申请
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" onClick={openLiveEntry} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-3 font-medium text-white shadow-lg transition hover:from-emerald-600 hover:to-teal-700">
+                      <ArrowRight size={18} />
+                      {buildLiveEntryButtonLabel(authenticated, selectedPermission, selectedItem.key)}
+                    </button>
+                  )}
                 </div>
               </>
             ) : (
@@ -463,7 +478,8 @@ function describePermissionStatus(status: UserPermission['status']) {
   }
 }
 
-function buildLiveEntryButtonLabel(authenticated: boolean, permission: UserPermission | null): string {
+function buildLiveEntryButtonLabel(authenticated: boolean, permission: UserPermission | null, key: string): string {
+  if (emailCatchAllMaintenanceEnabled && key === emailCatchAllPermissionKey) return '维护中，暂不可申请';
   if (!authenticated) return '登录后申请';
   if (permission?.can_manage_route) return '前往邮箱页面管理';
   if (permission?.can_apply) return '前往邮箱页面申请';

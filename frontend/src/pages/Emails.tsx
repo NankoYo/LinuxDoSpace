@@ -61,6 +61,7 @@ interface ChipDescriptor {
 
 const catchAllPermissionKey = 'email_catch_all';
 const fallbackRootDomain = 'linuxdo.space';
+const emailCatchAllMaintenanceMessage = '邮箱泛解析功能还在修 bug，敬请期待。';
 
 // Emails keeps mailbox search public while forcing authenticated users to bind
 // forwarding targets first and only then select verified targets for routing.
@@ -730,105 +731,23 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                 </div>
               </div>
 
+              <InlineNotice tone="info" message={emailCatchAllMaintenanceMessage} />
+              <div className="rounded-2xl border border-amber-300/35 bg-amber-50/80 p-4 text-sm leading-7 text-amber-900 dark:border-amber-500/20 dark:bg-amber-950/25 dark:text-amber-100">
+                当前仅暂时保留展示区块，申请、承诺书查看和转发配置入口已临时下线，避免继续触发错误流程。
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <InfoStat title="目标地址" value={catchAllAddress} mono />
+                <InfoStat title="当前状态" value="维护中" />
+              </div>
+              {/* 原有邮箱泛解析申请与配置控件暂时下线，等待真实 catch-all 方案修复后再恢复。 */}
+              {/*
               {permissionError ? <InlineNotice tone="error" message={`权限数据加载失败：${permissionError}`} /> : null}
               {catchAllNotice ? <InlineNotice tone={catchAllNotice.tone} message={catchAllNotice.message} /> : null}
               {catchAllTargetNeedsVerification && catchAllRoute?.target_email ? (
                 <InlineNotice tone="info" message={`当前已保存的邮箱泛解析目标邮箱 ${catchAllRoute.target_email} 尚未完成验证。完成验证后刷新状态，或改选其他已验证目标邮箱。`} />
               ) : null}
               {!permission && !permissionError ? <InlineNotice tone="info" message="当前后端没有返回邮箱泛解析权限配置，因此暂时无法申请或管理此功能。" /> : null}
-
-              {permission ? (
-                <>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <InfoStat title="权限状态" value={describePermissionStatus(permission.status).label} />
-                    <InfoStat title="自动审批" value={permission.auto_approve ? '是' : '否'} />
-                    <InfoStat title="最低等级要求" value={`TL ${permission.min_trust_level}`} />
-                    <InfoStat title="当前等级" value={user ? `TL ${user.trust_level}` : '未登录'} />
-                  </div>
-
-                  <div className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <StatusChip {...describePermissionStatus(permission.status)} />
-                      <StatusChip
-                        label={permission.eligible ? '当前满足申请条件' : '当前不满足申请条件'}
-                        className={permission.eligible ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300'}
-                      />
-                    </div>
-                    <p className="mt-4 text-sm leading-7 text-gray-700 dark:text-gray-200">{permission.description}</p>
-                    {permission.eligibility_reasons.length > 0 ? <div className="mt-4 rounded-2xl border border-amber-300/35 bg-amber-100/60 p-4 text-sm leading-7 text-amber-900 dark:border-amber-700/35 dark:bg-amber-950/25 dark:text-amber-100">{permission.eligibility_reasons.map((reason) => formatEligibilityReason(reason, permission)).join('；')}</div> : null}
-                    {permission.application ? <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">最近一次申请时间：{formatDate(permission.application.created_at)}</div> : null}
-                  </div>
-
-                  <div className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900 dark:text-white">承诺书</div>
-                        <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">{pledgeText ? '点击按钮以弹窗形式查看承诺书，并在确认后提交申请。' : '当前无承诺书。你仍然可以打开弹窗查看空状态提示。'}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setPledgeModalOpen(true)}
-                        className="inline-flex min-w-[10rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-2xl border border-white/20 bg-white/60 px-4 py-2.5 font-medium text-gray-900 transition hover:bg-white/80 dark:border-white/10 dark:bg-black/30 dark:text-white dark:hover:bg-black/45"
-                      >
-                        查看承诺书
-                        <ArrowRight size={16} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <form className="space-y-4" onSubmit={(event) => void handleSaveCatchAll(event)}>
-                    <div className="space-y-2">
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">已验证的转发目标</label>
-                      <GlassSelect
-                        options={selectableTargetOptions}
-                        value={catchAllTarget}
-                        onChange={setCatchAllTarget}
-                        placeholder={verifiedTargets.length > 0 ? '请选择已验证的目标邮箱' : '暂无已验证的目标邮箱'}
-                        disabled={!permission.can_manage_route || savingCatchAll}
-                      />
-                      <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">邮箱泛解析只允许使用已经绑定到你账号并完成 Cloudflare 验证的目标邮箱。</div>
-                    </div>
-
-                    <ToggleSwitch
-                      title="启用邮箱泛解析转发"
-                      description="关闭后会保留权限与配置入口，但暂时不再转发当前命名空间下的邮件。"
-                      checked={catchAllEnabled}
-                      onCheckedChange={setCatchAllEnabled}
-                      disabled={!permission.can_manage_route || savingCatchAll}
-                    />
-
-                    <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
-                      {permission.can_manage_route
-                        ? '你已经拥有配置权限，现在可以从已验证的目标邮箱中选择一个，用于整个命名空间的泛解析转发。'
-                        : permission.can_apply
-                          ? '你还没有该权限。请先阅读承诺书并提交申请，申请通过后才能配置整个命名空间的转发。'
-                          : '当前不能直接管理此邮箱命名空间。若状态为待审核或未通过，请等待管理员处理。'}
-                    </div>
-
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        type="submit"
-                        disabled={!permission.can_manage_route || savingCatchAll}
-                        className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-lg transition hover:from-violet-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {savingCatchAll ? <LoaderCircle className="animate-spin" size={18} /> : <Sparkles size={18} />}
-                        保存邮箱泛解析配置
-                      </button>
-
-                      {permission.can_apply ? (
-                        <button
-                          type="button"
-                          onClick={() => setPledgeModalOpen(true)}
-                          className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/60 px-4 py-3 font-medium text-gray-900 transition hover:bg-white/80 dark:border-white/10 dark:bg-black/30 dark:text-white dark:hover:bg-black/45"
-                        >
-                          申请邮箱泛解析权限
-                          <ArrowRight size={16} />
-                        </button>
-                      ) : null}
-                    </div>
-                  </form>
-                </>
-              ) : null}
+              */}
             </GlassCard>
           </div>
         </div>
