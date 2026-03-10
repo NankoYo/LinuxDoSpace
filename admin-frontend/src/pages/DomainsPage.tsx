@@ -16,6 +16,7 @@ import {
 } from '../lib/api';
 import { AdminSelect } from '../components/AdminSelect';
 import { GlassCard } from '../components/GlassCard';
+import { AdminSwitch } from '../components/AdminSwitch';
 import type {
   AdminAllocationRecord,
   AdminDomainRecord,
@@ -502,15 +503,14 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   </div>
                 ) : null}
               </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={creatingRecordDraft.proxied}
-                  disabled={creatingRecordDraft.type === 'TXT' || creatingRecordDraft.type === 'MX'}
-                  onChange={(event) => setCreatingRecordDraft((current) => ({ ...current, proxied: event.target.checked }))}
-                />
-                通过 Cloudflare 代理
-              </label>
+              <AdminSwitch
+                checked={creatingRecordDraft.proxied}
+                disabled={creatingRecordDraft.type === 'TXT' || creatingRecordDraft.type === 'MX'}
+                onCheckedChange={(checked) => setCreatingRecordDraft((current) => ({ ...current, proxied: checked }))}
+                label="通过 Cloudflare 代理"
+                description={creatingRecordDraft.type === 'TXT' || creatingRecordDraft.type === 'MX' ? 'TXT 与 MX 记录不能启用代理。' : '开启后将通过 Cloudflare 代理暴露该记录。'}
+                accent="indigo"
+              />
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">备注</label>
                 <input
@@ -654,15 +654,14 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   </div>
                 ) : null}
               </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={editingRecord.proxied}
-                  disabled={editingRecord.type === 'TXT' || editingRecord.type === 'MX'}
-                  onChange={(event) => setEditingRecord({ ...editingRecord, proxied: event.target.checked })}
-                />
-                通过 Cloudflare 代理访问
-              </label>
+              <AdminSwitch
+                checked={editingRecord.proxied}
+                disabled={editingRecord.type === 'TXT' || editingRecord.type === 'MX'}
+                onCheckedChange={(checked) => setEditingRecord({ ...editingRecord, proxied: checked })}
+                label="通过 Cloudflare 代理访问"
+                description={editingRecord.type === 'TXT' || editingRecord.type === 'MX' ? 'TXT 与 MX 记录不能启用代理。' : '关闭后将直接暴露源站记录，不再走 Cloudflare 代理。'}
+                accent="blue"
+              />
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">备注</label>
                 <input
@@ -751,15 +750,15 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   <option value="disabled">disabled</option>
                 </AdminSelect>
               </div>
-              <label className="sm:col-span-2 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={allocationDraft.is_primary}
-                  disabled={allocationDraft.status !== 'active'}
-                  onChange={(event) => setAllocationDraft({ ...allocationDraft, is_primary: event.target.checked })}
-                />
-                将此命名空间设置为该用户在本根域名下的主命名空间
-              </label>
+              <AdminSwitch
+                checked={allocationDraft.is_primary}
+                disabled={allocationDraft.status !== 'active'}
+                onCheckedChange={(checked) => setAllocationDraft({ ...allocationDraft, is_primary: checked })}
+                label="设为主命名空间"
+                description="主命名空间通常对应用户默认可使用的同名入口。停用命名空间时不能设为主命名空间。"
+                accent="cyan"
+                className="sm:col-span-2"
+              />
             </div>
             <div className="mt-6 flex gap-3">
               <button onClick={() => setAllocationDraft(null)} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-100">取消</button>
@@ -808,18 +807,27 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   className="w-full rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-black/35 dark:text-white"
                 />
               </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input type="checkbox" checked={managedDomainDraft.auto_provision} onChange={(event) => setManagedDomainDraft({ ...managedDomainDraft, auto_provision: event.target.checked })} />
-                登录后自动分配同名子域名
-              </label>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input type="checkbox" checked={managedDomainDraft.is_default} onChange={(event) => setManagedDomainDraft({ ...managedDomainDraft, is_default: event.target.checked })} />
-                设为默认根域名
-              </label>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input type="checkbox" checked={managedDomainDraft.enabled} onChange={(event) => setManagedDomainDraft({ ...managedDomainDraft, enabled: event.target.checked })} />
-                允许继续分发
-              </label>
+              <AdminSwitch
+                checked={managedDomainDraft.auto_provision}
+                onCheckedChange={(checked) => setManagedDomainDraft({ ...managedDomainDraft, auto_provision: checked })}
+                label="登录后自动分配同名子域名"
+                description="开启后，首次登录且符合条件的用户会自动获得与用户名同名的默认子域名。"
+                accent="blue"
+              />
+              <AdminSwitch
+                checked={managedDomainDraft.is_default}
+                onCheckedChange={(checked) => setManagedDomainDraft({ ...managedDomainDraft, is_default: checked })}
+                label="设为默认根域名"
+                description="默认根域名会优先用于自动分配与前台默认展示。"
+                accent="blue"
+              />
+              <AdminSwitch
+                checked={managedDomainDraft.enabled}
+                onCheckedChange={(checked) => setManagedDomainDraft({ ...managedDomainDraft, enabled: checked })}
+                label="允许继续分发"
+                description="关闭后该根域名保留历史数据，但不会继续向新用户分发。"
+                accent="blue"
+              />
             </div>
             <div className="mt-6 flex gap-3">
               <button onClick={() => setManagedDomainDraft(null)} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-100">取消</button>

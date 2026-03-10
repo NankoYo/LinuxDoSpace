@@ -12,6 +12,7 @@ import {
 } from '../lib/api';
 import { AdminSelect } from '../components/AdminSelect';
 import { GlassCard } from '../components/GlassCard';
+import { AdminSwitch } from '../components/AdminSwitch';
 import type { AdminUserDetail, AdminUserPermission, AdminUserRecord, ApplicationStatus, ManagedDomain } from '../types/admin';
 
 interface UsersPageProps {
@@ -383,10 +384,13 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
                     <input value={formatDateTime(editingDetail.user.last_login_at)} disabled className="w-full rounded-2xl border border-slate-200 bg-slate-100 px-4 py-3 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400" />
                   </div>
                 </div>
-                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                  <input type="checkbox" checked={draftBanned} onChange={(event) => setDraftBanned(event.target.checked)} />
-                  立即封禁该账号
-                </label>
+                <AdminSwitch
+                  checked={draftBanned}
+                  onCheckedChange={setDraftBanned}
+                  label="立即封禁该账号"
+                  description="封禁后用户将不能继续正常使用站点功能，保存后才会真正生效。"
+                  accent="red"
+                />
                 <div>
                   <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">封禁备注</label>
                   <textarea

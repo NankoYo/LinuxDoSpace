@@ -15,6 +15,7 @@ import {
   Sun,
   X,
 } from 'lucide-react';
+import { ToggleSwitch } from './ToggleSwitch';
 
 // NavbarTab constrains the navigation targets supported by the public shell.
 type NavbarTab = 'home' | 'domains' | 'emails' | 'settings' | 'permissions' | 'supervision' | 'login';
@@ -260,31 +261,13 @@ export function Navbar({
                   </button>
                 </div>
 
-                <label className="mt-4 flex cursor-pointer items-center gap-4 rounded-2xl border border-white/25 bg-white/45 px-4 py-4 dark:border-white/10 dark:bg-white/5">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-gray-900 dark:text-white">二次元随机背景</div>
-                    <p className="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300">
-                      开启时浏览器会请求第三方动漫图；关闭后仅保留本站本地背景层。
-                    </p>
-                  </div>
-                  <span
-                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
-                      animeBackgroundEnabled ? 'bg-teal-500' : 'bg-gray-300 dark:bg-gray-700'
-                    }`}
-                  >
-                    <span
-                      className={`absolute left-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                        animeBackgroundEnabled ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </span>
-                  <input
-                    type="checkbox"
-                    className="sr-only"
-                    checked={animeBackgroundEnabled}
-                    onChange={(event) => onAnimeBackgroundEnabledChange(event.target.checked)}
-                  />
-                </label>
+                <ToggleSwitch
+                  title="二次元随机背景"
+                  description="开启时浏览器会请求第三方动漫图；关闭后仅保留本站本地背景层。"
+                  checked={animeBackgroundEnabled}
+                  onCheckedChange={onAnimeBackgroundEnabledChange}
+                  className="mt-4 border-white/25 bg-white/45 dark:border-white/10 dark:bg-white/5"
+                />
               </motion.div>
             )}
           </AnimatePresence>

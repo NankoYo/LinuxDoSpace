@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { APIError, createEmailRoute, deleteEmailRoute, listAdminUsers, listEmailRoutes, updateEmailRoute } from '../lib/api';
 import { AdminSelect } from '../components/AdminSelect';
 import { GlassCard } from '../components/GlassCard';
+import { AdminSwitch } from '../components/AdminSwitch';
 import type { AdminEmailRecord, AdminUserRecord, ManagedDomain, UpdateEmailRouteInput, UpsertEmailRouteInput } from '../types/admin';
 
 interface EmailsPageProps {
@@ -271,10 +272,13 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
               />
             </div>
 
-            <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-              <input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} />
-              创建后立即启用
-            </label>
+            <AdminSwitch
+              checked={draft.enabled}
+              onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))}
+              label="创建后立即启用"
+              description="关闭后会先创建路由记录，但不会立刻开始转发。"
+              accent="fuchsia"
+            />
 
             <button
               onClick={() => void submitCreate()}
@@ -358,10 +362,13 @@ export function EmailsPage({ csrfToken, managedDomains }: EmailsPageProps) {
                 <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">目标邮箱</label>
                 <input type="email" value={editingRecord.target_email} onChange={(event) => setEditingRecord({ ...editingRecord, target_email: event.target.value })} className="w-full rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 outline-none focus:border-fuchsia-400 focus:ring-2 focus:ring-fuchsia-400/20 dark:border-slate-700 dark:bg-black/35 dark:text-white" />
               </div>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-black/35 dark:text-slate-200">
-                <input type="checkbox" checked={editingRecord.enabled} onChange={(event) => setEditingRecord({ ...editingRecord, enabled: event.target.checked })} />
-                保持启用
-              </label>
+              <AdminSwitch
+                checked={editingRecord.enabled}
+                onCheckedChange={(checked) => setEditingRecord({ ...editingRecord, enabled: checked })}
+                label="保持启用"
+                description="关闭后会保留该邮箱转发配置，但不会继续接收并转发新邮件。"
+                accent="fuchsia"
+              />
             </div>
             <div className="mt-6 flex gap-3">
               <button onClick={() => { setEditingRecord(null); setModalError(''); }} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-100">取消</button>

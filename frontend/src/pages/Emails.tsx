@@ -22,6 +22,7 @@ import {
   upsertDefaultEmailRoute,
 } from '../lib/api';
 import type { EmailRouteAvailabilityResult, ManagedDomain, PermissionStatus, User, UserEmailRoute, UserPermission } from '../types/api';
+import { ToggleSwitch } from '../components/ToggleSwitch';
 
 interface EmailsProps {
   authenticated: boolean;
@@ -483,7 +484,12 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                   />
                 </div>
 
-                <ToggleRow title="启用默认邮箱转发" description="关闭后会保留邮箱地址，但暂时不再转发邮件。" enabled={defaultEnabled} onToggle={() => setDefaultEnabled((currentValue) => !currentValue)} />
+                        <ToggleSwitch
+                          title="启用默认邮箱转发"
+                          description="关闭后会保留邮箱地址，但暂时不再转发邮件。"
+                          checked={defaultEnabled}
+                          onCheckedChange={setDefaultEnabled}
+                        />
                 <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">每个用户都会自动保留一个与用户名同名的邮箱地址。填写目标邮箱并保存后，邮件会按你的配置进行转发。</div>
 
                 <button
@@ -563,7 +569,12 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                           />
                         </div>
 
-                        <ToggleRow title="启用 catch-all 转发" description="关闭后会保留权限与配置入口，但暂时不再转发邮件。" enabled={catchAllEnabled} onToggle={() => setCatchAllEnabled((currentValue) => !currentValue)} />
+                        <ToggleSwitch
+                          title="启用 catch-all 转发"
+                          description="关闭后会保留权限与配置入口，但暂时不再转发邮件。"
+                          checked={catchAllEnabled}
+                          onCheckedChange={setCatchAllEnabled}
+                        />
                       </div>
                     </fieldset>
 
@@ -696,27 +707,6 @@ function InlineNotice({ tone, message }: InlineNoticeProps) {
 
 function StatusChip({ label, className }: ChipDescriptor) {
   return <span className={`inline-flex rounded-full px-3 py-1 text-sm font-semibold ${className}`}>{label}</span>;
-}
-
-interface ToggleRowProps {
-  title: string;
-  description: string;
-  enabled: boolean;
-  onToggle: () => void;
-}
-
-function ToggleRow({ title, description, enabled, onToggle }: ToggleRowProps) {
-  return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
-      <div>
-        <div className="text-sm font-semibold text-gray-900 dark:text-white">{title}</div>
-        <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">{description}</div>
-      </div>
-      <button type="button" onClick={onToggle} className={`relative h-7 w-14 shrink-0 rounded-full transition-colors ${enabled ? 'bg-teal-500' : 'bg-slate-300 dark:bg-slate-700'}`}>
-        <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${enabled ? 'translate-x-8' : 'translate-x-1'}`} />
-      </button>
-    </div>
-  );
 }
 
 function buildImplicitDefaultRoute(user: User, rootDomain: string): UserEmailRoute {

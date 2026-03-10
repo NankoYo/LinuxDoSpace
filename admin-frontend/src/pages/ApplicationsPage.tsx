@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, FileText, LoaderCircle, Search, Settings2, XCircle } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { APIError, listApplications, listPermissionPolicies, updateApplication, updatePermissionPolicy } from '../lib/api';
+import { AdminSwitch } from '../components/AdminSwitch';
 import { GlassCard } from '../components/GlassCard';
 import type { AdminApplicationRecord, ApplicationStatus, PermissionPolicy } from '../types/admin';
 
@@ -287,45 +288,39 @@ export function ApplicationsPage({ csrfToken }: ApplicationsPageProps) {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-                <label className="flex items-center justify-between rounded-2xl border border-white/20 bg-white/40 px-4 py-4 text-sm text-slate-700 dark:border-white/10 dark:bg-black/20 dark:text-slate-200">
-                  <div>
-                    <div className="font-medium">允许申请</div>
-                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">关闭后，用户即使满足条件也无法提交申请。</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={draft.enabled}
-                    onChange={(event) =>
-                      setPolicyDrafts((current) => ({
-                        ...current,
-                        [policy.key]: {
-                          ...draft,
-                          enabled: event.target.checked,
-                        },
-                      }))
-                    }
-                  />
-                </label>
+                <AdminSwitch
+                  checked={draft.enabled}
+                  onCheckedChange={(checked) =>
+                    setPolicyDrafts((current) => ({
+                      ...current,
+                      [policy.key]: {
+                        ...draft,
+                        enabled: checked,
+                      },
+                    }))
+                  }
+                  label="允许申请"
+                  description="关闭后，用户即使满足条件也无法提交申请。"
+                  accent="amber"
+                  className="border-white/20 bg-white/40 dark:border-white/10 dark:bg-black/20"
+                />
 
-                <label className="flex items-center justify-between rounded-2xl border border-white/20 bg-white/40 px-4 py-4 text-sm text-slate-700 dark:border-white/10 dark:bg-black/20 dark:text-slate-200">
-                  <div>
-                    <div className="font-medium">自动通过</div>
-                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">开启后，满足条件的用户申请会直接标记为 approved。</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={draft.auto_approve}
-                    onChange={(event) =>
-                      setPolicyDrafts((current) => ({
-                        ...current,
-                        [policy.key]: {
-                          ...draft,
-                          auto_approve: event.target.checked,
-                        },
-                      }))
-                    }
-                  />
-                </label>
+                <AdminSwitch
+                  checked={draft.auto_approve}
+                  onCheckedChange={(checked) =>
+                    setPolicyDrafts((current) => ({
+                      ...current,
+                      [policy.key]: {
+                        ...draft,
+                        auto_approve: checked,
+                      },
+                    }))
+                  }
+                  label="自动通过"
+                  description="开启后，满足条件的用户申请会直接标记为 approved。"
+                  accent="amber"
+                  className="border-white/20 bg-white/40 dark:border-white/10 dark:bg-black/20"
+                />
               </div>
 
               <div className="mt-4 rounded-2xl border border-white/20 bg-white/40 px-4 py-4 dark:border-white/10 dark:bg-black/20">
