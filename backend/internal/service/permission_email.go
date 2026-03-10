@@ -123,6 +123,13 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 	if err != nil {
 		return UserEmailRouteView{}, err
 	}
+	if targetEmail != "" {
+		target, targetErr := s.requireVerifiedOwnedEmailTarget(ctx, user, targetEmail)
+		if targetErr != nil {
+			return UserEmailRouteView{}, targetErr
+		}
+		targetEmail = target.Email
+	}
 
 	beforeState, existingRoute, err := s.resolveDefaultEmailRouteBeforeState(ctx, user, spec)
 	if err != nil {

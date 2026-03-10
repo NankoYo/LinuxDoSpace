@@ -16,6 +16,7 @@ interface GlassSelectProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }
 
 // GlassSelect 提供和当前站点玻璃态风格一致的下拉选择器。
@@ -25,6 +26,7 @@ export function GlassSelect({
   value,
   onChange,
   placeholder = '请选择',
+  disabled = false,
 }: GlassSelectProps) {
   // isOpen 控制下拉列表是否展开。
   const [isOpen, setIsOpen] = useState(false);
@@ -64,8 +66,12 @@ export function GlassSelect({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={isOpen}
+        disabled={disabled}
         onClick={() => setIsOpen((current) => !current)}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white transition-all backdrop-blur-md"
+        className={[
+          'w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white transition-all backdrop-blur-md',
+          disabled ? 'cursor-not-allowed opacity-70' : '',
+        ].join(' ').trim()}
       >
         <span className="truncate text-left">{selectedOption?.label ?? placeholder}</span>
         <motion.span animate={{ rotate: isOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>

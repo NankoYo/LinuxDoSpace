@@ -4,6 +4,7 @@ import type {
   APIErrorBody,
   AvailabilityResult,
   CreateAllocationInput,
+  CreateMyEmailTargetInput,
   DNSRecord,
   EmailRouteAvailabilityResult,
   ManagedDomain,
@@ -13,6 +14,7 @@ import type {
   UpsertMyCatchAllEmailRouteInput,
   UpsertMyDefaultEmailRouteInput,
   UpsertDNSRecordInput,
+  UserEmailTarget,
   UserEmailRoute,
   UserPermission,
 } from '../types/api';
@@ -230,6 +232,24 @@ export function submitPermissionApplication(input: SubmitPermissionApplicationIn
 // listMyEmailRoutes returns the mailbox rows visible to the current user.
 export function listMyEmailRoutes(): Promise<UserEmailRoute[]> {
   return request<UserEmailRoute[]>('/v1/my/email-routes');
+}
+
+// listMyEmailTargets returns every forwarding destination currently bound to
+// the authenticated user.
+export function listMyEmailTargets(): Promise<UserEmailTarget[]> {
+  return request<UserEmailTarget[]>('/v1/my/email-targets');
+}
+
+// createMyEmailTarget binds one external inbox to the authenticated user and
+// triggers Cloudflare's verification email when needed.
+export function createMyEmailTarget(input: CreateMyEmailTargetInput, csrfToken: string): Promise<UserEmailTarget> {
+  return request<UserEmailTarget>('/v1/my/email-targets', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(input),
+  });
 }
 
 // upsertDefaultEmailRoute saves the forwarding target for the implicit default mailbox.

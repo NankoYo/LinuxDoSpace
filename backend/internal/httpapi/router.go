@@ -51,6 +51,8 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/my/allocations", api.handleMyAllocations)
 	mux.HandleFunc("GET /v1/my/permissions", api.handleMyPermissions)
 	mux.HandleFunc("POST /v1/my/permissions/applications", api.handleSubmitPermissionApplication)
+	mux.HandleFunc("GET /v1/my/email-targets", api.handleMyEmailTargets)
+	mux.HandleFunc("POST /v1/my/email-targets", api.handleCreateMyEmailTarget)
 	mux.HandleFunc("GET /v1/my/email-routes", api.handleMyEmailRoutes)
 	mux.HandleFunc("PUT /v1/my/email-routes/default", api.handleUpsertDefaultEmailRoute)
 	mux.HandleFunc("PUT /v1/my/email-routes/catch-all", api.handleUpsertCatchAllEmailRoute)

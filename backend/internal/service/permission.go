@@ -294,9 +294,16 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		return UserEmailRouteView{}, ForbiddenError("the catch-all email permission has not been approved")
 	}
 
-	targetEmail, err := normalizeTargetEmail(request.TargetEmail, false)
+	targetEmail, err := normalizeTargetEmail(request.TargetEmail, true)
 	if err != nil {
 		return UserEmailRouteView{}, err
+	}
+	if targetEmail != "" {
+		target, targetErr := s.requireVerifiedOwnedEmailTarget(ctx, user, targetEmail)
+		if targetErr != nil {
+			return UserEmailRouteView{}, targetErr
+		}
+		targetEmail = target.Email
 	}
 
 	namespace, err := s.resolveCatchAllNamespace(ctx, user)
@@ -305,17 +312,58 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 	}
 
 	beforeState := newDeletedEmailRouteSyncState(namespace.RootDomain, emailCatchAllPrefix)
-	existingRoute, routeErr := s.db.GetEmailRouteByAddress(ctx, namespace.RootDomain, emailCatchAllPrefix)
+	var existingRoute *model.EmailRoute
+	storedRoute, routeErr := s.db.GetEmailRouteByAddress(ctx, namespace.RootDomain, emailCatchAllPrefix)
 	switch {
 	case routeErr == nil:
-		if existingRoute.OwnerUserID != user.ID {
-			return UserEmailRouteView{}, UnavailableError("catch-all mailbox is assigned to another user", fmt.Errorf("route %d belongs to user %d", existingRoute.ID, existingRoute.OwnerUserID))
+		if storedRoute.OwnerUserID != user.ID {
+			return UserEmailRouteView{}, UnavailableError("catch-all mailbox is assigned to another user", fmt.Errorf("route %d belongs to user %d", storedRoute.ID, storedRoute.OwnerUserID))
 		}
-		beforeState = newForwardingEmailRouteSyncState(existingRoute.RootDomain, existingRoute.Prefix, existingRoute.TargetEmail, existingRoute.Enabled)
+		beforeState = newForwardingEmailRouteSyncState(storedRoute.RootDomain, storedRoute.Prefix, storedRoute.TargetEmail, storedRoute.Enabled)
+		existingRoute = &storedRoute
 	case sqlite.IsNotFound(routeErr):
-		// No existing catch-all route is stored yet.
+		snapshot, snapshotErr := s.lookupCloudflareForwardingSnapshot(ctx, namespace.RootDomain, emailCatchAllPrefix)
+		if snapshotErr != nil {
+			return UserEmailRouteView{}, snapshotErr
+		}
+		if snapshot.Found {
+			beforeState = newForwardingEmailRouteSyncState(namespace.RootDomain, emailCatchAllPrefix, snapshot.TargetEmail, snapshot.Enabled)
+		}
 	default:
 		return UserEmailRouteView{}, InternalError("failed to load catch-all email route before update", routeErr)
+	}
+
+	if targetEmail == "" {
+		if beforeState.Exists {
+			if err := routing.SyncForwardingState(ctx, beforeState, newDeletedEmailRouteSyncState(namespace.RootDomain, emailCatchAllPrefix), func() error {
+				if existingRoute == nil {
+					return nil
+				}
+				if deleteErr := s.db.DeleteEmailRoute(ctx, existingRoute.ID); deleteErr != nil {
+					return InternalError("failed to clear catch-all email route", deleteErr)
+				}
+				return nil
+			}); err != nil {
+				return UserEmailRouteView{}, err
+			}
+
+			if existingRoute != nil {
+				metadata, _ := json.Marshal(map[string]any{
+					"email_route_id": existingRoute.ID,
+					"permission_key": PermissionKeyEmailCatchAll,
+					"address":        existingRoute.Prefix + "@" + existingRoute.RootDomain,
+				})
+				logAuditWriteFailure("email_route.catch_all.clear", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+					ActorUserID:  &user.ID,
+					Action:       "email_route.catch_all.clear",
+					ResourceType: "email_route",
+					ResourceID:   strconv.FormatInt(existingRoute.ID, 10),
+					MetadataJSON: string(metadata),
+				}))
+			}
+		}
+
+		return s.buildCatchAllEmailRouteView(ctx, user, permission, namespace)
 	}
 
 	desiredState := newForwardingEmailRouteSyncState(namespace.RootDomain, emailCatchAllPrefix, targetEmail, request.Enabled)

@@ -60,6 +60,46 @@ func (a *API) handleMyEmailRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// handleMyEmailTargets returns the current user's bound forwarding destinations.
+func (a *API) handleMyEmailTargets(w http.ResponseWriter, r *http.Request) {
+	_, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+
+	items, err := a.permissionService.ListMyEmailTargets(r.Context(), *user)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// handleCreateMyEmailTarget binds one external mailbox to the current user and
+// asks Cloudflare to send the verification email when needed.
+func (a *API) handleCreateMyEmailTarget(w http.ResponseWriter, r *http.Request) {
+	session, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	var request service.CreateMyEmailTargetRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	item, err := a.permissionService.CreateMyEmailTarget(r.Context(), *user, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
 // handleUpsertDefaultEmailRoute writes the authenticated user's forwarding
 // target for the always-owned default mailbox.
 func (a *API) handleUpsertDefaultEmailRoute(w http.ResponseWriter, r *http.Request) {

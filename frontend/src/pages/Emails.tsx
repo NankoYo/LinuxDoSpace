@@ -6,23 +6,36 @@ import {
   CheckCircle2,
   LoaderCircle,
   Mail,
+  Plus,
+  RefreshCw,
   Search,
   ShieldCheck,
   Sparkles,
   X,
 } from 'lucide-react';
 import { GlassCard } from '../components/GlassCard';
+import { GlassSelect, type GlassSelectOption } from '../components/GlassSelect';
+import { ToggleSwitch } from '../components/ToggleSwitch';
 import {
   APIError,
   checkPublicEmailRouteAvailability,
+  createMyEmailTarget,
   listMyEmailRoutes,
+  listMyEmailTargets,
   listMyPermissions,
   submitPermissionApplication,
   upsertCatchAllEmailRoute,
   upsertDefaultEmailRoute,
 } from '../lib/api';
-import type { EmailRouteAvailabilityResult, ManagedDomain, PermissionStatus, User, UserEmailRoute, UserPermission } from '../types/api';
-import { ToggleSwitch } from '../components/ToggleSwitch';
+import type {
+  EmailRouteAvailabilityResult,
+  ManagedDomain,
+  PermissionStatus,
+  User,
+  UserEmailRoute,
+  UserEmailTarget,
+  UserPermission,
+} from '../types/api';
 
 interface EmailsProps {
   authenticated: boolean;
@@ -49,14 +62,16 @@ interface ChipDescriptor {
 const catchAllPermissionKey = 'email_catch_all';
 const fallbackRootDomain = 'linuxdo.space';
 
-// Emails keeps public search open while separating authenticated mailbox
-// management into independent sections with their own loading and error states.
+// Emails keeps mailbox search public while forcing authenticated users to bind
+// forwarding targets first and only then select verified targets for routing.
 export function Emails({ authenticated, sessionLoading, user, publicDomains, csrfToken, onLogin }: EmailsProps) {
   const [permission, setPermission] = useState<UserPermission | null>(null);
   const [routes, setRoutes] = useState<UserEmailRoute[]>([]);
+  const [emailTargets, setEmailTargets] = useState<UserEmailTarget[]>([]);
   const [loading, setLoading] = useState(false);
   const [permissionError, setPermissionError] = useState('');
   const [routeError, setRouteError] = useState('');
+  const [targetError, setTargetError] = useState('');
 
   const [searchPrefix, setSearchPrefix] = useState('');
   const [searchStatus, setSearchStatus] = useState<SearchStatus>('idle');
@@ -72,6 +87,11 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
   const [catchAllEnabled, setCatchAllEnabled] = useState(false);
   const [savingCatchAll, setSavingCatchAll] = useState(false);
   const [catchAllNotice, setCatchAllNotice] = useState<SectionNotice | null>(null);
+
+  const [newTargetEmail, setNewTargetEmail] = useState('');
+  const [creatingTarget, setCreatingTarget] = useState(false);
+  const [targetNotice, setTargetNotice] = useState<SectionNotice | null>(null);
+
   const [applyingPermission, setApplyingPermission] = useState(false);
   const [pledgeModalOpen, setPledgeModalOpen] = useState(false);
   const loadRequestTokenRef = useRef(0);
@@ -96,6 +116,18 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
     return nextRows;
   }, [catchAllRoute, customRoutes, defaultRoute]);
 
+  const verifiedTargets = useMemo(
+    () => emailTargets.filter((item) => item.verified),
+    [emailTargets],
+  );
+  const selectableTargetOptions = useMemo<GlassSelectOption[]>(() => {
+    const options = verifiedTargets.map((item) => ({
+      value: item.email,
+      label: item.email,
+    }));
+    return [{ value: '', label: '不转发 / 清空目标' }, ...options];
+  }, [verifiedTargets]);
+
   const defaultAddress = defaultRoute?.address ?? (normalizedUsername ? `${normalizedUsername}@${configuredRootDomain}` : '');
   const catchAllAddress = useMemo(() => {
     if (catchAllRoute?.address) return catchAllRoute.address;
@@ -104,6 +136,15 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
   }, [catchAllRoute?.address, configuredRootDomain, normalizedUsername, permission?.target]);
   const searchRootDomain = defaultRoute?.root_domain ?? searchResult?.root_domain ?? configuredRootDomain;
   const pledgeText = permission?.pledge_text?.trim() ?? '';
+  const pendingTargetCount = emailTargets.length - verifiedTargets.length;
+  const defaultTargetNeedsVerification = useMemo(
+    () => routeTargetNeedsVerification(defaultRoute?.target_email, verifiedTargets),
+    [defaultRoute?.target_email, verifiedTargets],
+  );
+  const catchAllTargetNeedsVerification = useMemo(
+    () => routeTargetNeedsVerification(catchAllRoute?.target_email, verifiedTargets),
+    [catchAllRoute?.target_email, verifiedTargets],
+  );
 
   useEffect(() => {
     if (!authenticated) {
@@ -111,15 +152,19 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       searchRequestTokenRef.current += 1;
       setPermission(null);
       setRoutes([]);
+      setEmailTargets([]);
       setLoading(false);
       setPermissionError('');
       setRouteError('');
+      setTargetError('');
       setDefaultTarget('');
       setDefaultEnabled(false);
       setCatchAllTarget('');
       setCatchAllEnabled(false);
+      setNewTargetEmail('');
       setDefaultNotice(null);
       setCatchAllNotice(null);
+      setTargetNotice(null);
       setPledgeModalOpen(false);
       return;
     }
@@ -142,8 +187,13 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
     setLoading(true);
     setPermissionError('');
     setRouteError('');
+    setTargetError('');
 
-    const [permissionResult, routeResult] = await Promise.allSettled([listMyPermissions(), listMyEmailRoutes()]);
+    const [permissionResult, routeResult, targetResult] = await Promise.allSettled([
+      listMyPermissions(),
+      listMyEmailRoutes(),
+      listMyEmailTargets(),
+    ]);
     if (requestToken !== loadRequestTokenRef.current) {
       return;
     }
@@ -168,6 +218,20 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
     } else {
       setRoutes([]);
       setRouteError(readableErrorMessage(routeResult.reason, '无法加载我的邮箱列表。'));
+    }
+
+    if (targetResult.status === 'fulfilled') {
+      setEmailTargets(targetResult.value);
+      setTargetError('');
+    } else {
+      const maybeTargetError = targetResult.reason;
+      if (maybeTargetError instanceof APIError && maybeTargetError.code === 'not_found') {
+        setEmailTargets([]);
+        setTargetError('');
+      } else {
+        setEmailTargets([]);
+        setTargetError(readableErrorMessage(targetResult.reason, '无法加载我的转发目标列表。'));
+      }
     }
 
     if (requestToken === loadRequestTokenRef.current) {
@@ -207,6 +271,47 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setSearchMessage(readableErrorMessage(error, '邮箱查询失败，请稍后重试。'));
     }
   }
+
+  async function handleCreateTarget(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!csrfToken) {
+      setTargetNotice({ tone: 'error', message: '当前会话缺少 CSRF Token，请重新登录后再试。' });
+      return;
+    }
+
+    const nextEmail = normalizeEmail(newTargetEmail);
+    if (!nextEmail) {
+      setTargetNotice({ tone: 'error', message: '请输入要绑定的目标邮箱。' });
+      return;
+    }
+
+    try {
+      setCreatingTarget(true);
+      setTargetNotice(null);
+      const createdTarget = await createMyEmailTarget({ email: nextEmail }, csrfToken);
+      setEmailTargets((currentTargets) => upsertEmailTarget(currentTargets, createdTarget));
+      setNewTargetEmail('');
+      setTargetNotice({
+        tone: 'success',
+        message: createdTarget.verified
+          ? `目标邮箱 ${createdTarget.email} 已完成绑定，现在可以直接用于转发。`
+          : `目标邮箱 ${createdTarget.email} 已绑定到你的账号。Cloudflare 验证邮件已发出，请前往邮箱确认后点击“刷新状态”。`,
+      });
+    } catch (error) {
+      setTargetNotice({ tone: 'error', message: readableErrorMessage(error, '添加目标邮箱失败。') });
+    } finally {
+      setCreatingTarget(false);
+    }
+  }
+
+  async function handleRefreshTargets(): Promise<void> {
+    await loadAuthenticatedData();
+    setTargetNotice({
+      tone: 'info',
+      message: '已刷新目标邮箱状态。若你刚完成邮箱确认，现在应该能看到最新验证结果。',
+    });
+  }
+
   async function handleSaveDefault(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!csrfToken) {
@@ -214,9 +319,13 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       return;
     }
 
-    const nextTarget = defaultTarget.trim();
+    const nextTarget = normalizeEmail(defaultTarget);
     if (defaultEnabled && !nextTarget) {
-      setDefaultNotice({ tone: 'error', message: '开启默认邮箱转发前，请先填写目标邮箱。' });
+      setDefaultNotice({ tone: 'error', message: '启用默认邮箱转发前，请先选择一个已验证的目标邮箱。' });
+      return;
+    }
+    if (nextTarget && !isVerifiedTargetOwned(nextTarget, verifiedTargets)) {
+      setDefaultNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成 Cloudflare 验证的目标邮箱。' });
       return;
     }
 
@@ -230,9 +339,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setRoutes((currentRoutes) => upsertRoute(currentRoutes, savedRoute));
       setDefaultNotice({
         tone: 'success',
-        message: savedRoute.configured
-          ? '默认邮箱已更新。若你刚绑定新的收件邮箱，请注意查收 Cloudflare 的验证邮件。'
-          : '默认邮箱已清空，当前不会继续转发邮件。',
+        message: savedRoute.configured ? '默认邮箱已更新。' : '默认邮箱已清空，当前不会继续转发邮件。',
       });
     } catch (error) {
       setDefaultNotice({ tone: 'error', message: readableErrorMessage(error, '保存默认邮箱失败。') });
@@ -274,9 +381,13 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       return;
     }
 
-    const nextTarget = catchAllTarget.trim();
+    const nextTarget = normalizeEmail(catchAllTarget);
     if (catchAllEnabled && !nextTarget) {
-      setCatchAllNotice({ tone: 'error', message: '开启 catch-all 转发前，请先填写目标邮箱。' });
+      setCatchAllNotice({ tone: 'error', message: '启用 catch-all 转发前，请先选择一个已验证的目标邮箱。' });
+      return;
+    }
+    if (nextTarget && !isVerifiedTargetOwned(nextTarget, verifiedTargets)) {
+      setCatchAllNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成 Cloudflare 验证的目标邮箱。' });
       return;
     }
 
@@ -290,9 +401,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setRoutes((currentRoutes) => upsertRoute(currentRoutes, savedRoute));
       setCatchAllNotice({
         tone: 'success',
-        message: savedRoute.configured
-          ? 'catch-all 邮箱已更新。若使用新的收件邮箱，请先完成 Cloudflare 的目标邮箱验证。'
-          : 'catch-all 邮箱已清空，当前不会继续转发邮件。',
+        message: savedRoute.configured ? 'catch-all 邮箱已更新。' : 'catch-all 邮箱已清空，当前不会继续转发邮件。',
       });
     } catch (error) {
       setCatchAllNotice({ tone: 'error', message: readableErrorMessage(error, '保存 catch-all 邮箱失败。') });
@@ -311,7 +420,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
           </div>
           <h1 className="mt-5 text-4xl font-extrabold text-gray-900 dark:text-white md:text-5xl">搜索、保留并管理你的 LinuxDoSpace 邮箱</h1>
           <p className="mx-auto mt-4 max-w-4xl text-lg leading-relaxed text-gray-700 dark:text-gray-200">
-            搜索功能对所有访客开放。登录后，你可以管理默认邮箱
+            搜索功能对所有访客开放。登录后，你可以先绑定自己的转发目标邮箱，再管理默认邮箱
             <span className="font-semibold text-gray-900 dark:text-white"> {defaultAddress || '<用户名>@linuxdo.space'}</span>
             ，并在获得权限后配置
             <span className="font-semibold text-gray-900 dark:text-white"> {catchAllAddress}</span>。
@@ -371,17 +480,18 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
               <div className="rounded-2xl bg-emerald-500/15 p-3 text-emerald-700 dark:text-emerald-300"><ShieldCheck size={20} /></div>
               <div>
                 <h2 className="text-xl font-bold text-gray-900 dark:text-white">使用说明</h2>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">邮箱能力分成公开搜索、默认邮箱和权限邮箱三部分。</p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">邮箱能力分成公开搜索、目标邮箱绑定、默认邮箱和权限邮箱四部分。</p>
               </div>
             </div>
 
-            <InfoBlock title="默认邮箱" description={normalizedUsername ? `每位用户默认保留 ${normalizedUsername}@${configuredRootDomain}，你只需要填写转发目标邮箱。` : '每位用户都会默认保留一个与用户名同名的邮箱地址。'} />
+            <InfoBlock title="默认邮箱" description={normalizedUsername ? `每位用户默认保留 ${normalizedUsername}@${configuredRootDomain}，但必须先绑定自己的目标邮箱后才能转发。` : '每位用户都会默认保留一个与用户名同名的邮箱地址。'} />
+            <InfoBlock title="我的转发目标" description="先在“我的转发目标”里绑定目标邮箱。新增后 Cloudflare 会向该邮箱发送确认邮件，验证完成后该目标才会出现在下拉选择器里。" />
             <InfoBlock title="我的邮箱列表" description="这里会展示当前账号已经存在或默认保留的邮箱行，包括默认邮箱、已存在的自定义邮箱以及已配置的 catch-all。" />
             <InfoBlock title="catch-all 权限" description="catch-all 不是默认开放功能。只有满足权限条件的用户才可以申请，并在通过后配置转发目标。" />
-            <InfoBlock title="Cloudflare 目标邮箱验证" description="首次把某个新邮箱设置为转发目标时，Cloudflare 可能会发验证邮件到该目标邮箱。完成验证后，再回到这里保存即可。" />
           </GlassCard>
         </div>
       </motion.div>
+
       {!authenticated ? (
         <GlassCard className="space-y-4">
           <div className="flex items-start gap-3">
@@ -392,8 +502,8 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">{sessionLoading ? '正在检查登录状态' : '登录后管理我的邮箱'}</h2>
               <p className="mt-2 text-sm leading-7 text-gray-700 dark:text-gray-200">
                 {sessionLoading
-                  ? '你现在仍可使用上方搜索功能。待登录状态加载完成后，再进入默认邮箱和 catch-all 配置。'
-                  : '搜索功能无需登录，但默认邮箱配置、我的邮箱列表和 catch-all 权限申请都需要使用 Linux Do 账号登录。'}
+                  ? '你现在仍可使用上方搜索功能。待登录状态加载完成后，再进入目标邮箱绑定、默认邮箱和 catch-all 配置。'
+                  : '搜索功能无需登录，但目标邮箱绑定、默认邮箱配置、我的邮箱列表和 catch-all 权限申请都需要使用 Linux Do 账号登录。'}
               </p>
             </div>
           </div>
@@ -459,6 +569,107 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
             </div>
           </GlassCard>
 
+          <GlassCard className="space-y-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-sky-500/15 p-3 text-sky-700 dark:text-sky-300"><Mail size={20} /></div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white">我的转发目标</h2>
+                  <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">先绑定并验证目标邮箱，再把它用于默认邮箱或 catch-all 转发。</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleRefreshTargets()}
+                disabled={loading}
+                className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/60 px-4 py-3 font-medium text-gray-900 transition hover:bg-white/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-black/30 dark:text-white dark:hover:bg-black/45"
+              >
+                {loading ? <LoaderCircle className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                刷新状态
+              </button>
+            </div>
+
+            {targetError ? <InlineNotice tone="error" message={`目标邮箱列表加载失败：${targetError}`} /> : null}
+            {targetNotice ? <InlineNotice tone={targetNotice.tone} message={targetNotice.message} /> : null}
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <InfoStat title="已绑定目标" value={`${emailTargets.length} 个`} />
+              <InfoStat title="已验证" value={`${verifiedTargets.length} 个`} />
+              <InfoStat title="待确认" value={`${pendingTargetCount} 个`} />
+            </div>
+
+            <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
+              每个目标邮箱都会和当前 LinuxDoSpace 账号绑定，其他用户不能重复占用。首次添加时，Cloudflare 会向该邮箱发送确认邮件；只有完成确认后，这个目标邮箱才会出现在下方配置下拉框中。
+            </div>
+
+            <form className="space-y-4" onSubmit={(event) => void handleCreateTarget(event)}>
+              <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+                <div className="flex min-w-0 items-center rounded-2xl border border-white/20 bg-white/55 px-4 py-3 shadow-inner dark:border-white/10 dark:bg-black/35">
+                  <input
+                    type="email"
+                    value={newTargetEmail}
+                    onChange={(event) => setNewTargetEmail(event.target.value)}
+                    placeholder="例如 you@example.com"
+                    className="min-w-0 flex-1 bg-transparent text-base text-gray-900 outline-none placeholder:text-gray-400 dark:text-white dark:placeholder:text-gray-500"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={creatingTarget}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-sky-500 to-cyan-500 px-5 py-3 font-semibold text-white shadow-lg transition hover:from-sky-600 hover:to-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {creatingTarget ? <LoaderCircle className="animate-spin" size={18} /> : <Plus size={18} />}
+                  添加目标邮箱
+                </button>
+              </div>
+            </form>
+
+            {emailTargets.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-white/20 bg-white/25 p-6 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/15 dark:text-gray-200">
+                你当前还没有绑定任何目标邮箱。先添加一个你自己的邮箱地址，完成 Cloudflare 验证后，它才会出现在默认邮箱和 catch-all 的下拉框里。
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-3xl border border-white/15 bg-white/35 dark:border-white/10 dark:bg-black/20">
+                <table className="w-full min-w-[760px] border-collapse text-left">
+                  <thead>
+                    <tr className="border-b border-white/15 text-sm text-gray-600 dark:border-white/10 dark:text-gray-300">
+                      <th className="px-5 py-4 font-semibold">目标邮箱</th>
+                      <th className="px-5 py-4 font-semibold">验证状态</th>
+                      <th className="px-5 py-4 font-semibold">同步状态</th>
+                      <th className="px-5 py-4 font-semibold">最近动作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {emailTargets.map((item) => {
+                      const status = describeEmailTargetStatus(item);
+                      return (
+                        <tr key={item.id} className="border-b border-white/10 last:border-b-0 hover:bg-white/30 dark:border-white/5 dark:hover:bg-white/5">
+                          <td className="px-5 py-4 align-top">
+                            <div className="font-semibold text-gray-900 dark:text-white">{item.email}</div>
+                            <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">只允许当前账号再次使用这个目标邮箱。</div>
+                          </td>
+                          <td className="px-5 py-4 align-top">
+                            <StatusChip {...status} />
+                            <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                              {item.verified_at ? `验证通过：${formatDate(item.verified_at)}` : '等待你在目标邮箱中确认 Cloudflare 验证邮件。'}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 align-top text-sm text-gray-700 dark:text-gray-200">
+                            {item.cloudflare_address_id ? '已在 Cloudflare 建立目标邮箱绑定' : '等待 Cloudflare 创建目标邮箱绑定'}
+                          </td>
+                          <td className="px-5 py-4 align-top text-sm text-gray-600 dark:text-gray-300">
+                            {item.last_verification_sent_at ? `验证邮件发送于 ${formatDate(item.last_verification_sent_at)}` : `最近更新于 ${formatDate(item.updated_at)}`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </GlassCard>
+
           <div className="grid gap-6 xl:grid-cols-2">
             <GlassCard className="space-y-5">
               <div className="flex items-center gap-3">
@@ -470,27 +681,34 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
               </div>
 
               {defaultNotice ? <InlineNotice tone={defaultNotice.tone} message={defaultNotice.message} /> : null}
+              {defaultTargetNeedsVerification && defaultRoute?.target_email ? (
+                <InlineNotice tone="info" message={`当前已保存的目标邮箱 ${defaultRoute.target_email} 尚未完成验证。完成验证后刷新状态，或直接改选其他已验证目标邮箱。`} />
+              ) : null}
 
               <form className="space-y-4" onSubmit={(event) => void handleSaveDefault(event)}>
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300" htmlFor="default-target-email">转发到的邮箱</label>
-                  <input
-                    id="default-target-email"
-                    type="email"
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">已验证的转发目标</label>
+                  <GlassSelect
+                    options={selectableTargetOptions}
                     value={defaultTarget}
-                    onChange={(event) => setDefaultTarget(event.target.value)}
-                    placeholder="例如 you@example.com"
-                    className="w-full rounded-2xl border border-white/20 bg-white/55 px-4 py-3 text-gray-900 outline-none transition focus:border-teal-400 focus:ring-2 focus:ring-teal-400/40 dark:border-white/10 dark:bg-black/35 dark:text-white"
+                    onChange={setDefaultTarget}
+                    placeholder={verifiedTargets.length > 0 ? '请选择已验证的目标邮箱' : '暂无已验证的目标邮箱'}
+                    disabled={savingDefault}
                   />
+                  <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">只有上方“我的转发目标”中已经完成 Cloudflare 验证的邮箱，才允许被保存为默认邮箱转发目标。</div>
                 </div>
 
-                        <ToggleSwitch
-                          title="启用默认邮箱转发"
-                          description="关闭后会保留邮箱地址，但暂时不再转发邮件。"
-                          checked={defaultEnabled}
-                          onCheckedChange={setDefaultEnabled}
-                        />
-                <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">每个用户都会自动保留一个与用户名同名的邮箱地址。填写目标邮箱并保存后，邮件会按你的配置进行转发。</div>
+                <ToggleSwitch
+                  title="启用默认邮箱转发"
+                  description="关闭后会保留邮箱地址，但暂时不再转发邮件。"
+                  checked={defaultEnabled}
+                  onCheckedChange={setDefaultEnabled}
+                  disabled={savingDefault}
+                />
+
+                <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
+                  每个用户都会自动保留一个与用户名同名的邮箱地址。你可以选择已验证的目标邮箱进行转发，也可以直接清空目标来停用转发。
+                </div>
 
                 <button
                   type="submit"
@@ -502,6 +720,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                 </button>
               </form>
             </GlassCard>
+
             <GlassCard className="space-y-5">
               <div className="flex items-center gap-3">
                 <div className="rounded-2xl bg-violet-500/15 p-3 text-violet-700 dark:text-violet-300"><ShieldCheck size={20} /></div>
@@ -513,6 +732,9 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
 
               {permissionError ? <InlineNotice tone="error" message={`权限数据加载失败：${permissionError}`} /> : null}
               {catchAllNotice ? <InlineNotice tone={catchAllNotice.tone} message={catchAllNotice.message} /> : null}
+              {catchAllTargetNeedsVerification && catchAllRoute?.target_email ? (
+                <InlineNotice tone="info" message={`当前已保存的 catch-all 目标邮箱 ${catchAllRoute.target_email} 尚未完成验证。完成验证后刷新状态，或改选其他已验证目标邮箱。`} />
+              ) : null}
               {!permission && !permissionError ? <InlineNotice tone="info" message="当前后端没有返回 catch-all 权限配置，因此暂时无法申请或管理此功能。" /> : null}
 
               {permission ? (
@@ -555,32 +777,29 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                   </div>
 
                   <form className="space-y-4" onSubmit={(event) => void handleSaveCatchAll(event)}>
-                    <fieldset disabled={!permission.can_manage_route || savingCatchAll} className={!permission.can_manage_route ? 'cursor-not-allowed opacity-70' : ''}>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300" htmlFor="catch-all-target-email">转发到的邮箱</label>
-                          <input
-                            id="catch-all-target-email"
-                            type="email"
-                            value={catchAllTarget}
-                            onChange={(event) => setCatchAllTarget(event.target.value)}
-                            placeholder="例如 you@example.com"
-                            className="w-full rounded-2xl border border-white/20 bg-white/55 px-4 py-3 text-gray-900 outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-400/40 dark:border-white/10 dark:bg-black/35 dark:text-white disabled:cursor-not-allowed"
-                          />
-                        </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">已验证的转发目标</label>
+                      <GlassSelect
+                        options={selectableTargetOptions}
+                        value={catchAllTarget}
+                        onChange={setCatchAllTarget}
+                        placeholder={verifiedTargets.length > 0 ? '请选择已验证的目标邮箱' : '暂无已验证的目标邮箱'}
+                        disabled={!permission.can_manage_route || savingCatchAll}
+                      />
+                      <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">catch-all 只允许使用已经绑定到你账号并完成 Cloudflare 验证的目标邮箱。</div>
+                    </div>
 
-                        <ToggleSwitch
-                          title="启用 catch-all 转发"
-                          description="关闭后会保留权限与配置入口，但暂时不再转发邮件。"
-                          checked={catchAllEnabled}
-                          onCheckedChange={setCatchAllEnabled}
-                        />
-                      </div>
-                    </fieldset>
+                    <ToggleSwitch
+                      title="启用 catch-all 转发"
+                      description="关闭后会保留权限与配置入口，但暂时不再转发邮件。"
+                      checked={catchAllEnabled}
+                      onCheckedChange={setCatchAllEnabled}
+                      disabled={!permission.can_manage_route || savingCatchAll}
+                    />
 
                     <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
                       {permission.can_manage_route
-                        ? '你已经拥有配置权限，可以直接填写目标邮箱并保存。'
+                        ? '你已经拥有配置权限，现在可以从已验证的目标邮箱中选择一个用于 catch-all 转发。'
                         : permission.can_apply
                           ? '你还没有该权限。请先阅读承诺书并提交申请，申请通过后才能配置转发。'
                           : '当前不能直接管理此邮箱。若状态为待审核或未通过，请等待管理员处理。'}
@@ -658,6 +877,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
     </div>
   );
 }
+
 interface InfoBlockProps {
   title: string;
   description: string;
@@ -743,6 +963,19 @@ function upsertRoute(routes: UserEmailRoute[], nextRoute: UserEmailRoute): UserE
   return currentDefaultRoute ? [currentDefaultRoute, ...otherRoutes, nextRoute] : [...otherRoutes, nextRoute];
 }
 
+function upsertEmailTarget(items: UserEmailTarget[], nextItem: UserEmailTarget): UserEmailTarget[] {
+  const existingIndex = items.findIndex((item) => item.id === nextItem.id);
+  if (existingIndex >= 0) {
+    return items.map((item, index) => (index === existingIndex ? nextItem : item));
+  }
+  return [...items, nextItem].sort((left, right) => {
+    if (left.verified !== right.verified) {
+      return left.verified ? -1 : 1;
+    }
+    return normalizeEmail(left.email).localeCompare(normalizeEmail(right.email));
+  });
+}
+
 function describeSearchStatus(status: SearchStatus): ChipDescriptor {
   switch (status) {
     case 'checking':
@@ -757,6 +990,7 @@ function describeSearchStatus(status: SearchStatus): ChipDescriptor {
       return { label: '等待查询', className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' };
   }
 }
+
 function describePermissionStatus(status: PermissionStatus): ChipDescriptor {
   switch (status) {
     case 'approved':
@@ -781,6 +1015,13 @@ function describeRouteStatus(route: UserEmailRoute): ChipDescriptor {
     return { label: '已停用', className: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' };
   }
   return { label: '已启用', className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300' };
+}
+
+function describeEmailTargetStatus(target: UserEmailTarget): ChipDescriptor {
+  if (target.verified) {
+    return { label: '已验证', className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300' };
+  }
+  return { label: '待验证', className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300' };
 }
 
 function describeRouteKind(kind: UserEmailRoute['kind']): string {
@@ -858,4 +1099,21 @@ function formatDate(value?: string): string {
 
 function normalizePrefix(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isVerifiedTargetOwned(email: string, targets: UserEmailTarget[]): boolean {
+  const normalizedEmail = normalizeEmail(email);
+  return targets.some((item) => item.verified && normalizeEmail(item.email) === normalizedEmail);
+}
+
+function routeTargetNeedsVerification(targetEmail: string | undefined, verifiedTargets: UserEmailTarget[]): boolean {
+  const normalizedTarget = normalizeEmail(targetEmail ?? '');
+  if (!normalizedTarget) {
+    return false;
+  }
+  return !verifiedTargets.some((item) => normalizeEmail(item.email) === normalizedTarget);
 }

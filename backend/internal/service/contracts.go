@@ -51,6 +51,10 @@ type Store interface {
 	UpsertEmailRouteByAddress(ctx context.Context, input sqlite.UpsertEmailRouteByAddressInput) (model.EmailRoute, error)
 	UpdateEmailRoute(ctx context.Context, input sqlite.UpdateEmailRouteInput) (model.EmailRoute, error)
 	DeleteEmailRoute(ctx context.Context, id int64) error
+	ListEmailTargetsByOwner(ctx context.Context, ownerUserID int64) ([]model.EmailTarget, error)
+	GetEmailTargetByEmail(ctx context.Context, email string) (model.EmailTarget, error)
+	CreateEmailTarget(ctx context.Context, input sqlite.CreateEmailTargetInput) (model.EmailTarget, error)
+	UpdateEmailTarget(ctx context.Context, input sqlite.UpdateEmailTargetInput) (model.EmailTarget, error)
 	ListAdminApplications(ctx context.Context) ([]model.AdminApplication, error)
 	ListAdminApplicationsByApplicant(ctx context.Context, applicantUserID int64) ([]model.AdminApplication, error)
 	UpsertAdminApplication(ctx context.Context, input sqlite.UpsertAdminApplicationInput) (model.AdminApplication, error)

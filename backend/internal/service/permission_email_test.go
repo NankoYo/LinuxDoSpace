@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"linuxdospace/backend/internal/cloudflare"
@@ -13,8 +15,10 @@ import (
 // fakeEmailRoutingCloudflare keeps the tests focused on the permission service
 // behavior by emulating only the Email Routing operations exercised here.
 type fakeEmailRoutingCloudflare struct {
-	rulesByZone map[string][]cloudflare.EmailRoutingRule
-	deletedRule []string
+	rulesByZone        map[string][]cloudflare.EmailRoutingRule
+	addressesByAccount map[string][]cloudflare.EmailRoutingDestinationAddress
+	deletedRule        []string
+	createdAddresses   []string
 }
 
 // ResolveZone is unused in these tests because the configuration pins a default zone id.
@@ -57,14 +61,35 @@ func (f *fakeEmailRoutingCloudflare) DeleteDNSRecord(ctx context.Context, zoneID
 	return nil
 }
 
-// ListEmailRoutingDestinationAddresses is unused because the clearing flow only deletes rules.
+// ListEmailRoutingDestinationAddresses returns the in-memory destination
+// addresses visible under one Cloudflare account.
 func (f *fakeEmailRoutingCloudflare) ListEmailRoutingDestinationAddresses(ctx context.Context, accountID string) ([]cloudflare.EmailRoutingDestinationAddress, error) {
-	return nil, nil
+	addresses := f.addressesByAccount[accountID]
+	cloned := make([]cloudflare.EmailRoutingDestinationAddress, len(addresses))
+	copy(cloned, addresses)
+	return cloned, nil
 }
 
-// CreateEmailRoutingDestinationAddress is unused because the clearing flow only deletes rules.
+// CreateEmailRoutingDestinationAddress stores one new in-memory destination
+// address so tests can emulate Cloudflare's verification lifecycle.
 func (f *fakeEmailRoutingCloudflare) CreateEmailRoutingDestinationAddress(ctx context.Context, accountID string, email string) (cloudflare.EmailRoutingDestinationAddress, error) {
-	return cloudflare.EmailRoutingDestinationAddress{}, nil
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+	for _, item := range f.addressesByAccount[accountID] {
+		if strings.EqualFold(strings.TrimSpace(item.Email), normalizedEmail) {
+			return item, nil
+		}
+	}
+
+	created := cloudflare.EmailRoutingDestinationAddress{
+		ID:    fmt.Sprintf("addr-%d", len(f.createdAddresses)+1),
+		Email: normalizedEmail,
+	}
+	if f.addressesByAccount == nil {
+		f.addressesByAccount = make(map[string][]cloudflare.EmailRoutingDestinationAddress)
+	}
+	f.addressesByAccount[accountID] = append(f.addressesByAccount[accountID], created)
+	f.createdAddresses = append(f.createdAddresses, normalizedEmail)
+	return created, nil
 }
 
 // ListEmailRoutingRules returns the in-memory rules currently visible in one zone.

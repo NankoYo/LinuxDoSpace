@@ -125,6 +125,23 @@ export interface EmailRouteAvailabilityResult {
   reasons: string[];
 }
 
+// EmailTargetVerificationStatus mirrors the Cloudflare destination-email
+// verification state enforced by the backend.
+export type EmailTargetVerificationStatus = 'pending' | 'verified';
+
+// UserEmailTarget mirrors one user-owned forwarding destination email.
+export interface UserEmailTarget {
+  id: number;
+  email: string;
+  cloudflare_address_id?: string;
+  verification_status: EmailTargetVerificationStatus;
+  verified: boolean;
+  verified_at?: string;
+  last_verification_sent_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // UserEmailRoute mirrors one user-visible email forwarding row.
 export interface UserEmailRoute {
   id?: number;
@@ -202,4 +219,10 @@ export interface UpsertMyDefaultEmailRouteInput {
 export interface UpsertMyCatchAllEmailRouteInput {
   target_email: string;
   enabled: boolean;
+}
+
+// CreateMyEmailTargetInput mirrors the user-authored request to bind one new
+// forwarding destination email to the current account.
+export interface CreateMyEmailTargetInput {
+  email: string;
 }
