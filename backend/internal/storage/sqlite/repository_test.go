@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,6 +18,39 @@ func TestMigrateRemainsIdempotentAfterAddingAdminSessionVerification(t *testing.
 
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatalf("run migrations twice: %v", err)
+	}
+}
+
+// TestNewStoreCreatesDatabaseFileOnFirstBoot verifies that a brand-new data
+// directory can still boot without requiring an operator to pre-create the
+// SQLite file.
+func TestNewStoreCreatesDatabaseFileOnFirstBoot(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "nested", "linuxdospace.sqlite")
+
+	if _, err := os.Stat(databasePath); !os.IsNotExist(err) {
+		t.Fatalf("expected test database file to start missing, got err=%v", err)
+	}
+
+	store, err := NewStore(databasePath)
+	if err != nil {
+		t.Fatalf("new store on missing database file: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("close test store: %v", err)
+		}
+	})
+
+	if err := store.Migrate(context.Background()); err != nil {
+		t.Fatalf("migrate newly created store: %v", err)
+	}
+
+	info, err := os.Stat(databasePath)
+	if err != nil {
+		t.Fatalf("stat created database file: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatalf("expected %s to be a file, but it is a directory", databasePath)
 	}
 }
 

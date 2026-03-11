@@ -31,6 +31,17 @@ func NewStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
 	}
 
+	// 线上迁移时验证过，modernc sqlite 在某些 bind mount 场景下如果数据库文件尚未存在，
+	// 首次打开会直接返回 “unable to open database file”。
+	// 这里先显式创建空文件，把“首次建库”从驱动层前移到标准库文件操作，避免新服务器首启失败。
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o664)
+	if err != nil {
+		return nil, fmt.Errorf("create sqlite database file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close sqlite database file after create: %w", err)
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
