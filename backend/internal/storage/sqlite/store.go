@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
@@ -18,6 +19,8 @@ import (
 //
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
+
+var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
 // Store 是 SQLite 持久化层的入口对象。
 // 当前阶段先提供数据库生命周期与迁移能力，业务读写方法会在下一阶段接入。
@@ -83,6 +86,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
+		script = bytes.TrimPrefix(script, utf8BOM)
 
 		if _, err := s.db.ExecContext(ctx, string(script)); err != nil {
 			if isIgnorableMigrationError(err) {

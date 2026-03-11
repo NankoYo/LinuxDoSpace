@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"linuxdospace/backend/internal/storage/postgres"
 	_ "modernc.org/sqlite"
 )
 
@@ -67,6 +68,18 @@ func main() {
 
 	if err := postgresDB.PingContext(ctx); err != nil {
 		log.Fatalf("ping postgres database: %v", err)
+	}
+
+	postgresStore, err := postgres.NewStore(*postgresDSN)
+	if err != nil {
+		log.Fatalf("open postgres store for schema bootstrap: %v", err)
+	}
+	if err := postgresStore.Migrate(ctx); err != nil {
+		postgresStore.Close()
+		log.Fatalf("migrate postgres schema before import: %v", err)
+	}
+	if err := postgresStore.Close(); err != nil {
+		log.Fatalf("close bootstrap postgres store: %v", err)
 	}
 
 	tx, err := postgresDB.BeginTx(ctx, nil)

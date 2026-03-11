@@ -18,6 +18,8 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+var utf8BOM = []byte{0xef, 0xbb, 0xbf}
+
 // Store is the PostgreSQL persistence entry point. The repository methods reuse
 // the existing database/sql flow, while the wrapper transparently rewrites
 // SQLite-style `?` placeholders into PostgreSQL `$1...$n` placeholders.
@@ -95,6 +97,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}
+		script = bytes.TrimPrefix(script, utf8BOM)
 		if _, err := s.raw.ExecContext(ctx, string(script)); err != nil {
 			return fmt.Errorf("execute migration %s: %w", entry.Name(), err)
 		}
