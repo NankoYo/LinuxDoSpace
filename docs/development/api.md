@@ -25,6 +25,9 @@ Error responses:
 
 ### `GET /healthz`
 Returns process health, version, and dependency readiness.
+The payload now also exposes `mail_forwarding_backend` and `mail_relay_enabled`
+so operators can verify whether the instance is running in `cloudflare` or
+`database_relay` mode.
 
 ### `GET /v1/public/domains`
 Returns the enabled managed root-domain list.
@@ -83,10 +86,12 @@ The current release returns:
 - any extra mailbox aliases already assigned to the user in the database
 - the permission-gated `*@<username>.linuxdo.space` row
 
-Every email-route mutation now syncs the effective forwarding rule into Cloudflare Email Routing.
+Every email-route mutation now syncs the effective forwarding state into the
+currently selected backend.
 Important operational constraints:
 - the target mailbox must already be a verified Cloudflare Email Routing destination address, or Cloudflare will send a verification email and the save will be rejected until verification completes
-- namespace catch-all routes such as `*@<username>.linuxdo.space` automatically trigger the backend to ensure Cloudflare Email Routing MX and SPF records for that namespace before the catch-all rule is updated
+- when `EMAIL_FORWARDING_BACKEND=cloudflare`, the backend syncs exact-address and catch-all rules directly into Cloudflare Email Routing
+- when `EMAIL_FORWARDING_BACKEND=database_relay`, the backend stores the route only in the database and the built-in SMTP relay executes the forward at delivery time
 
 ### `PUT /v1/my/email-routes/default`
 Creates, updates, or clears the current user's default mailbox forwarding target.
@@ -281,6 +286,8 @@ Deletes one DNS record inside the selected allocation namespace.
 Returns all administrator-managed email forwarding rules.
 
 Administrator-side create, update, and delete operations also sync the effective route into Cloudflare Email Routing.
+In `database_relay` mode, these administrator operations become database-only
+writes and are enforced later by the built-in SMTP relay.
 
 ### `POST /v1/admin/email-routes`
 Creates one email forwarding rule.

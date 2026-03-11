@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a built-in SMTP relay mode controlled by `EMAIL_FORWARDING_BACKEND=database_relay`, allowing LinuxDoSpace to receive mail itself and forward it according to database-stored routes instead of relying on Cloudflare catch-all delivery.
+- Added `internal/mailrelay` with SMTP recipient resolution, route ownership checks, relay-loop protection headers, and upstream SMTP forwarding.
+- Added relay-aware config validation, health fields, deployment variables, Docker port exposure, and service tests that lock `database_relay` mode into a Cloudflare-free route execution path.
 - Added a storage-agnostic `internal/storage` contract layer so the service package no longer depends directly on SQLite DTO types.
 - Added a new PostgreSQL backend implementation with embedded PostgreSQL migrations and placeholder rebinding for the existing repository SQL.
 - Added runtime database driver selection through `DATABASE_DRIVER`, `DATABASE_POSTGRES_DSN`, and `DATABASE_URL`, while keeping SQLite available for local development and rollback.

@@ -61,9 +61,13 @@ COPY --from=backend-builder /out/linuxdospace /usr/local/bin/linuxdospace
 ENV APP_ENV=production \
     APP_ADDR=:8080 \
     SQLITE_PATH=/app/data/linuxdospace.sqlite \
+    EMAIL_FORWARDING_BACKEND=cloudflare \
+    MAIL_RELAY_ENABLED=false \
+    MAIL_RELAY_SMTP_ADDR=:2525 \
     APP_SESSION_SECURE=true
 
 EXPOSE 8080
+EXPOSE 2525
 VOLUME ["/app/data"]
 
 # 直接使用后端自身的健康检查接口作为容器健康检查。
