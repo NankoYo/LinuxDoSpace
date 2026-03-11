@@ -742,7 +742,7 @@ func (s *Store) ListPublicAllocationOwnerships(ctx context.Context) ([]model.Pub
 	rows, err := s.db.QueryContext(ctx, `
 WITH latest_record_events AS (
     SELECT
-        CAST(json_extract(metadata_json, '$.allocation_id') AS INTEGER) AS allocation_id,
+        CAST(NULLIF(metadata_json::jsonb ->> 'allocation_id', '') AS BIGINT) AS allocation_id,
         resource_id,
         action,
         ROW_NUMBER() OVER (
@@ -752,7 +752,7 @@ WITH latest_record_events AS (
     FROM audit_logs
     WHERE resource_type = 'dns_record'
       AND action IN ('dns_record.create', 'dns_record.update', 'dns_record.delete')
-      AND json_extract(metadata_json, '$.allocation_id') IS NOT NULL
+      AND NULLIF(metadata_json::jsonb ->> 'allocation_id', '') IS NOT NULL
 ), active_allocations AS (
     SELECT DISTINCT allocation_id
     FROM latest_record_events
