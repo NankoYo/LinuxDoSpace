@@ -29,6 +29,9 @@
 - Added rate limiting and failure audit logs to `POST /v1/admin/verify-password` so the extra admin password cannot be brute-forced indefinitely.
 - Removed the administrator console's third-party background image dependency so loading the page no longer leaks admin access metadata to an external host.
 - Rebuilt the public frontend shell with the same local-only background approach so the main site also avoids third-party image requests while keeping the existing page wiring intact.
+- Added one shared storage-behavior test suite plus opt-in PostgreSQL integration tests so key repository semantics are no longer validated only through SQLite.
+- Hardened PostgreSQL SQL placeholder rebinding so literal `?` characters inside strings, identifiers, and comments are no longer rewritten by mistake.
+- Added a PostgreSQL index migration focused on allocation lists, admin review lists, email target sorting, and the public supervision audit-log scan.
 
 ## 0.6.0
 

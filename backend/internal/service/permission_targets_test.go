@@ -146,7 +146,7 @@ func TestUpsertMyDefaultEmailRouteAcceptsVerifiedOwnedTarget(t *testing.T) {
 		t.Fatalf("load stored verified target: %v", err)
 	}
 	if storedTarget.VerifiedAt == nil {
-		t.Fatalf("expected verified timestamp to be synchronized into sqlite")
+		t.Fatalf("expected verified timestamp to be synchronized into the backing store")
 	}
 }
 

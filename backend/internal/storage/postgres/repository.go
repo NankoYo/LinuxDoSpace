@@ -160,7 +160,7 @@ RETURNING
 }
 
 // CreateSessionFromOAuthState atomically consumes one OAuth state and creates
-// the authenticated session in the same SQLite transaction. This prevents two
+// the authenticated session in the same storage transaction. This prevents two
 // concurrent callbacks from both minting sessions while still allowing retries
 // after upstream failures because the state is only deleted once the session
 // insert succeeds.
@@ -1159,8 +1159,8 @@ func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
 }
 
-// formatNullableTime converts one optional timestamp into the TEXT value stored
-// by SQLite. Nil values are kept NULL so old sessions remain unverified.
+// formatNullableTime converts one optional timestamp into the RFC3339 text
+// value stored by both current backends. Nil values remain NULL.
 func formatNullableTime(value *time.Time) any {
 	if value == nil {
 		return nil
@@ -1177,7 +1177,7 @@ func parseTime(raw string) (time.Time, error) {
 	return value.UTC(), nil
 }
 
-// parseNullableTime restores one optional timestamp from SQLite NULL / TEXT.
+// parseNullableTime restores one optional timestamp from NULL / RFC3339 text.
 func parseNullableTime(raw sql.NullString) (*time.Time, error) {
 	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
 		return nil, nil
@@ -1189,7 +1189,8 @@ func parseNullableTime(raw sql.NullString) (*time.Time, error) {
 	return &value, nil
 }
 
-// boolToInt 把布尔值转成 SQLite 中更容易处理的 0/1。
+// boolToInt keeps the current integer-flag representation shared by both
+// storage backends.
 func boolToInt(value bool) int {
 	if value {
 		return 1

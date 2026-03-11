@@ -10,6 +10,7 @@ import (
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
@@ -384,7 +385,7 @@ func TestUpsertMyDefaultEmailRouteClearsCloudflareWhenDatabaseRowMissing(t *test
 	}
 
 	_, err = store.GetEmailRouteByAddress(ctx, "linuxdo.space", "alice")
-	if !sqlite.IsNotFound(err) {
+	if !storage.IsNotFound(err) {
 		t.Fatalf("expected no persisted email route row, got %v", err)
 	}
 }

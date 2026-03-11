@@ -50,6 +50,19 @@ docker run --rm -p 8080:8080 --env-file deploy/linuxdospace.env.example linuxdos
 
 Cloudflare Email Routing also requires the API token to include Email Routing Addresses and Email Routing Rules permissions in addition to the existing DNS permissions.
 
+## PostgreSQL integration tests
+
+The repository now includes opt-in PostgreSQL repository integration tests.
+
+To run them:
+
+1. Provision one disposable PostgreSQL database that is safe for test schemas.
+2. Export `LINUXDOSPACE_TEST_POSTGRES_DSN`.
+3. Run `go test ./internal/storage/postgres`.
+
+The test harness creates one isolated schema per test case, runs migrations
+inside that schema, and drops the schema during cleanup.
+
 ## Production PostgreSQL cutover
 
 This production cutover was completed on `2026-03-11` against the live `remote4` deployment.

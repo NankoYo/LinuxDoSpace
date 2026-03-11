@@ -12,11 +12,12 @@ import (
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/linuxdo"
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
 // staticOAuthClient is a deterministic OAuth stub used to exercise the real
-// login completion path against a temporary SQLite database.
+// login completion path against one temporary migrated test store.
 type staticOAuthClient struct {
 	profile     model.LinuxDOProfile
 	exchangeErr error
@@ -201,7 +202,7 @@ func TestCompleteLoginKeepsOAuthStateReusableAfterTransientFailure(t *testing.T)
 	if result.NextPath != "/settings" {
 		t.Fatalf("expected next path /settings, got %q", result.NextPath)
 	}
-	if _, err := store.GetOAuthState(ctx, stateID); !sqlite.IsNotFound(err) {
+	if _, err := store.GetOAuthState(ctx, stateID); !storage.IsNotFound(err) {
 		t.Fatalf("expected oauth state to be consumed after successful login, got %v", err)
 	}
 }
@@ -325,7 +326,7 @@ func TestAuthenticateSessionReevaluatesAdminAllowlist(t *testing.T) {
 	}
 }
 
-// newAuthTestStore creates a temporary migrated SQLite store so auth tests can
+// newAuthTestStore creates a temporary migrated store so auth tests can
 // exercise the real persistence layer instead of a hand-written mock.
 func newAuthTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()

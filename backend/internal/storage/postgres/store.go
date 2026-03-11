@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -159,13 +160,88 @@ func (tx *queryTx) Rollback() error {
 func rebindQuery(query string) string {
 	index := 1
 	buffer := bytes.NewBuffer(make([]byte, 0, len(query)+8))
+	inSingleQuotedString := false
+	inDoubleQuotedIdentifier := false
+	inLineComment := false
+	inBlockComment := false
 
 	for i := 0; i < len(query); i++ {
-		if query[i] != '?' {
-			buffer.WriteByte(query[i])
+		current := query[i]
+		next := byte(0)
+		if i+1 < len(query) {
+			next = query[i+1]
+		}
+
+		switch {
+		case inLineComment:
+			buffer.WriteByte(current)
+			if current == '\n' {
+				inLineComment = false
+			}
+			continue
+		case inBlockComment:
+			buffer.WriteByte(current)
+			if current == '*' && next == '/' {
+				buffer.WriteByte(next)
+				i++
+				inBlockComment = false
+			}
+			continue
+		case inSingleQuotedString:
+			buffer.WriteByte(current)
+			if current == '\'' {
+				if next == '\'' {
+					buffer.WriteByte(next)
+					i++
+				} else {
+					inSingleQuotedString = false
+				}
+			}
+			continue
+		case inDoubleQuotedIdentifier:
+			buffer.WriteByte(current)
+			if current == '"' {
+				if next == '"' {
+					buffer.WriteByte(next)
+					i++
+				} else {
+					inDoubleQuotedIdentifier = false
+				}
+			}
 			continue
 		}
-		buffer.WriteString(fmt.Sprintf("$%d", index))
+
+		if current == '-' && next == '-' {
+			buffer.WriteByte(current)
+			buffer.WriteByte(next)
+			i++
+			inLineComment = true
+			continue
+		}
+		if current == '/' && next == '*' {
+			buffer.WriteByte(current)
+			buffer.WriteByte(next)
+			i++
+			inBlockComment = true
+			continue
+		}
+		if current == '\'' {
+			buffer.WriteByte(current)
+			inSingleQuotedString = true
+			continue
+		}
+		if current == '"' {
+			buffer.WriteByte(current)
+			inDoubleQuotedIdentifier = true
+			continue
+		}
+		if current != '?' {
+			buffer.WriteByte(current)
+			continue
+		}
+
+		buffer.WriteByte('$')
+		buffer.WriteString(strconv.Itoa(index))
 		index++
 	}
 
