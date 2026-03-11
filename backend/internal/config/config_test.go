@@ -246,6 +246,15 @@ func TestLoadAcceptsDatabaseRelayConfiguration(t *testing.T) {
 	if cfg.Mail.ForwardHost != "smtp.example.com:587" {
 		t.Fatalf("expected forward host to survive load, got %q", cfg.Mail.ForwardHost)
 	}
+	if !cfg.Mail.EnsureDNS {
+		t.Fatalf("expected dns automation to stay enabled by default in database relay mode")
+	}
+	if cfg.Mail.MXTarget != "mail.linuxdo.space" {
+		t.Fatalf("expected default mail relay mx target mail.linuxdo.space, got %q", cfg.Mail.MXTarget)
+	}
+	if cfg.Mail.SPFValue != "v=spf1 -all" {
+		t.Fatalf("expected default relay spf value, got %q", cfg.Mail.SPFValue)
+	}
 }
 
 // TestLoadRejectsIncompleteDatabaseRelayConfiguration ensures the relay cannot

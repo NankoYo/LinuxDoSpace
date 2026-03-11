@@ -64,6 +64,9 @@ ENV APP_ENV=production \
     EMAIL_FORWARDING_BACKEND=cloudflare \
     MAIL_RELAY_ENABLED=false \
     MAIL_RELAY_SMTP_ADDR=:2525 \
+    MAIL_RELAY_ENSURE_DNS=true \
+    MAIL_RELAY_MX_TARGET=mail.linuxdo.space \
+    MAIL_RELAY_SPF_VALUE="v=spf1 -all" \
     APP_SESSION_SECURE=true
 
 EXPOSE 8080

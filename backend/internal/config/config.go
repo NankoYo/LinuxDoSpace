@@ -89,8 +89,12 @@ const (
 type MailConfig struct {
 	ForwardingBackend string
 	RelayEnabled      bool
+	EnsureDNS         bool
 	SMTPAddr          string
 	Domain            string
+	MXTarget          string
+	MXPriority        int
+	SPFValue          string
 	MaxRecipients     int
 	MaxMessageBytes   int64
 	ReadTimeout       time.Duration
@@ -151,8 +155,12 @@ func Load() (Config, error) {
 		Mail: MailConfig{
 			ForwardingBackend: strings.ToLower(getEnv("EMAIL_FORWARDING_BACKEND", EmailForwardingBackendCloudflare)),
 			RelayEnabled:      mustParseBool(getEnv("MAIL_RELAY_ENABLED", "false")),
+			EnsureDNS:         mustParseBool(getEnv("MAIL_RELAY_ENSURE_DNS", "true")),
 			SMTPAddr:          getEnv("MAIL_RELAY_SMTP_ADDR", ":2525"),
 			Domain:            getEnv("MAIL_RELAY_DOMAIN", "mail.linuxdo.space"),
+			MXTarget:          getEnv("MAIL_RELAY_MX_TARGET", "mail.linuxdo.space"),
+			MXPriority:        mustParseInt(getEnv("MAIL_RELAY_MX_PRIORITY", "10")),
+			SPFValue:          getEnv("MAIL_RELAY_SPF_VALUE", "v=spf1 -all"),
 			MaxRecipients:     mustParseInt(getEnv("MAIL_RELAY_MAX_RECIPIENTS", "50")),
 			MaxMessageBytes:   mustParseInt64(getEnv("MAIL_RELAY_MAX_MESSAGE_BYTES", "26214400")),
 			ReadTimeout:       mustParseDuration(getEnv("MAIL_RELAY_READ_TIMEOUT", "30s")),
@@ -380,6 +388,9 @@ func validateMailConfig(mail MailConfig) error {
 		if mail.WriteTimeout <= 0 {
 			return fmt.Errorf("MAIL_RELAY_WRITE_TIMEOUT must be greater than 0")
 		}
+		if mail.MXPriority < 0 {
+			return fmt.Errorf("MAIL_RELAY_MX_PRIORITY must be at least 0")
+		}
 		if mail.RelayEnabled {
 			if strings.TrimSpace(mail.SMTPAddr) == "" {
 				return fmt.Errorf("MAIL_RELAY_SMTP_ADDR is required when MAIL_RELAY_ENABLED=true")
@@ -394,8 +405,21 @@ func validateMailConfig(mail MailConfig) error {
 				return fmt.Errorf("MAIL_RELAY_FORWARD_FROM is required when MAIL_RELAY_ENABLED=true")
 			}
 		}
+		if mail.EnsureDNS && strings.TrimSpace(firstNonEmptyString(mail.MXTarget, mail.Domain)) == "" {
+			return fmt.Errorf("MAIL_RELAY_MX_TARGET or MAIL_RELAY_DOMAIN is required when MAIL_RELAY_ENSURE_DNS=true")
+		}
 		return nil
 	default:
 		return fmt.Errorf("EMAIL_FORWARDING_BACKEND must be one of %s, %s", EmailForwardingBackendCloudflare, EmailForwardingBackendDatabaseRelay)
 	}
+}
+
+// firstNonEmptyString returns the first trimmed non-empty string.
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

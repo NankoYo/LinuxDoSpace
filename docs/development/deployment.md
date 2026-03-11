@@ -163,16 +163,24 @@ Additional requirement for `EMAIL_FORWARDING_BACKEND=cloudflare` only:
 Additional requirement for `EMAIL_FORWARDING_BACKEND=database_relay`:
 
 - `MAIL_RELAY_ENABLED=true`
+- `MAIL_RELAY_ENSURE_DNS=true`
 - `MAIL_RELAY_SMTP_ADDR=:2525`
 - `MAIL_RELAY_DOMAIN=mail.example.com`
+- `MAIL_RELAY_MX_TARGET=mail.example.com`
+- `MAIL_RELAY_MX_PRIORITY=10`
+- `MAIL_RELAY_SPF_VALUE=v=spf1 -all`
 - `MAIL_RELAY_FORWARD_HOST=smtp.example.com:587`
 - `MAIL_RELAY_FORWARD_FROM=relay@example.com`
 
 Operational DNS note for `database_relay`:
 
-- the relevant MX records for the routed mail domains or subdomains must point
-  to this server or its upstream mail gateway, because Cloudflare is no longer
-  the delivery plane for catch-all forwarding in this mode
+- when `MAIL_RELAY_ENSURE_DNS=true`, LinuxDoSpace will create or update its own
+  managed `MX` and optional `TXT` records for routed mail domains and
+  subdomains, pointing them at `MAIL_RELAY_MX_TARGET`
+- LinuxDoSpace only updates DNS records carrying its own mail-relay comment, so
+  unrelated user TXT/MX records are not rewritten
+- the MX target itself still must resolve to the real SMTP listener host or the
+  upstream mail gateway that passes mail into this service
 
 Operational notes:
 

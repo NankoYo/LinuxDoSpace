@@ -52,8 +52,12 @@ docker run --rm -p 8080:8080 -p 2525:2525 --env-file deploy/linuxdospace.env.exa
 When `EMAIL_FORWARDING_BACKEND=database_relay`, also configure:
 
 - `MAIL_RELAY_ENABLED=true`
+- `MAIL_RELAY_ENSURE_DNS=true`
 - `MAIL_RELAY_SMTP_ADDR=:2525`
 - `MAIL_RELAY_DOMAIN`
+- `MAIL_RELAY_MX_TARGET`
+- `MAIL_RELAY_MX_PRIORITY`
+- `MAIL_RELAY_SPF_VALUE`
 - `MAIL_RELAY_FORWARD_HOST`
 - `MAIL_RELAY_FORWARD_FROM`
 
@@ -129,5 +133,5 @@ After local startup, verify:
 - If `CLOUDFLARE_DEFAULT_ZONE_ID` is empty, the backend will resolve the zone through the Cloudflare API.
 - If the frontend reports a non-JSON API response, check `VITE_API_BASE_URL` and reverse-proxy routing first.
 - If mailbox forwarding save fails, verify that the target mailbox has already completed Cloudflare destination-address verification.
-- If `database_relay` mode is enabled and inbound mail never arrives, verify the MX records point at the SMTP listener host and that port `2525` is reachable from the upstream mail path.
+- If `database_relay` mode is enabled and inbound mail never arrives, verify LinuxDoSpace created the managed MX/TXT records you expect, the MX target resolves correctly, and host port `25` reaches the container's SMTP listener on `2525`.
 - If `database_relay` mode is enabled and mail is accepted but not forwarded, verify `MAIL_RELAY_FORWARD_HOST`, authentication, and the upstream relay logs.
