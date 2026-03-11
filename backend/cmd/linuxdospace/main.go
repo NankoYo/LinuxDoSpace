@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os/signal"
@@ -13,6 +14,8 @@ import (
 	"linuxdospace/backend/internal/httpapi"
 	"linuxdospace/backend/internal/linuxdo"
 	"linuxdospace/backend/internal/service"
+	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/storage/postgres"
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
@@ -29,14 +32,14 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	store, err := sqlite.NewStore(cfg.SQLite.Path)
+	store, err := openStore(cfg)
 	if err != nil {
-		log.Fatalf("open sqlite store: %v", err)
+		log.Fatalf("open storage backend: %v", err)
 	}
 	defer store.Close()
 
 	if err := store.Migrate(ctx); err != nil {
-		log.Fatalf("migrate sqlite store: %v", err)
+		log.Fatalf("migrate storage backend: %v", err)
 	}
 
 	var cloudflareClient *cloudflare.Client
@@ -101,5 +104,18 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("shutdown http server: %v", err)
+	}
+}
+
+// openStore selects the configured storage backend and returns one migrated
+// repository implementation that satisfies the service-layer contract.
+func openStore(cfg config.Config) (storage.Backend, error) {
+	switch cfg.Database.Driver {
+	case "sqlite":
+		return sqlite.NewStore(cfg.Database.SQLitePath)
+	case "postgres":
+		return postgres.NewStore(cfg.Database.PostgresDSN)
+	default:
+		return nil, fmt.Errorf("unsupported database driver %q", cfg.Database.Driver)
 	}
 }

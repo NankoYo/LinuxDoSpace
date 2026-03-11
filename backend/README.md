@@ -6,7 +6,7 @@ This directory contains the Go backend for LinuxDoSpace.
 
 - Linux Do OAuth login and session management
 - Cloudflare DNS management for managed root domains such as `linuxdo.space`
-- SQLite persistence for users, sessions, quotas, allocations, admin data, and audit logs
+- storage-backed persistence for users, sessions, quotas, allocations, admin data, and audit logs
 - Static asset hosting for the main frontend build bundled into the backend image
 
 ## Key endpoints
@@ -44,6 +44,21 @@ Administrator endpoints:
 ```powershell
 cd backend
 go run ./cmd/linuxdospace
+```
+
+The backend now supports two drivers:
+
+- `DATABASE_DRIVER=sqlite` with `SQLITE_PATH=...`
+- `DATABASE_DRIVER=postgres` with `DATABASE_POSTGRES_DSN=...` or `DATABASE_URL=...`
+
+The repository also includes a one-shot migration command for moving existing
+SQLite production data into PostgreSQL:
+
+```powershell
+cd backend
+go run ./cmd/migrate-sqlite-to-postgres `
+  -sqlite-path ./data/linuxdospace.sqlite `
+  -postgres-dsn "postgres://linuxdospace:change-me@localhost:5432/linuxdospace?sslmode=disable"
 ```
 
 ## Next reading

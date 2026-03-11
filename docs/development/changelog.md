@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a storage-agnostic `internal/storage` contract layer so the service package no longer depends directly on SQLite DTO types.
+- Added a new PostgreSQL backend implementation with embedded PostgreSQL migrations and placeholder rebinding for the existing repository SQL.
+- Added runtime database driver selection through `DATABASE_DRIVER`, `DATABASE_POSTGRES_DSN`, and `DATABASE_URL`, while keeping SQLite available for local development and rollback.
+- Added a one-shot `cmd/migrate-sqlite-to-postgres` migration command for moving existing SQLite production data into PostgreSQL.
+- Updated deployment templates and documentation to recommend PostgreSQL for production instead of SQLite-only persistence.
 - Rebuilt the admin console switch and select controls with the same custom-rendered approach used on the public frontend, fixing native-control rendering glitches across platforms.
 - Added searchable administrator user selectors for long user lists in the admin domain-allocation and email-routing forms.
 - Fixed the public configuration center so `/v1/me` and `/v1/my/allocations` now return every namespace already owned by the user, including administrator-granted namespaces that do not match the Linux Do username.

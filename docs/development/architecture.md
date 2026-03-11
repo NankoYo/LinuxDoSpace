@@ -5,7 +5,9 @@
 - `frontend/`：Vite 前端展示层。
 - `backend/cmd/linuxdospace`：Go 进程入口。
 - `backend/internal/config`：环境变量配置加载。
-- `backend/internal/storage/sqlite`：SQLite 持久化层。
+- `backend/internal/storage`：数据库无关的存储接口与 DTO。
+- `backend/internal/storage/sqlite`：SQLite 持久化实现，主要用于开发、测试和回滚兜底。
+- `backend/internal/storage/postgres`：PostgreSQL 持久化实现，面向生产部署。
 - `backend/internal/linuxdo`：Linux Do OAuth / 用户信息客户端。
 - `backend/internal/cloudflare`：Cloudflare API 客户端。
 - `backend/internal/service`：认证、配额、域名分配和 DNS 业务规则层。
@@ -47,6 +49,7 @@
 
 - 为了保证越权检查准确，记录列表与冲突检查会直接读取 Cloudflare 实时 DNS 记录。
 - 当前没有做 Cloudflare 结果缓存，因此大规模数据下还需要进一步优化读取性能。
+- 当前 PostgreSQL 实现优先保持与 SQLite 一致的 repository 语义，因此布尔值仍使用整数标记、时间戳仍使用 RFC3339 文本存储，以降低迁移期的行为偏差。
 
 ## 下一步架构扩展
 

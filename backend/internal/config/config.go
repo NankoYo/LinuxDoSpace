@@ -13,7 +13,7 @@ import (
 // Config groups all runtime configuration needed by the backend process.
 type Config struct {
 	App         AppConfig
-	SQLite      SQLiteConfig
+	Database    DatabaseConfig
 	LinuxDO     LinuxDOConfig
 	Cloudflare  CloudflareConfig
 	LoadedAtUTC time.Time
@@ -43,9 +43,12 @@ type AppConfig struct {
 	IdleTimeout           time.Duration
 }
 
-// SQLiteConfig stores the SQLite database path.
-type SQLiteConfig struct {
-	Path string
+// DatabaseConfig stores the selected database backend and its connection
+// settings.
+type DatabaseConfig struct {
+	Driver      string
+	SQLitePath  string
+	PostgresDSN string
 }
 
 // LinuxDOConfig stores Linux Do OAuth settings.
@@ -94,8 +97,10 @@ func Load() (Config, error) {
 			WriteTimeout:          mustParseDuration(getEnv("APP_WRITE_TIMEOUT", "15s")),
 			IdleTimeout:           mustParseDuration(getEnv("APP_IDLE_TIMEOUT", "60s")),
 		},
-		SQLite: SQLiteConfig{
-			Path: getEnv("SQLITE_PATH", "./data/linuxdospace.sqlite"),
+		Database: DatabaseConfig{
+			Driver:      strings.ToLower(getEnv("DATABASE_DRIVER", "sqlite")),
+			SQLitePath:  getEnv("SQLITE_PATH", "./data/linuxdospace.sqlite"),
+			PostgresDSN: firstNonEmptyEnv("DATABASE_POSTGRES_DSN", "DATABASE_URL"),
 		},
 		LinuxDO: LinuxDOConfig{
 			ClientID:     strings.TrimSpace(os.Getenv("LINUXDO_OAUTH_CLIENT_ID")),
@@ -133,6 +138,9 @@ func Load() (Config, error) {
 	if cfg.Cloudflare.DefaultUserQuota < 1 {
 		return Config{}, fmt.Errorf("CLOUDFLARE_DEFAULT_USER_QUOTA must be at least 1")
 	}
+	if err := validateDatabaseConfig(cfg.Database); err != nil {
+		return Config{}, err
+	}
 	if cfg.App.AdminVerificationTTL <= 0 {
 		return Config{}, fmt.Errorf("APP_ADMIN_VERIFICATION_TTL must be greater than 0")
 	}
@@ -161,6 +169,18 @@ func getEnv(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// firstNonEmptyEnv returns the first non-empty trimmed value among the provided
+// environment variables. It allows PostgreSQL deployments to use either the
+// explicit project variable or the more common DATABASE_URL convention.
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // splitCSV turns a comma-separated string into a trimmed string slice.
@@ -255,6 +275,25 @@ func validateAdminConfig(app AppConfig) error {
 
 	if !hasAdmins && hasPassword {
 		return fmt.Errorf("APP_ADMIN_USERNAMES is required when APP_ADMIN_PASSWORD is configured")
+	}
+
+	return nil
+}
+
+// validateDatabaseConfig keeps startup fail-closed so production never silently
+// boots with the wrong database backend.
+func validateDatabaseConfig(database DatabaseConfig) error {
+	switch database.Driver {
+	case "sqlite":
+		if strings.TrimSpace(database.SQLitePath) == "" {
+			return fmt.Errorf("SQLITE_PATH is required when DATABASE_DRIVER=sqlite")
+		}
+	case "postgres":
+		if strings.TrimSpace(database.PostgresDSN) == "" {
+			return fmt.Errorf("DATABASE_POSTGRES_DSN or DATABASE_URL is required when DATABASE_DRIVER=postgres")
+		}
+	default:
+		return fmt.Errorf("DATABASE_DRIVER must be one of sqlite, postgres")
 	}
 
 	return nil

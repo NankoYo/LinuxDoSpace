@@ -24,7 +24,7 @@ LinuxDoSpace 是一个基于 Cloudflare DNS 的二级域名分发站，主要面
 - 用户命名空间分配与配额覆盖
 - Cloudflare DNS 记录实时 CRUD
 - 管理员域名配置与用户配额接口
-- SQLite 审计日志
+- 可切换的 SQLite / PostgreSQL 持久化层
 
 当前前端已实现：
 
@@ -36,7 +36,7 @@ LinuxDoSpace 是一个基于 Cloudflare DNS 的二级域名分发站，主要面
 
 当前部署能力已实现：
 
-- 单镜像 Docker 部署
+- 基于 PostgreSQL 的 Docker 部署
 - 前端静态资源嵌入 Go 二进制
 - GitHub Actions 自动构建并发布到 GHCR
 - 可选通过 SSH 自动部署到 Debian 服务器

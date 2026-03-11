@@ -1,8 +1,27 @@
 services:
+  postgres:
+    image: postgres:17-bookworm
+    container_name: linuxdospace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-linuxdospace}
+      POSTGRES_USER: ${POSTGRES_USER:-linuxdospace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-linuxdospace} -d ${POSTGRES_DB:-linuxdospace}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   linuxdospace:
     image: ${IMAGE_NAME:-ghcr.io/moyeranqianzhi/linuxdospace}:${IMAGE_TAG:-latest}
     container_name: linuxdospace
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     # 固定公共 DNS，避免宿主机错误解析 connect.linux.do 导致 OAuth token 请求超时。
     dns:
       - 1.1.1.1
@@ -13,3 +32,6 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+
+volumes:
+  postgres-data:

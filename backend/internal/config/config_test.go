@@ -131,3 +131,68 @@ func TestLoadDefaultsTrustedProxyCIDRs(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadDefaultsToSQLite ensures existing deployments keep working without
+// requiring a new database driver variable during the migration window.
+func TestLoadDefaultsToSQLite(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_ADMIN_USERNAMES", "")
+	t.Setenv("APP_ADMIN_PASSWORD", "")
+	t.Setenv("DATABASE_DRIVER", "")
+	t.Setenv("SQLITE_PATH", "./data/test.sqlite")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default sqlite config: %v", err)
+	}
+	if cfg.Database.Driver != "sqlite" {
+		t.Fatalf("expected default driver sqlite, got %q", cfg.Database.Driver)
+	}
+	if cfg.Database.SQLitePath != "./data/test.sqlite" {
+		t.Fatalf("expected sqlite path to survive load, got %q", cfg.Database.SQLitePath)
+	}
+}
+
+// TestLoadRequiresPostgresDSN ensures PostgreSQL deployments fail closed unless
+// one explicit DSN is configured.
+func TestLoadRequiresPostgresDSN(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_ADMIN_USERNAMES", "")
+	t.Setenv("APP_ADMIN_PASSWORD", "")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_POSTGRES_DSN", "")
+	t.Setenv("DATABASE_URL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected postgres config without DSN to fail")
+	}
+	if !strings.Contains(err.Error(), "DATABASE_POSTGRES_DSN or DATABASE_URL is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestLoadAcceptsDatabaseURLFallback ensures hosted PostgreSQL environments can
+// keep using the conventional DATABASE_URL variable name.
+func TestLoadAcceptsDatabaseURLFallback(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_ADMIN_USERNAMES", "")
+	t.Setenv("APP_ADMIN_PASSWORD", "")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_POSTGRES_DSN", "")
+	t.Setenv("DATABASE_URL", "postgres://linuxdospace:secret@db:5432/linuxdospace?sslmode=disable")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load postgres config from DATABASE_URL: %v", err)
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("expected postgres driver, got %q", cfg.Database.Driver)
+	}
+	if cfg.Database.PostgresDSN == "" {
+		t.Fatalf("expected postgres dsn to be loaded from DATABASE_URL")
+	}
+}

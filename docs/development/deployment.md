@@ -7,6 +7,7 @@ The current recommended production layout is split deployment:
 - public frontend on Cloudflare Pages, for example `https://app.example.com`
 - admin frontend on Cloudflare Pages, for example `https://admin.example.com`
 - backend API on Debian with Docker, for example `https://api.example.com`
+- PostgreSQL as the production database backend
 
 The repository still supports single-image self-hosting because the Go backend can embed the frontend build output, but the main production path used by this project is the split frontend/backend model above.
 
@@ -14,7 +15,9 @@ The repository still supports single-image self-hosting because the Go backend c
 
 - Dockerfile: [Dockerfile](/G:/ClaudeProjects/LinuxDoSpace/Dockerfile)
 - The container listens on `8080` internally.
-- SQLite data is stored at `/app/data/linuxdospace.sqlite` by default.
+- The container listens on `8080` internally.
+- Production should use `DATABASE_DRIVER=postgres`.
+- SQLite remains available for local development and rollback-only scenarios.
 
 ## Debian server preparation
 
@@ -43,6 +46,25 @@ Typical Debian deployment steps:
 5. Run `docker compose up -d`.
 
 ## Environment variable guidance
+
+Database selection:
+
+- `DATABASE_DRIVER=postgres`
+- `DATABASE_POSTGRES_DSN=postgres://linuxdospace:change-me@postgres:5432/linuxdospace?sslmode=disable`
+
+SQLite compatibility fallback:
+
+- `DATABASE_DRIVER=sqlite`
+- `SQLITE_PATH=/app/data/linuxdospace.sqlite`
+
+Existing SQLite production data can be migrated into PostgreSQL with:
+
+```bash
+cd backend
+go run ./cmd/migrate-sqlite-to-postgres \
+  -sqlite-path ./data/linuxdospace.sqlite \
+  -postgres-dsn "postgres://linuxdospace:change-me@postgres:5432/linuxdospace?sslmode=disable"
+```
 
 For the split deployment model, the important public URLs are:
 
@@ -99,6 +121,7 @@ On the server, verify with:
 docker compose ps
 docker compose logs -f
 curl http://127.0.0.1:8080/healthz
+docker compose exec postgres pg_isready
 ```
 
 When the service is behind Nginx or another reverse proxy, also verify:
