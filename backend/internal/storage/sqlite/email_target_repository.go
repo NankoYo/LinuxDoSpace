@@ -6,26 +6,13 @@ import (
 	"time"
 
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 )
 
-// CreateEmailTargetInput describes one new user-owned forwarding destination
-// email that should be bound to a local account.
-type CreateEmailTargetInput struct {
-	OwnerUserID            int64
-	Email                  string
-	CloudflareAddressID    string
-	VerifiedAt             *time.Time
-	LastVerificationSentAt *time.Time
-}
-
-// UpdateEmailTargetInput describes the mutable synchronization state kept for
-// one stored forwarding destination.
-type UpdateEmailTargetInput struct {
-	ID                     int64
-	CloudflareAddressID    string
-	VerifiedAt             *time.Time
-	LastVerificationSentAt *time.Time
-}
+// Keep the historical sqlite.*Input names as aliases so repository code and
+// tests remain source-compatible while the service layer migrates upward.
+type CreateEmailTargetInput = storage.CreateEmailTargetInput
+type UpdateEmailTargetInput = storage.UpdateEmailTargetInput
 
 // ListEmailTargetsByOwner returns every forwarding destination currently bound
 // to one local user.

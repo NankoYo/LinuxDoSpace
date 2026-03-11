@@ -12,7 +12,7 @@ import (
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/model"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 // labelPattern 用于校验普通 DNS label。
@@ -93,7 +93,7 @@ func (s *DomainService) EnsureDefaultManagedDomain(ctx context.Context) error {
 		zoneID = resolved
 	}
 
-	_, err := s.db.UpsertManagedDomain(ctx, sqlite.UpsertManagedDomainInput{
+	_, err := s.db.UpsertManagedDomain(ctx, storage.UpsertManagedDomainInput{
 		RootDomain:       rootDomain,
 		CloudflareZoneID: zoneID,
 		DefaultQuota:     s.cfg.Cloudflare.DefaultUserQuota,
@@ -156,7 +156,7 @@ func (s *DomainService) CheckAvailability(ctx context.Context, rootDomain string
 		result.Available = false
 		result.Reasons = append(result.Reasons, "reserved_in_database")
 	}
-	if err != nil && !sqlite.IsNotFound(err) {
+	if err != nil && !storage.IsNotFound(err) {
 		return AvailabilityResult{}, InternalError("failed to check allocation conflicts", err)
 	}
 
@@ -193,7 +193,7 @@ func (s *DomainService) AutoProvisionForUser(ctx context.Context, user model.Use
 
 		if _, err := s.db.FindAllocationByNormalizedPrefix(ctx, managedDomain.ID, normalizedPrefix); err == nil {
 			continue
-		} else if !sqlite.IsNotFound(err) {
+		} else if !storage.IsNotFound(err) {
 			return InternalError("failed to check auto-provision conflicts", err)
 		}
 
@@ -219,7 +219,7 @@ func (s *DomainService) AutoProvisionForUser(ctx context.Context, user model.Use
 			continue
 		}
 
-		allocation, err := s.db.CreateAllocation(ctx, sqlite.CreateAllocationInput{
+		allocation, err := s.db.CreateAllocation(ctx, storage.CreateAllocationInput{
 			UserID:           user.ID,
 			ManagedDomainID:  managedDomain.ID,
 			Prefix:           normalizedPrefix,
@@ -238,7 +238,7 @@ func (s *DomainService) AutoProvisionForUser(ctx context.Context, user model.Use
 			"fqdn":              allocation.FQDN,
 			"source":            allocation.Source,
 		})
-		if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 			ActorUserID:  &user.ID,
 			Action:       "allocation.auto_provision",
 			ResourceType: "allocation",
@@ -279,7 +279,7 @@ func (s *DomainService) CreateAllocation(ctx context.Context, user model.User, r
 
 	if _, err := s.db.FindAllocationByNormalizedPrefix(ctx, managedDomain.ID, normalizedPrefix); err == nil {
 		return model.Allocation{}, ConflictError("the requested prefix has already been reserved")
-	} else if !sqlite.IsNotFound(err) {
+	} else if !storage.IsNotFound(err) {
 		return model.Allocation{}, InternalError("failed to check allocation uniqueness", err)
 	}
 
@@ -305,7 +305,7 @@ func (s *DomainService) CreateAllocation(ctx context.Context, user model.User, r
 		return model.Allocation{}, ConflictError("the requested namespace already has live dns records")
 	}
 
-	allocation, err := s.db.CreateAllocation(ctx, sqlite.CreateAllocationInput{
+	allocation, err := s.db.CreateAllocation(ctx, storage.CreateAllocationInput{
 		UserID:           user.ID,
 		ManagedDomainID:  managedDomain.ID,
 		Prefix:           strings.TrimSpace(prefix),
@@ -324,7 +324,7 @@ func (s *DomainService) CreateAllocation(ctx context.Context, user model.User, r
 		"fqdn":              allocation.FQDN,
 		"source":            allocation.Source,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "allocation.create",
 		ResourceType: "allocation",
@@ -341,7 +341,7 @@ func (s *DomainService) CreateAllocation(ctx context.Context, user model.User, r
 func (s *DomainService) ListRecordsForAllocation(ctx context.Context, user model.User, allocationID int64) ([]model.DNSRecord, error) {
 	allocation, err := s.db.GetAllocationByIDForUser(ctx, allocationID, user.ID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return nil, NotFoundError("allocation not found")
 		}
 		return nil, InternalError("failed to load allocation", err)
@@ -359,7 +359,7 @@ func (s *DomainService) ListRecordsForAllocation(ctx context.Context, user model
 func (s *DomainService) CreateRecord(ctx context.Context, user model.User, allocationID int64, input DNSRecordInput) (model.DNSRecord, error) {
 	allocation, err := s.db.GetAllocationByIDForUser(ctx, allocationID, user.ID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.DNSRecord{}, NotFoundError("allocation not found")
 		}
 		return model.DNSRecord{}, InternalError("failed to load allocation", err)
@@ -385,7 +385,7 @@ func (s *DomainService) CreateRecord(ctx context.Context, user model.User, alloc
 		"name":          record.Name,
 		"type":          record.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "dns_record.create",
 		ResourceType: "dns_record",
@@ -402,7 +402,7 @@ func (s *DomainService) CreateRecord(ctx context.Context, user model.User, alloc
 func (s *DomainService) UpdateRecord(ctx context.Context, user model.User, allocationID int64, recordID string, input DNSRecordInput) (model.DNSRecord, error) {
 	allocation, err := s.db.GetAllocationByIDForUser(ctx, allocationID, user.ID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.DNSRecord{}, NotFoundError("allocation not found")
 		}
 		return model.DNSRecord{}, InternalError("failed to load allocation", err)
@@ -436,7 +436,7 @@ func (s *DomainService) UpdateRecord(ctx context.Context, user model.User, alloc
 		"name":          record.Name,
 		"type":          record.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "dns_record.update",
 		ResourceType: "dns_record",
@@ -453,7 +453,7 @@ func (s *DomainService) UpdateRecord(ctx context.Context, user model.User, alloc
 func (s *DomainService) DeleteRecord(ctx context.Context, user model.User, allocationID int64, recordID string) error {
 	allocation, err := s.db.GetAllocationByIDForUser(ctx, allocationID, user.ID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return NotFoundError("allocation not found")
 		}
 		return InternalError("failed to load allocation", err)
@@ -480,7 +480,7 @@ func (s *DomainService) DeleteRecord(ctx context.Context, user model.User, alloc
 		"name":          existing.Name,
 		"type":          existing.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "dns_record.delete",
 		ResourceType: "dns_record",
@@ -516,7 +516,7 @@ func (s *DomainService) UpsertManagedDomain(ctx context.Context, actor model.Use
 		zoneID = resolved
 	}
 
-	item, err := s.db.UpsertManagedDomain(ctx, sqlite.UpsertManagedDomainInput{
+	item, err := s.db.UpsertManagedDomain(ctx, storage.UpsertManagedDomainInput{
 		RootDomain:       rootDomain,
 		CloudflareZoneID: zoneID,
 		DefaultQuota:     request.DefaultQuota,
@@ -533,7 +533,7 @@ func (s *DomainService) UpsertManagedDomain(ctx context.Context, actor model.Use
 		"root_domain":        item.RootDomain,
 		"cloudflare_zone_id": item.CloudflareZoneID,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "managed_domain.upsert",
 		ResourceType: "managed_domain",
@@ -554,7 +554,7 @@ func (s *DomainService) SetUserQuota(ctx context.Context, actor model.User, requ
 
 	user, err := s.db.GetUserByUsername(ctx, request.Username)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.UserDomainQuota{}, NotFoundError("target user not found")
 		}
 		return model.UserDomainQuota{}, InternalError("failed to load target user", err)
@@ -562,13 +562,13 @@ func (s *DomainService) SetUserQuota(ctx context.Context, actor model.User, requ
 
 	managedDomain, err := s.db.GetManagedDomainByRoot(ctx, request.RootDomain)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.UserDomainQuota{}, NotFoundError("managed domain not found")
 		}
 		return model.UserDomainQuota{}, InternalError("failed to load managed domain", err)
 	}
 
-	quota, err := s.db.SetUserQuota(ctx, sqlite.SetUserQuotaInput{
+	quota, err := s.db.SetUserQuota(ctx, storage.SetUserQuotaInput{
 		UserID:          user.ID,
 		ManagedDomainID: managedDomain.ID,
 		MaxAllocations:  request.MaxAllocations,
@@ -583,7 +583,7 @@ func (s *DomainService) SetUserQuota(ctx context.Context, actor model.User, requ
 		"managed_domain_id": managedDomain.ID,
 		"max_allocations":   quota.MaxAllocations,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "quota.set",
 		ResourceType: "user_domain_quota",
@@ -600,7 +600,7 @@ func (s *DomainService) SetUserQuota(ctx context.Context, actor model.User, requ
 func (s *DomainService) prepareAllocation(ctx context.Context, rootDomain string, prefix string) (model.ManagedDomain, string, string, error) {
 	managedDomain, err := s.db.GetManagedDomainByRoot(ctx, rootDomain)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.ManagedDomain{}, "", "", NotFoundError("managed domain not found")
 		}
 		return model.ManagedDomain{}, "", "", InternalError("failed to load managed domain", err)

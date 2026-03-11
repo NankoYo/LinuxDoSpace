@@ -10,7 +10,7 @@ import (
 
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/model"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 const (
@@ -217,7 +217,7 @@ func (s *PermissionService) SubmitPermissionApplication(ctx context.Context, use
 		applicationTarget = permission.Application.Target
 	}
 
-	item, err := s.db.UpsertAdminApplication(ctx, sqlite.UpsertAdminApplicationInput{
+	item, err := s.db.UpsertAdminApplication(ctx, storage.UpsertAdminApplicationInput{
 		ApplicantUserID: user.ID,
 		Type:            PermissionKeyEmailCatchAll,
 		Target:          applicationTarget,
@@ -234,7 +234,7 @@ func (s *PermissionService) SubmitPermissionApplication(ctx context.Context, use
 		"target":         item.Target,
 		"status":         item.Status,
 	})
-	logAuditWriteFailure("permission.application.submit", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("permission.application.submit", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "permission.application.submit",
 		ResourceType: "admin_application",
@@ -329,7 +329,7 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		}
 		beforeState = newCatchAllEmailRouteSyncState(storedRoute.RootDomain, storedRoute.TargetEmail, storedRoute.Enabled)
 		existingRoute = &storedRoute
-	case sqlite.IsNotFound(routeErr):
+	case storage.IsNotFound(routeErr):
 		snapshot, snapshotErr := s.lookupCloudflareCatchAllSnapshot(ctx, namespace.RootDomain)
 		if snapshotErr != nil {
 			return UserEmailRouteView{}, snapshotErr
@@ -361,7 +361,7 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 					"permission_key": PermissionKeyEmailCatchAll,
 					"address":        namespace.Address,
 				})
-				logAuditWriteFailure("email_route.catch_all.clear", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+				logAuditWriteFailure("email_route.catch_all.clear", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 					ActorUserID:  &user.ID,
 					Action:       "email_route.catch_all.clear",
 					ResourceType: "email_route",
@@ -378,7 +378,7 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 	var item model.EmailRoute
 	if err := routing.SyncForwardingState(ctx, beforeState, desiredState, func() error {
 		var persistErr error
-		item, persistErr = s.db.UpsertEmailRouteByAddress(ctx, sqlite.UpsertEmailRouteByAddressInput{
+		item, persistErr = s.db.UpsertEmailRouteByAddress(ctx, storage.UpsertEmailRouteByAddressInput{
 			OwnerUserID: user.ID,
 			RootDomain:  namespace.RootDomain,
 			Prefix:      emailCatchAllPrefix,
@@ -398,7 +398,7 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 		"permission_key": PermissionKeyEmailCatchAll,
 		"address":        namespace.Address,
 	})
-	logAuditWriteFailure("email_route.catch_all.upsert", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("email_route.catch_all.upsert", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "email_route.catch_all.upsert",
 		ResourceType: "email_route",
@@ -440,7 +440,7 @@ func (s *PermissionService) ListPermissionPolicies(ctx context.Context) ([]model
 func (s *PermissionService) UpdatePermissionPolicy(ctx context.Context, actor model.User, key string, request UpdatePermissionPolicyRequest) (model.PermissionPolicy, error) {
 	item, err := s.db.GetPermissionPolicy(ctx, strings.TrimSpace(key))
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.PermissionPolicy{}, NotFoundError("permission policy not found")
 		}
 		return model.PermissionPolicy{}, InternalError("failed to load permission policy", err)
@@ -459,7 +459,7 @@ func (s *PermissionService) UpdatePermissionPolicy(ctx context.Context, actor mo
 		item.MinTrustLevel = *request.MinTrustLevel
 	}
 
-	updated, err := s.db.UpsertPermissionPolicy(ctx, sqlite.UpsertPermissionPolicyInput{
+	updated, err := s.db.UpsertPermissionPolicy(ctx, storage.UpsertPermissionPolicyInput{
 		Key:           item.Key,
 		DisplayName:   item.DisplayName,
 		Description:   item.Description,
@@ -477,7 +477,7 @@ func (s *PermissionService) UpdatePermissionPolicy(ctx context.Context, actor mo
 		"auto_approve":    updated.AutoApprove,
 		"min_trust_level": updated.MinTrustLevel,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.permission_policy.update",
 		ResourceType: "permission_policy",
@@ -494,7 +494,7 @@ func (s *PermissionService) UpdatePermissionPolicy(ctx context.Context, actor mo
 func (s *PermissionService) ListPermissionsForUser(ctx context.Context, userID int64) ([]UserPermissionView, error) {
 	user, err := s.db.GetUserByID(ctx, userID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return nil, NotFoundError("target user not found")
 		}
 		return nil, InternalError("failed to load target user", err)
@@ -511,7 +511,7 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 
 	user, err := s.db.GetUserByID(ctx, userID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return UserPermissionView{}, NotFoundError("target user not found")
 		}
 		return UserPermissionView{}, InternalError("failed to load target user", err)
@@ -558,7 +558,7 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 		applicationTarget = permission.Application.Target
 	}
 
-	item, err := s.db.UpsertAdminApplication(ctx, sqlite.UpsertAdminApplicationInput{
+	item, err := s.db.UpsertAdminApplication(ctx, storage.UpsertAdminApplicationInput{
 		ApplicantUserID:  user.ID,
 		Type:             PermissionKeyEmailCatchAll,
 		Target:           applicationTarget,
@@ -578,7 +578,7 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 		"target_user_id": user.ID,
 		"status":         item.Status,
 	})
-	logAuditWriteFailure("admin.permission.user_set", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.permission.user_set", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.permission.user_set",
 		ResourceType: "admin_application",
@@ -594,7 +594,7 @@ func (s *PermissionService) SetPermissionForUser(ctx context.Context, actor mode
 func (s *PermissionService) loadEmailCatchAllPermission(ctx context.Context, user model.User) (UserPermissionView, error) {
 	policy, err := s.db.GetPermissionPolicy(ctx, PermissionKeyEmailCatchAll)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return UserPermissionView{}, UnavailableError("catch-all email permission policy is not configured", fmt.Errorf("missing policy %s", PermissionKeyEmailCatchAll))
 		}
 		return UserPermissionView{}, InternalError("failed to load catch-all email permission policy", err)
@@ -662,7 +662,7 @@ func (s *PermissionService) buildCatchAllEmailRouteView(ctx context.Context, use
 
 	route, err := s.db.GetEmailRouteByAddress(ctx, namespace.RootDomain, emailCatchAllPrefix)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			if snapshotErr == nil && snapshot.Found {
 				item.TargetEmail = snapshot.TargetEmail
 				item.Enabled = snapshot.Enabled
@@ -856,7 +856,7 @@ func (s *PermissionService) disableCatchAllEmailRouteForApplication(ctx context.
 
 	route, err := s.db.GetEmailRouteByAddress(ctx, rootDomain, emailCatchAllPrefix)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return nil
 		}
 		return InternalError("failed to load catch-all email route", err)
@@ -870,7 +870,7 @@ func (s *PermissionService) disableCatchAllEmailRouteForApplication(ctx context.
 	updated := route
 	if err := newEmailRoutingProvisioner(s.cfg, s.cf).SyncForwardingState(ctx, beforeState, afterState, func() error {
 		var persistErr error
-		updated, persistErr = s.db.UpdateEmailRoute(ctx, sqlite.UpdateEmailRouteInput{
+		updated, persistErr = s.db.UpdateEmailRoute(ctx, storage.UpdateEmailRouteInput{
 			ID:          route.ID,
 			TargetEmail: route.TargetEmail,
 			Enabled:     false,
@@ -889,7 +889,7 @@ func (s *PermissionService) disableCatchAllEmailRouteForApplication(ctx context.
 		"address":        buildCatchAllEmailRouteAddress(updated.RootDomain),
 		"status":         application.Status,
 	})
-	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.disable_on_permission_update",
 		ResourceType: "email_route",

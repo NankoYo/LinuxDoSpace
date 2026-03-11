@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"linuxdospace/backend/internal/model"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 const (
@@ -94,7 +94,7 @@ func (s *PermissionService) CreateMyEmailTarget(ctx context.Context, user model.
 		"verification_status":   emailTargetVerificationStatus(item),
 		"cloudflare_address_id": item.CloudflareAddressID,
 	})
-	logAuditWriteFailure("email_target.create_or_sync", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("email_target.create_or_sync", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "email_target.create_or_sync",
 		ResourceType: "email_target",
@@ -129,7 +129,7 @@ func (s *PermissionService) ensureOwnedEmailTarget(ctx context.Context, user mod
 			return model.EmailTarget{}, ForbiddenError("该转发目标邮箱已经绑定到其他账号，不能重复使用")
 		}
 		return s.syncSingleEmailTargetWithCloudflare(ctx, item, allowCreate)
-	case sqlite.IsNotFound(err):
+	case storage.IsNotFound(err):
 		if !allowCreate {
 			return model.EmailTarget{}, ConflictError("该转发目标邮箱尚未绑定到你的账号，请先在“我的目标邮箱列表”中添加并完成验证")
 		}
@@ -185,9 +185,9 @@ func (s *PermissionService) backfillOwnedEmailTargetsFromRoutes(ctx context.Cont
 			if existing.OwnerUserID != user.ID {
 				continue
 			}
-		case sqlite.IsNotFound(existingErr):
+		case storage.IsNotFound(existingErr):
 			snapshot := cloudflareSnapshots[email]
-			created, createErr := s.db.CreateEmailTarget(ctx, sqlite.CreateEmailTargetInput{
+			created, createErr := s.db.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
 				OwnerUserID:            user.ID,
 				Email:                  email,
 				CloudflareAddressID:    snapshot.AddressID,
@@ -203,7 +203,7 @@ func (s *PermissionService) backfillOwnedEmailTargetsFromRoutes(ctx context.Cont
 				"email":           created.Email,
 				"source":          "legacy_email_route_backfill",
 			})
-			logAuditWriteFailure("email_target.backfill", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+			logAuditWriteFailure("email_target.backfill", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 				ActorUserID:  &user.ID,
 				Action:       "email_target.backfill",
 				ResourceType: "email_target",
@@ -250,7 +250,7 @@ func (s *PermissionService) createOwnedEmailTarget(ctx context.Context, user mod
 		sentAt = &now
 	}
 
-	item, err := s.db.CreateEmailTarget(ctx, sqlite.CreateEmailTargetInput{
+	item, err := s.db.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
 		OwnerUserID:            user.ID,
 		Email:                  targetEmail,
 		CloudflareAddressID:    snapshot.AddressID,
@@ -266,7 +266,7 @@ func (s *PermissionService) createOwnedEmailTarget(ctx context.Context, user mod
 					return model.EmailTarget{}, ForbiddenError("该转发目标邮箱已经绑定到其他账号，不能重复使用")
 				}
 				return s.syncSingleEmailTargetWithCloudflare(ctx, existing, false)
-			case sqlite.IsNotFound(existingErr):
+			case storage.IsNotFound(existingErr):
 				return model.EmailTarget{}, ConflictError("该转发目标邮箱已被其他请求占用，请刷新后重试")
 			default:
 				return model.EmailTarget{}, InternalError("failed to recover email target binding after unique conflict", existingErr)
@@ -326,7 +326,7 @@ func (s *PermissionService) syncEmailTargetAgainstSnapshots(ctx context.Context,
 			if strings.TrimSpace(item.CloudflareAddressID) == "" && item.VerifiedAt == nil {
 				return item, nil
 			}
-			return s.db.UpdateEmailTarget(ctx, sqlite.UpdateEmailTargetInput{
+			return s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
 				ID:                     item.ID,
 				CloudflareAddressID:    "",
 				VerifiedAt:             nil,
@@ -349,7 +349,7 @@ func (s *PermissionService) syncEmailTargetAgainstSnapshots(ctx context.Context,
 			now := time.Now().UTC()
 			sentAt = &now
 		}
-		return s.db.UpdateEmailTarget(ctx, sqlite.UpdateEmailTargetInput{
+		return s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
 			ID:                     item.ID,
 			CloudflareAddressID:    strings.TrimSpace(created.ID),
 			VerifiedAt:             created.Verified,
@@ -361,7 +361,7 @@ func (s *PermissionService) syncEmailTargetAgainstSnapshots(ctx context.Context,
 		return item, nil
 	}
 
-	return s.db.UpdateEmailTarget(ctx, sqlite.UpdateEmailTargetInput{
+	return s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
 		ID:                     item.ID,
 		CloudflareAddressID:    snapshot.AddressID,
 		VerifiedAt:             snapshot.VerifiedAt,

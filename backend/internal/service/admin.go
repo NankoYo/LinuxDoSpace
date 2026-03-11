@@ -13,7 +13,7 @@ import (
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/security"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 // AdminService groups the administrator-only workflows used by the standalone admin frontend.
@@ -124,7 +124,7 @@ func (s *AdminService) ListUsers(ctx context.Context) ([]model.AdminUserSummary,
 func (s *AdminService) GetUserDetail(ctx context.Context, userID int64) (AdminUserDetail, error) {
 	baseUser, err := s.db.GetUserByID(ctx, userID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return AdminUserDetail{}, NotFoundError("target user not found")
 		}
 		return AdminUserDetail{}, InternalError("failed to load target user", err)
@@ -206,13 +206,13 @@ func (s *AdminService) UpdateUser(ctx context.Context, actor model.User, userID 
 
 	targetUser, err := s.db.GetUserByID(ctx, userID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return AdminUserDetail{}, NotFoundError("target user not found")
 		}
 		return AdminUserDetail{}, InternalError("failed to load target user", err)
 	}
 
-	control, err := s.db.UpsertUserControl(ctx, sqlite.UpsertUserControlInput{
+	control, err := s.db.UpsertUserControl(ctx, storage.UpsertUserControlInput{
 		UserID:   targetUser.ID,
 		IsBanned: request.IsBanned,
 		Note:     strings.TrimSpace(request.BanNote),
@@ -225,7 +225,7 @@ func (s *AdminService) UpdateUser(ctx context.Context, actor model.User, userID 
 		"target_user_id": targetUser.ID,
 		"is_banned":      control.IsBanned,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.user_control.upsert",
 		ResourceType: "user_control",
@@ -257,7 +257,7 @@ func (s *AdminService) CreateAllocation(ctx context.Context, actor model.User, r
 		return model.AdminAllocationSummary{}, ValidationError("disabled allocations cannot be marked as primary")
 	}
 
-	item, err := s.db.CreateAllocation(ctx, sqlite.CreateAllocationInput{
+	item, err := s.db.CreateAllocation(ctx, storage.CreateAllocationInput{
 		UserID:           owner.ID,
 		ManagedDomainID:  managedDomain.ID,
 		Prefix:           normalizedPrefix,
@@ -286,7 +286,7 @@ func (s *AdminService) CreateAllocation(ctx context.Context, actor model.User, r
 		"status":        created.Status,
 		"source":        created.Source,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.allocation.create",
 		ResourceType: "allocation",
@@ -312,7 +312,7 @@ func (s *AdminService) UpdateAllocation(ctx context.Context, actor model.User, a
 	}
 	owner, err := s.db.GetUserByID(ctx, ownerID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.AdminAllocationSummary{}, NotFoundError("allocation owner not found")
 		}
 		return model.AdminAllocationSummary{}, InternalError("failed to load allocation owner", err)
@@ -337,7 +337,7 @@ func (s *AdminService) UpdateAllocation(ctx context.Context, actor model.User, a
 		isPrimary = false
 	}
 
-	updated, err := s.db.UpdateAllocation(ctx, sqlite.UpdateAllocationInput{
+	updated, err := s.db.UpdateAllocation(ctx, storage.UpdateAllocationInput{
 		ID:        allocationID,
 		UserID:    owner.ID,
 		IsPrimary: isPrimary,
@@ -345,7 +345,7 @@ func (s *AdminService) UpdateAllocation(ctx context.Context, actor model.User, a
 		Status:    status,
 	})
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.AdminAllocationSummary{}, NotFoundError("allocation not found")
 		}
 		return model.AdminAllocationSummary{}, InternalError("failed to update allocation", err)
@@ -365,7 +365,7 @@ func (s *AdminService) UpdateAllocation(ctx context.Context, actor model.User, a
 		"source":           result.Source,
 		"is_primary":       result.IsPrimary,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.allocation.update",
 		ResourceType: "allocation",
@@ -474,7 +474,7 @@ func (s *AdminService) CreateRecord(ctx context.Context, actor model.User, alloc
 		"name":          item.Name,
 		"type":          item.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.dns_record.create",
 		ResourceType: "dns_record",
@@ -522,7 +522,7 @@ func (s *AdminService) UpdateRecord(ctx context.Context, actor model.User, alloc
 		"name":          item.Name,
 		"type":          item.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.dns_record.update",
 		ResourceType: "dns_record",
@@ -563,7 +563,7 @@ func (s *AdminService) DeleteRecord(ctx context.Context, actor model.User, alloc
 		"name":          existing.Name,
 		"type":          existing.Type,
 	})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.dns_record.delete",
 		ResourceType: "dns_record",
@@ -589,13 +589,13 @@ func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, r
 	routing := newEmailRoutingProvisioner(s.cfg, s.cf)
 
 	if _, err := s.db.GetUserByID(ctx, request.OwnerUserID); err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.EmailRoute{}, NotFoundError("email route owner not found")
 		}
 		return model.EmailRoute{}, InternalError("failed to load email route owner", err)
 	}
 	if _, err := s.db.GetManagedDomainByRoot(ctx, request.RootDomain); err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.EmailRoute{}, NotFoundError("managed domain not found")
 		}
 		return model.EmailRoute{}, InternalError("failed to load managed domain", err)
@@ -611,7 +611,7 @@ func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, r
 
 	if _, err := s.db.GetEmailRouteByAddress(ctx, request.RootDomain, normalizedPrefix); err == nil {
 		return model.EmailRoute{}, ConflictError("the requested email route already exists")
-	} else if !sqlite.IsNotFound(err) {
+	} else if !storage.IsNotFound(err) {
 		return model.EmailRoute{}, InternalError("failed to check for an existing email route", err)
 	}
 
@@ -619,7 +619,7 @@ func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, r
 	var item model.EmailRoute
 	if err := routing.SyncForwardingState(ctx, newDeletedEmailRouteSyncState(request.RootDomain, normalizedPrefix), desiredState, func() error {
 		var persistErr error
-		item, persistErr = s.db.CreateEmailRoute(ctx, sqlite.CreateEmailRouteInput{
+		item, persistErr = s.db.CreateEmailRoute(ctx, storage.CreateEmailRouteInput{
 			OwnerUserID: request.OwnerUserID,
 			RootDomain:  request.RootDomain,
 			Prefix:      normalizedPrefix,
@@ -638,7 +638,7 @@ func (s *AdminService) CreateEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
-	logAuditWriteFailure("admin.email_route.create", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.create", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.create",
 		ResourceType: "email_route",
@@ -677,9 +677,9 @@ func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, r
 	var item model.EmailRoute
 	if err := routing.SyncForwardingState(ctx, beforeState, desiredState, func() error {
 		var persistErr error
-		item, persistErr = s.db.UpdateEmailRoute(ctx, sqlite.UpdateEmailRouteInput{ID: routeID, TargetEmail: request.TargetEmail, Enabled: request.Enabled})
+		item, persistErr = s.db.UpdateEmailRoute(ctx, storage.UpdateEmailRouteInput{ID: routeID, TargetEmail: request.TargetEmail, Enabled: request.Enabled})
 		if persistErr != nil {
-			if sqlite.IsNotFound(persistErr) {
+			if storage.IsNotFound(persistErr) {
 				return NotFoundError("email route not found")
 			}
 			return InternalError("failed to update email route", persistErr)
@@ -690,7 +690,7 @@ func (s *AdminService) UpdateEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": item.ID, "address": item.Prefix + "@" + item.RootDomain})
-	logAuditWriteFailure("admin.email_route.update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.update", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.update",
 		ResourceType: "email_route",
@@ -724,7 +724,7 @@ func (s *AdminService) DeleteEmailRoute(ctx context.Context, actor model.User, r
 	afterState := newDeletedEmailRouteSyncState(route.RootDomain, route.Prefix)
 	if err := routing.SyncForwardingState(ctx, beforeState, afterState, func() error {
 		if persistErr := s.db.DeleteEmailRoute(ctx, routeID); persistErr != nil {
-			if sqlite.IsNotFound(persistErr) {
+			if storage.IsNotFound(persistErr) {
 				return NotFoundError("email route not found")
 			}
 			return InternalError("failed to delete email route", persistErr)
@@ -735,7 +735,7 @@ func (s *AdminService) DeleteEmailRoute(ctx context.Context, actor model.User, r
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"email_route_id": routeID})
-	logAuditWriteFailure("admin.email_route.delete", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.delete", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.delete",
 		ResourceType: "email_route",
@@ -774,20 +774,20 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 		return model.AdminApplication{}, err
 	}
 
-	item, err := s.db.UpdateAdminApplication(ctx, sqlite.UpdateAdminApplicationInput{
+	item, err := s.db.UpdateAdminApplication(ctx, storage.UpdateAdminApplicationInput{
 		ID:               applicationID,
 		Status:           status,
 		ReviewNote:       strings.TrimSpace(request.ReviewNote),
 		ReviewedByUserID: actor.ID,
 	})
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.AdminApplication{}, NotFoundError("application not found")
 		}
 		return model.AdminApplication{}, InternalError("failed to update admin application", err)
 	}
 	metadata, _ := json.Marshal(map[string]any{"application_id": item.ID, "status": item.Status})
-	logAuditWriteFailure("admin.application.update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.application.update", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.application.update",
 		ResourceType: "admin_application",
@@ -811,7 +811,7 @@ func (s *AdminService) disableCatchAllEmailRouteForApplication(ctx context.Conte
 
 	route, err := s.db.GetEmailRouteByAddress(ctx, rootDomain, emailCatchAllPrefix)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return nil
 		}
 		return InternalError("failed to load catch-all email route", err)
@@ -825,7 +825,7 @@ func (s *AdminService) disableCatchAllEmailRouteForApplication(ctx context.Conte
 	updated := route
 	if err := newEmailRoutingProvisioner(s.cfg, s.cf).SyncForwardingState(ctx, beforeState, afterState, func() error {
 		var persistErr error
-		updated, persistErr = s.db.UpdateEmailRoute(ctx, sqlite.UpdateEmailRouteInput{
+		updated, persistErr = s.db.UpdateEmailRoute(ctx, storage.UpdateEmailRouteInput{
 			ID:          route.ID,
 			TargetEmail: route.TargetEmail,
 			Enabled:     false,
@@ -844,7 +844,7 @@ func (s *AdminService) disableCatchAllEmailRouteForApplication(ctx context.Conte
 		"address":        buildCatchAllEmailRouteAddress(updated.RootDomain),
 		"status":         application.Status,
 	})
-	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.email_route.disable_on_permission_update", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.email_route.disable_on_permission_update",
 		ResourceType: "email_route",
@@ -901,7 +901,7 @@ func (s *AdminService) GenerateRedeemCodes(ctx context.Context, actor model.User
 			if tokenErr != nil {
 				return nil, InternalError("failed to generate redeem code", tokenErr)
 			}
-			created, createErr = s.db.CreateRedeemCode(ctx, sqlite.CreateRedeemCodeInput{
+			created, createErr = s.db.CreateRedeemCode(ctx, storage.CreateRedeemCodeInput{
 				Code:            candidate,
 				Type:            typeValue,
 				Target:          strings.TrimSpace(request.Target),
@@ -923,7 +923,7 @@ func (s *AdminService) GenerateRedeemCodes(ctx context.Context, actor model.User
 
 	for _, item := range items {
 		metadata, _ := json.Marshal(map[string]any{"redeem_code_id": item.ID, "type": item.Type, "target": item.Target})
-		if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 			ActorUserID:  &actor.ID,
 			Action:       "admin.redeem_code.create",
 			ResourceType: "redeem_code",
@@ -939,14 +939,14 @@ func (s *AdminService) GenerateRedeemCodes(ctx context.Context, actor model.User
 // DeleteRedeemCode removes one generated redeem code.
 func (s *AdminService) DeleteRedeemCode(ctx context.Context, actor model.User, redeemCodeID int64) error {
 	if err := s.db.DeleteRedeemCode(ctx, redeemCodeID); err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return NotFoundError("redeem code not found")
 		}
 		return InternalError("failed to delete redeem code", err)
 	}
 
 	metadata, _ := json.Marshal(map[string]any{"redeem_code_id": redeemCodeID})
-	if err := s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	if err := s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.redeem_code.delete",
 		ResourceType: "redeem_code",
@@ -1043,7 +1043,7 @@ func findBestAllocationMatch(recordName string, allocations []model.AdminAllocat
 func (s *AdminService) validateAdminAllocationWrite(ctx context.Context, ownerUserID int64, rootDomain string, prefix string, rawStatus string, rawSource string) (model.User, model.ManagedDomain, string, string, string, string, error) {
 	owner, err := s.db.GetUserByID(ctx, ownerUserID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.User{}, model.ManagedDomain{}, "", "", "", "", NotFoundError("allocation owner not found")
 		}
 		return model.User{}, model.ManagedDomain{}, "", "", "", "", InternalError("failed to load allocation owner", err)
@@ -1051,7 +1051,7 @@ func (s *AdminService) validateAdminAllocationWrite(ctx context.Context, ownerUs
 
 	managedDomain, err := s.db.GetManagedDomainByRoot(ctx, strings.ToLower(strings.TrimSpace(rootDomain)))
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.User{}, model.ManagedDomain{}, "", "", "", "", NotFoundError("managed domain not found")
 		}
 		return model.User{}, model.ManagedDomain{}, "", "", "", "", InternalError("failed to load managed domain", err)

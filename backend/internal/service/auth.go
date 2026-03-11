@@ -9,7 +9,7 @@ import (
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/security"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 // oauthStateLifetime limits how long one OAuth state token remains valid.
@@ -97,7 +97,7 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 
 	state, err := s.store.GetOAuthState(ctx, stateFromQuery)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return LoginCompleteResult{}, UnauthorizedError("oauth state is invalid or already consumed")
 		}
 		return LoginCompleteResult{}, InternalError("failed to load oauth state", err)
@@ -117,7 +117,7 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, UnavailableError("failed to fetch linux.do user profile", err)
 	}
 
-	user, err := s.store.UpsertUser(ctx, sqlite.UpsertUserInput{
+	user, err := s.store.UpsertUser(ctx, storage.UpsertUserInput{
 		LinuxDOUserID:  profile.ID,
 		Username:       profile.Username,
 		DisplayName:    firstNonEmpty(strings.TrimSpace(profile.Name), strings.TrimSpace(profile.Username)),
@@ -147,7 +147,7 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		return LoginCompleteResult{}, InternalError("failed to generate csrf token", err)
 	}
 
-	session, err := s.store.CreateSessionFromOAuthState(ctx, stateFromQuery, sqlite.CreateSessionInput{
+	session, err := s.store.CreateSessionFromOAuthState(ctx, stateFromQuery, storage.CreateSessionInput{
 		ID:                   sessionID,
 		UserID:               user.ID,
 		CSRFToken:            csrfToken,
@@ -155,13 +155,13 @@ func (s *AuthService) CompleteLogin(ctx context.Context, stateFromQuery string, 
 		ExpiresAt:            time.Now().UTC().Add(s.cfg.App.SessionTTL),
 	})
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return LoginCompleteResult{}, UnauthorizedError("oauth state is invalid or already consumed")
 		}
 		return LoginCompleteResult{}, InternalError("failed to create session", err)
 	}
 
-	logAuditWriteFailure("auth.login", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("auth.login", s.store.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "auth.login",
 		ResourceType: "session",
@@ -180,7 +180,7 @@ func (s *AuthService) AuthenticateSession(ctx context.Context, sessionID string,
 
 	session, user, err := s.store.GetSessionWithUserByID(ctx, sessionID)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			return model.Session{}, model.User{}, UnauthorizedError("session not found")
 		}
 		return model.Session{}, model.User{}, InternalError("failed to load session", err)
@@ -222,7 +222,7 @@ func (s *AuthService) Logout(ctx context.Context, sessionID string, actorUserID 
 		return InternalError("failed to delete session", err)
 	}
 
-	logAuditWriteFailure("auth.logout", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("auth.logout", s.store.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actorUserID,
 		Action:       "auth.logout",
 		ResourceType: "session",
@@ -248,7 +248,7 @@ func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Ses
 
 	expected := s.cfg.App.AdminPassword
 	if subtle.ConstantTimeCompare([]byte(password), []byte(expected)) != 1 {
-		logAuditWriteFailure("admin.session.verify_password_failed", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+		logAuditWriteFailure("admin.session.verify_password_failed", s.store.WriteAuditLog(ctx, storage.AuditLogInput{
 			ActorUserID:  &actor.ID,
 			Action:       "admin.session.verify_password_failed",
 			ResourceType: "session",
@@ -263,7 +263,7 @@ func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Ses
 		return time.Time{}, InternalError("failed to persist admin password verification", err)
 	}
 
-	logAuditWriteFailure("admin.session.verify_password", s.store.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("admin.session.verify_password", s.store.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.session.verify_password",
 		ResourceType: "session",

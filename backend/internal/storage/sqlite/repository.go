@@ -9,67 +9,18 @@ import (
 	"time"
 
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 )
 
-// UpsertUserInput 描述用户落库或更新时需要的字段。
-type UpsertUserInput struct {
-	LinuxDOUserID  int64
-	Username       string
-	DisplayName    string
-	AvatarURL      string
-	TrustLevel     int
-	IsLinuxDOAdmin bool
-	IsAppAdmin     bool
-}
-
-// CreateSessionInput 描述服务端会话创建参数。
-type CreateSessionInput struct {
-	ID                   string
-	UserID               int64
-	CSRFToken            string
-	UserAgentFingerprint string
-	AdminVerifiedAt      *time.Time
-	ExpiresAt            time.Time
-}
-
-// UpsertManagedDomainInput 描述可分发根域名的写入参数。
-type UpsertManagedDomainInput struct {
-	RootDomain       string
-	CloudflareZoneID string
-	DefaultQuota     int
-	AutoProvision    bool
-	IsDefault        bool
-	Enabled          bool
-}
-
-// SetUserQuotaInput 描述用户域名配额覆盖的写入参数。
-type SetUserQuotaInput struct {
-	UserID          int64
-	ManagedDomainID int64
-	MaxAllocations  int
-	Reason          string
-}
-
-// CreateAllocationInput 描述一次子域名分配创建参数。
-type CreateAllocationInput struct {
-	UserID           int64
-	ManagedDomainID  int64
-	Prefix           string
-	NormalizedPrefix string
-	FQDN             string
-	IsPrimary        bool
-	Source           string
-	Status           string
-}
-
-// AuditLogInput 描述一次审计事件写入参数。
-type AuditLogInput struct {
-	ActorUserID  *int64
-	Action       string
-	ResourceType string
-	ResourceID   string
-	MetadataJSON string
-}
+// Keep the historical sqlite.*Input names as aliases so existing tests and
+// repository code continue to compile while the service layer migrates to the
+// storage-agnostic DTO package.
+type UpsertUserInput = storage.UpsertUserInput
+type CreateSessionInput = storage.CreateSessionInput
+type UpsertManagedDomainInput = storage.UpsertManagedDomainInput
+type SetUserQuotaInput = storage.SetUserQuotaInput
+type CreateAllocationInput = storage.CreateAllocationInput
+type AuditLogInput = storage.AuditLogInput
 
 // UpsertUser 根据 Linux Do 用户 ID 写入或更新本地用户记录。
 func (s *Store) UpsertUser(ctx context.Context, input UpsertUserInput) (model.User, error) {
@@ -1251,5 +1202,5 @@ func boolToInt(value bool) int {
 
 // IsNotFound 用于统一判断是否是底层 `sql.ErrNoRows`。
 func IsNotFound(err error) bool {
-	return errors.Is(err, sql.ErrNoRows)
+	return storage.IsNotFound(err) || errors.Is(err, sql.ErrNoRows)
 }

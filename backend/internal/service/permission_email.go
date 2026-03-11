@@ -10,7 +10,7 @@ import (
 
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/model"
-	"linuxdospace/backend/internal/storage/sqlite"
+	"linuxdospace/backend/internal/storage"
 )
 
 // reservedPublicEmailPrefixes contains the local-parts that are intentionally
@@ -87,7 +87,7 @@ func (s *PermissionService) CheckPublicEmailAvailability(ctx context.Context, ro
 	if _, err := s.db.GetEmailRouteByAddress(ctx, managedDomain.RootDomain, normalizedPrefix); err == nil {
 		result.Available = false
 		result.Reasons = append(result.Reasons, "existing_email_route")
-	} else if !sqlite.IsNotFound(err) {
+	} else if !storage.IsNotFound(err) {
 		return EmailRouteAvailabilityResult{}, InternalError("failed to check existing email route conflicts", err)
 	}
 
@@ -155,7 +155,7 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 					"email_route_id": existingRoute.ID,
 					"address":        spec.Address,
 				})
-				logAuditWriteFailure("email_route.default.clear", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+				logAuditWriteFailure("email_route.default.clear", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 					ActorUserID:  &user.ID,
 					Action:       "email_route.default.clear",
 					ResourceType: "email_route",
@@ -172,7 +172,7 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 	var item model.EmailRoute
 	if err := routing.SyncForwardingState(ctx, beforeState, desiredState, func() error {
 		var persistErr error
-		item, persistErr = s.db.UpsertEmailRouteByAddress(ctx, sqlite.UpsertEmailRouteByAddressInput{
+		item, persistErr = s.db.UpsertEmailRouteByAddress(ctx, storage.UpsertEmailRouteByAddressInput{
 			OwnerUserID: user.ID,
 			RootDomain:  spec.RootDomain,
 			Prefix:      spec.Prefix,
@@ -191,7 +191,7 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 		"email_route_id": item.ID,
 		"address":        item.Prefix + "@" + item.RootDomain,
 	})
-	logAuditWriteFailure("email_route.default.upsert", s.db.WriteAuditLog(ctx, sqlite.AuditLogInput{
+	logAuditWriteFailure("email_route.default.upsert", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
 		Action:       "email_route.default.upsert",
 		ResourceType: "email_route",
@@ -226,7 +226,7 @@ func (s *PermissionService) resolveDefaultEmailRouteBeforeState(ctx context.Cont
 		}
 		beforeState = newForwardingEmailRouteSyncState(existingRoute.RootDomain, existingRoute.Prefix, existingRoute.TargetEmail, existingRoute.Enabled)
 		return beforeState, &existingRoute, nil
-	case sqlite.IsNotFound(err):
+	case storage.IsNotFound(err):
 		snapshot, snapshotErr := s.lookupCloudflareForwardingSnapshot(ctx, spec.RootDomain, spec.Prefix)
 		if snapshotErr != nil {
 			return emailRouteSyncState{}, nil, snapshotErr
@@ -248,7 +248,7 @@ func (s *PermissionService) resolveAvailableEmailRootDomain(ctx context.Context,
 	if trimmedRootDomain != "" {
 		managedDomain, err := s.db.GetManagedDomainByRoot(ctx, trimmedRootDomain)
 		if err != nil {
-			if sqlite.IsNotFound(err) {
+			if storage.IsNotFound(err) {
 				return model.ManagedDomain{}, NotFoundError("managed domain not found")
 			}
 			return model.ManagedDomain{}, InternalError("failed to load managed domain", err)
@@ -265,7 +265,7 @@ func (s *PermissionService) resolveAvailableEmailRootDomain(ctx context.Context,
 		if err == nil && managedDomain.Enabled {
 			return managedDomain, nil
 		}
-		if err != nil && !sqlite.IsNotFound(err) {
+		if err != nil && !storage.IsNotFound(err) {
 			return model.ManagedDomain{}, InternalError("failed to load default managed domain", err)
 		}
 	}
@@ -333,7 +333,7 @@ func (s *PermissionService) buildDefaultEmailRouteView(ctx context.Context, user
 
 	route, err := s.db.GetEmailRouteByAddress(ctx, spec.RootDomain, spec.Prefix)
 	if err != nil {
-		if sqlite.IsNotFound(err) {
+		if storage.IsNotFound(err) {
 			if snapshotErr == nil && snapshot.Found {
 				placeholder.TargetEmail = snapshot.TargetEmail
 				placeholder.Enabled = snapshot.Enabled
@@ -516,7 +516,7 @@ func (s *PermissionService) isEmailPrefixReservedByKnownUser(ctx context.Context
 	if err == nil {
 		return true, nil
 	}
-	if sqlite.IsNotFound(err) {
+	if storage.IsNotFound(err) {
 		return false, nil
 	}
 	return false, InternalError("failed to load known users for email availability", err)

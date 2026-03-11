@@ -7,92 +7,20 @@ import (
 	"time"
 
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 )
 
-// UpsertUserControlInput describes a moderation update for one local user account.
-type UpsertUserControlInput struct {
-	UserID   int64
-	IsBanned bool
-	Note     string
-}
-
-// CreateEmailRouteInput describes one administrator-created email forwarding rule.
-type CreateEmailRouteInput struct {
-	OwnerUserID int64
-	RootDomain  string
-	Prefix      string
-	TargetEmail string
-	Enabled     bool
-}
-
-// UpdateEmailRouteInput describes the mutable portion of an email forwarding rule.
-type UpdateEmailRouteInput struct {
-	ID          int64
-	TargetEmail string
-	Enabled     bool
-}
-
-// UpdateAllocationInput describes the mutable administrator-managed portion of
-// one allocation namespace row.
-type UpdateAllocationInput struct {
-	ID        int64
-	UserID    int64
-	IsPrimary bool
-	Source    string
-	Status    string
-}
-
-// UpdateAdminApplicationInput describes one moderation decision for an application request.
-type UpdateAdminApplicationInput struct {
-	ID               int64
-	Status           string
-	ReviewNote       string
-	ReviewedByUserID int64
-}
-
-// UpsertAdminApplicationInput describes one user-side permission application.
-// The unique applicant/type/target tuple lets one row act as both the latest
-// application snapshot and the currently effective approval state.
-type UpsertAdminApplicationInput struct {
-	ApplicantUserID  int64
-	Type             string
-	Target           string
-	Reason           string
-	Status           string
-	ReviewNote       string
-	ReviewedByUserID *int64
-	ReviewedAt       *time.Time
-}
-
-// UpsertEmailRouteByAddressInput describes an idempotent email-route write keyed
-// by the full local address instead of the local row identifier.
-type UpsertEmailRouteByAddressInput struct {
-	OwnerUserID int64
-	RootDomain  string
-	Prefix      string
-	TargetEmail string
-	Enabled     bool
-}
-
-// UpsertPermissionPolicyInput describes the mutable fields of one permission
-// policy row stored in SQLite.
-type UpsertPermissionPolicyInput struct {
-	Key           string
-	DisplayName   string
-	Description   string
-	Enabled       bool
-	AutoApprove   bool
-	MinTrustLevel int
-}
-
-// CreateRedeemCodeInput describes one redeem code emitted by the administrator console.
-type CreateRedeemCodeInput struct {
-	Code            string
-	Type            string
-	Target          string
-	Note            string
-	CreatedByUserID int64
-}
+// Keep the historical sqlite.*Input names as aliases so repository code and
+// tests remain source-compatible while service code moves to storage.* types.
+type UpsertUserControlInput = storage.UpsertUserControlInput
+type CreateEmailRouteInput = storage.CreateEmailRouteInput
+type UpdateEmailRouteInput = storage.UpdateEmailRouteInput
+type UpdateAllocationInput = storage.UpdateAllocationInput
+type UpdateAdminApplicationInput = storage.UpdateAdminApplicationInput
+type UpsertAdminApplicationInput = storage.UpsertAdminApplicationInput
+type UpsertEmailRouteByAddressInput = storage.UpsertEmailRouteByAddressInput
+type UpsertPermissionPolicyInput = storage.UpsertPermissionPolicyInput
+type CreateRedeemCodeInput = storage.CreateRedeemCodeInput
 
 // GetUserControlByUserID loads the persisted moderation state for one local user.
 func (s *Store) GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error) {
