@@ -167,3 +167,18 @@ type CreateRedeemCodeInput struct {
 	Note            string
 	CreatedByUserID int64
 }
+
+// CreateQuantityRecordInput describes one append-only quantity delta written to
+// the generic user resource ledger.
+type CreateQuantityRecordInput struct {
+	UserID          int64
+	ResourceKey     string
+	Scope           string
+	Delta           int
+	Source          string
+	Reason          string
+	ReferenceType   string
+	ReferenceID     string
+	ExpiresAt       *time.Time
+	CreatedByUserID *int64
+}

@@ -67,6 +67,23 @@ Lists every active allocation namespace currently owned by the authenticated use
 Returns the current authenticated user's visible permission cards.
 The current release exposes the `email_catch_all` permission used by the public email page.
 
+### `GET /v1/my/quantity-records`
+Returns the current authenticated user's full append-only quantity ledger.
+This endpoint is intended for future billing, redeem-code, and quota history UIs.
+
+Each record contains:
+- `resource_key`: machine-readable resource type such as `domain_slot`
+- `scope`: optional namespace such as `linuxdo.space`
+- `delta`: signed quantity change
+- `source`: machine-readable origin such as `admin_manual`
+- `reason`: human-readable explanation
+- `reference_type` and `reference_id`: optional external linkage for future payment or redeem flows
+- `expires_at`: optional future expiry timestamp
+
+### `GET /v1/my/quantity-balances`
+Returns the current authenticated user's derived non-zero quantity balances.
+The backend sums only non-expired ledger entries and groups them by `resource_key + scope`.
+
 ### `POST /v1/my/permissions/applications`
 Creates or refreshes one permission application for the current user.
 For `email_catch_all`, the backend stores a canonical pledge text server-side and may auto-approve the request when the configured policy allows it.
@@ -221,6 +238,31 @@ Request example:
 
 ### `GET /v1/admin/users/{userID}/permissions`
 Returns the current administrator-visible permission cards for one target user.
+
+### `GET /v1/admin/users/{userID}/quantity-records`
+Returns the target user's full quantity ledger for administrator inspection.
+
+### `GET /v1/admin/users/{userID}/quantity-balances`
+Returns the target user's currently effective non-zero quantity balances.
+
+### `POST /v1/admin/users/{userID}/quantity-records`
+Appends one immutable quantity delta for the target user.
+This is the write endpoint that future billing, manual grants, subscriptions, and redeem-code processors can reuse.
+
+Request example:
+
+```json
+{
+  "resource_key": "domain_slot",
+  "scope": "linuxdo.space",
+  "delta": 2,
+  "source": "admin_manual",
+  "reason": "manual promotional grant",
+  "reference_type": "campaign",
+  "reference_id": "spring-2026",
+  "expires_at": "2026-04-01T00:00:00Z"
+}
+```
 
 ### `PATCH /v1/admin/users/{userID}/permissions/{permissionKey}`
 Lets an administrator directly override one target user's permission state.

@@ -64,6 +64,9 @@ type Store interface {
 	ListRedeemCodes(ctx context.Context) ([]model.RedeemCode, error)
 	CreateRedeemCode(ctx context.Context, input CreateRedeemCodeInput) (model.RedeemCode, error)
 	DeleteRedeemCode(ctx context.Context, id int64) error
+	ListQuantityRecordsByUser(ctx context.Context, userID int64) ([]model.QuantityRecord, error)
+	ListQuantityBalancesByUser(ctx context.Context, userID int64, now time.Time) ([]model.QuantityBalance, error)
+	CreateQuantityRecord(ctx context.Context, input CreateQuantityRecordInput) (model.QuantityRecord, error)
 	WriteAuditLog(ctx context.Context, input AuditLogInput) error
 }
 

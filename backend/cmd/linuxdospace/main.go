@@ -63,6 +63,7 @@ func main() {
 	domainService := service.NewDomainService(cfg, store, cloudflareClient)
 	adminService := service.NewAdminService(cfg, store, cloudflareClient)
 	permissionService := service.NewPermissionService(cfg, store, cloudflareClient)
+	quantityService := service.NewQuantityService(store)
 
 	if err := domainService.EnsureDefaultManagedDomain(ctx); err != nil {
 		log.Fatalf("bootstrap default managed domain: %v", err)
@@ -75,6 +76,7 @@ func main() {
 		DomainService:     domainService,
 		AdminService:      adminService,
 		PermissionService: permissionService,
+		QuantityService:   quantityService,
 	})
 
 	server := &http.Server{

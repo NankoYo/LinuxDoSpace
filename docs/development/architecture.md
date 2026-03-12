@@ -31,6 +31,7 @@
 - `managed_domains`：允许平台分发的根域名与 Cloudflare zone 绑定。
 - `user_domain_quotas`：用户在某个根域名上的配额覆盖值。
 - `allocations`：用户获得的命名空间，例如 `alice.linuxdo.space`。
+- `quantity_records`：面向未来收费、兑换码、订阅和手动赠送场景的追加式数量账本。
 - `audit_logs`：关键动作审计日志。
 
 ## DNS 命名空间模型
@@ -50,6 +51,7 @@
 - 为了保证越权检查准确，记录列表与冲突检查会直接读取 Cloudflare 实时 DNS 记录。
 - 当前没有做 Cloudflare 结果缓存，因此大规模数据下还需要进一步优化读取性能。
 - 当前 PostgreSQL 实现优先保持与 SQLite 一致的 repository 语义，因此布尔值仍使用整数标记、时间戳仍使用 RFC3339 文本存储，以降低迁移期的行为偏差。
+- 数量相关能力当前采用“不可变记录 + 实时汇总余额”模型，避免后续收费逻辑直接修改余额而丢失审计链路。
 
 ## 下一步架构扩展
 

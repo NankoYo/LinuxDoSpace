@@ -36,6 +36,7 @@ var orderedCopyPlan = []tableCopyPlan{
 	{Name: "redeem_codes", Columns: []string{"id", "code", "type", "target", "note", "created_by_user_id", "used_by_user_id", "used_at", "created_at"}, ResetSequence: true},
 	{Name: "permission_policies", Columns: []string{"key", "display_name", "description", "enabled", "auto_approve", "min_trust_level", "created_at", "updated_at"}},
 	{Name: "email_targets", Columns: []string{"id", "owner_user_id", "email", "cloudflare_address_id", "verified_at", "last_verification_sent_at", "created_at", "updated_at"}, ResetSequence: true},
+	{Name: "quantity_records", Columns: []string{"id", "user_id", "resource_key", "scope", "delta", "source", "reason", "reference_type", "reference_id", "expires_at", "created_by_user_id", "created_at"}, ResetSequence: true},
 	{Name: "audit_logs", Columns: []string{"id", "actor_user_id", "action", "resource_type", "resource_id", "metadata_json", "created_at"}, ResetSequence: true},
 }
 

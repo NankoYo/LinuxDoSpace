@@ -16,6 +16,7 @@ type RouterDependencies struct {
 	DomainService     *service.DomainService
 	AdminService      *service.AdminService
 	PermissionService *service.PermissionService
+	QuantityService   *service.QuantityService
 }
 
 // NewRouter builds the complete HTTP router used by the backend process.
@@ -27,6 +28,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		domainService:        deps.DomainService,
 		adminService:         deps.AdminService,
 		permissionService:    deps.PermissionService,
+		quantityService:      deps.QuantityService,
 		adminPasswordLimiter: newAdminPasswordLimiter(adminPasswordMaxFailures, adminPasswordBlockDuration, adminPasswordStateTTL),
 	}
 
@@ -50,6 +52,8 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("POST /v1/admin/verify-password", api.handleAdminVerifyPassword)
 	mux.HandleFunc("GET /v1/my/allocations", api.handleMyAllocations)
 	mux.HandleFunc("GET /v1/my/permissions", api.handleMyPermissions)
+	mux.HandleFunc("GET /v1/my/quantity-records", api.handleMyQuantityRecords)
+	mux.HandleFunc("GET /v1/my/quantity-balances", api.handleMyQuantityBalances)
 	mux.HandleFunc("POST /v1/my/permissions/applications", api.handleSubmitPermissionApplication)
 	mux.HandleFunc("GET /v1/my/email-targets", api.handleMyEmailTargets)
 	mux.HandleFunc("POST /v1/my/email-targets", api.handleCreateMyEmailTarget)
@@ -68,6 +72,9 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/admin/users/{userID}", api.handleAdminUserDetail)
 	mux.HandleFunc("PATCH /v1/admin/users/{userID}", api.handleAdminUpdateUser)
 	mux.HandleFunc("GET /v1/admin/users/{userID}/permissions", api.handleAdminUserPermissions)
+	mux.HandleFunc("GET /v1/admin/users/{userID}/quantity-records", api.handleAdminUserQuantityRecords)
+	mux.HandleFunc("GET /v1/admin/users/{userID}/quantity-balances", api.handleAdminUserQuantityBalances)
+	mux.HandleFunc("POST /v1/admin/users/{userID}/quantity-records", api.handleAdminCreateQuantityRecord)
 	mux.HandleFunc("PATCH /v1/admin/users/{userID}/permissions/{permissionKey}", api.handleAdminSetUserPermission)
 	mux.HandleFunc("GET /v1/admin/allocations", api.handleAdminAllocations)
 	mux.HandleFunc("POST /v1/admin/allocations", api.handleAdminCreateAllocation)

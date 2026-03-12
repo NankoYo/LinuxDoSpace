@@ -258,6 +258,154 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("quantity records sort newest first and keep creator identity", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		owner := newTestUser(t, ctx, store, "ledger-owner")
+		actor := newTestUser(t, ctx, store, "ledger-admin")
+
+		older, err := store.CreateQuantityRecord(ctx, storage.CreateQuantityRecordInput{
+			UserID:          owner.ID,
+			ResourceKey:     "domain_slot",
+			Scope:           "linuxdo.space",
+			Delta:           1,
+			Source:          "admin_manual",
+			Reason:          "initial grant",
+			CreatedByUserID: &actor.ID,
+		})
+		if err != nil {
+			t.Fatalf("create older quantity record: %v", err)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+
+		newer, err := store.CreateQuantityRecord(ctx, storage.CreateQuantityRecordInput{
+			UserID:          owner.ID,
+			ResourceKey:     "domain_slot",
+			Scope:           "linuxdo.space",
+			Delta:           2,
+			Source:          "redeem_code",
+			Reason:          "campaign bonus",
+			CreatedByUserID: &actor.ID,
+		})
+		if err != nil {
+			t.Fatalf("create newer quantity record: %v", err)
+		}
+
+		items, err := store.ListQuantityRecordsByUser(ctx, owner.ID)
+		if err != nil {
+			t.Fatalf("list quantity records: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("expected 2 quantity records, got %d", len(items))
+		}
+		if items[0].ID != newer.ID {
+			t.Fatalf("expected newest quantity record id %d first, got %d", newer.ID, items[0].ID)
+		}
+		if items[1].ID != older.ID {
+			t.Fatalf("expected older quantity record id %d second, got %d", older.ID, items[1].ID)
+		}
+		if items[0].CreatedByUserID == nil || *items[0].CreatedByUserID != actor.ID {
+			t.Fatalf("expected creator user id %d on newest record, got %+v", actor.ID, items[0].CreatedByUserID)
+		}
+		if items[0].CreatedByUsername != actor.Username {
+			t.Fatalf("expected creator username %q, got %q", actor.Username, items[0].CreatedByUsername)
+		}
+	})
+
+	t.Run("quantity balances sum only active deltas and omit expired or zero groups", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		owner := newTestUser(t, ctx, store, "balance-owner")
+		now := time.Now().UTC()
+		expiredAt := now.Add(-time.Hour)
+		futureAt := now.Add(24 * time.Hour)
+
+		seedQuantityRecord := func(input storage.CreateQuantityRecordInput) {
+			t.Helper()
+			if _, err := store.CreateQuantityRecord(ctx, input); err != nil {
+				t.Fatalf("create quantity record %+v: %v", input, err)
+			}
+		}
+
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "domain_slot",
+			Scope:       "linuxdo.space",
+			Delta:       2,
+			Source:      "admin_manual",
+			Reason:      "base grant",
+		})
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "domain_slot",
+			Scope:       "linuxdo.space",
+			Delta:       -1,
+			Source:      "consumption",
+			Reason:      "manual deduction",
+		})
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "email_alias",
+			Scope:       "",
+			Delta:       3,
+			Source:      "subscription",
+			Reason:      "monthly plan",
+			ExpiresAt:   &futureAt,
+		})
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "expired_bucket",
+			Scope:       "",
+			Delta:       9,
+			Source:      "admin_manual",
+			Reason:      "expired grant",
+			ExpiresAt:   &expiredAt,
+		})
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "zero_bucket",
+			Scope:       "",
+			Delta:       4,
+			Source:      "admin_manual",
+			Reason:      "temporary grant",
+		})
+		seedQuantityRecord(storage.CreateQuantityRecordInput{
+			UserID:      owner.ID,
+			ResourceKey: "zero_bucket",
+			Scope:       "",
+			Delta:       -4,
+			Source:      "consumption",
+			Reason:      "fully consumed",
+		})
+
+		items, err := store.ListQuantityBalancesByUser(ctx, owner.ID, now)
+		if err != nil {
+			t.Fatalf("list quantity balances: %v", err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("expected 2 non-zero active quantity balances, got %d: %+v", len(items), items)
+		}
+
+		if items[0].ResourceKey != "domain_slot" || items[0].Scope != "linuxdo.space" || items[0].CurrentQuantity != 1 {
+			t.Fatalf("unexpected first quantity balance: %+v", items[0])
+		}
+		if items[1].ResourceKey != "email_alias" || items[1].Scope != "" || items[1].CurrentQuantity != 3 {
+			t.Fatalf("unexpected second quantity balance: %+v", items[1])
+		}
+
+		for _, item := range items {
+			if item.ResourceKey == "expired_bucket" {
+				t.Fatalf("expired-only balance should not be returned: %+v", item)
+			}
+			if item.ResourceKey == "zero_bucket" {
+				t.Fatalf("zeroed-out balance should not be returned: %+v", item)
+			}
+		}
+	})
+
 	t.Run("admin application upsert stays idempotent per applicant target", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
