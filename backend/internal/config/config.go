@@ -12,12 +12,13 @@ import (
 
 // Config groups all runtime configuration needed by the backend process.
 type Config struct {
-	App         AppConfig
-	Database    DatabaseConfig
-	LinuxDO     LinuxDOConfig
-	Cloudflare  CloudflareConfig
-	Mail        MailConfig
-	LoadedAtUTC time.Time
+	App           AppConfig
+	Database      DatabaseConfig
+	LinuxDO       LinuxDOConfig
+	LinuxDOCredit LinuxDOCreditConfig
+	Cloudflare    CloudflareConfig
+	Mail          MailConfig
+	LoadedAtUTC   time.Time
 }
 
 // AppConfig stores generic application, networking, and session settings.
@@ -62,6 +63,17 @@ type LinuxDOConfig struct {
 	UserInfoURL  string
 	Scope        string
 	EnablePKCE   bool
+}
+
+// LinuxDOCreditConfig stores the EasyPay-compatible Linux Do Credit gateway
+// settings used by the purchase flow.
+type LinuxDOCreditConfig struct {
+	PID       string
+	Key       string
+	BaseURL   string
+	NotifyURL string
+	ReturnURL string
+	Timeout   time.Duration
 }
 
 // CloudflareConfig stores Cloudflare API and domain defaults.
@@ -144,6 +156,14 @@ func Load() (Config, error) {
 			Scope:        getEnv("LINUXDO_OAUTH_SCOPE", "user"),
 			EnablePKCE:   mustParseBool(getEnv("LINUXDO_OAUTH_ENABLE_PKCE", "false")),
 		},
+		LinuxDOCredit: LinuxDOCreditConfig{
+			PID:       strings.TrimSpace(os.Getenv("LINUXDO_CREDIT_PID")),
+			Key:       strings.TrimSpace(os.Getenv("LINUXDO_CREDIT_KEY")),
+			BaseURL:   getEnv("LINUXDO_CREDIT_BASE_URL", "https://credit.linux.do/epay"),
+			NotifyURL: strings.TrimSpace(os.Getenv("LINUXDO_CREDIT_NOTIFY_URL")),
+			ReturnURL: strings.TrimSpace(os.Getenv("LINUXDO_CREDIT_RETURN_URL")),
+			Timeout:   mustParseDuration(getEnv("LINUXDO_CREDIT_TIMEOUT", "15s")),
+		},
 		Cloudflare: CloudflareConfig{
 			AccountID:           strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")),
 			APIToken:            strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")),
@@ -191,6 +211,9 @@ func Load() (Config, error) {
 	if err := validateDatabaseConfig(cfg.Database); err != nil {
 		return Config{}, err
 	}
+	if err := validateLinuxDOCreditConfig(cfg.LinuxDOCredit); err != nil {
+		return Config{}, err
+	}
 	if err := validateMailConfig(cfg.Mail); err != nil {
 		return Config{}, err
 	}
@@ -208,6 +231,12 @@ func Load() (Config, error) {
 // OAuthConfigured reports whether Linux Do OAuth has the minimum configuration.
 func (c Config) OAuthConfigured() bool {
 	return c.LinuxDO.ClientID != "" && c.LinuxDO.ClientSecret != "" && c.LinuxDO.RedirectURL != ""
+}
+
+// LinuxDOCreditConfigured reports whether the LDC purchase flow has the
+// minimum gateway credentials required to create and verify orders.
+func (c Config) LinuxDOCreditConfigured() bool {
+	return c.LinuxDOCredit.PID != "" && c.LinuxDOCredit.Key != ""
 }
 
 // CloudflareConfigured reports whether Cloudflare API access is configured.
@@ -412,6 +441,27 @@ func validateMailConfig(mail MailConfig) error {
 	default:
 		return fmt.Errorf("EMAIL_FORWARDING_BACKEND must be one of %s, %s", EmailForwardingBackendCloudflare, EmailForwardingBackendDatabaseRelay)
 	}
+}
+
+// validateLinuxDOCreditConfig keeps the purchase subsystem explicitly enabled:
+// either both gateway credentials are configured, or neither is.
+func validateLinuxDOCreditConfig(credit LinuxDOCreditConfig) error {
+	hasPID := strings.TrimSpace(credit.PID) != ""
+	hasKey := strings.TrimSpace(credit.Key) != ""
+
+	if hasPID != hasKey {
+		return fmt.Errorf("LINUXDO_CREDIT_PID and LINUXDO_CREDIT_KEY must be configured together")
+	}
+	if !hasPID {
+		return nil
+	}
+	if strings.TrimSpace(credit.BaseURL) == "" {
+		return fmt.Errorf("LINUXDO_CREDIT_BASE_URL is required when Linux Do Credit is configured")
+	}
+	if credit.Timeout <= 0 {
+		return fmt.Errorf("LINUXDO_CREDIT_TIMEOUT must be greater than 0")
+	}
+	return nil
 }
 
 // firstNonEmptyString returns the first trimmed non-empty string.

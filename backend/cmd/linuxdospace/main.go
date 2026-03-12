@@ -13,6 +13,7 @@ import (
 	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/httpapi"
 	"linuxdospace/backend/internal/linuxdo"
+	"linuxdospace/backend/internal/linuxdocredit"
 	"linuxdospace/backend/internal/mailrelay"
 	"linuxdospace/backend/internal/service"
 	"linuxdospace/backend/internal/storage"
@@ -64,6 +65,15 @@ func main() {
 	adminService := service.NewAdminService(cfg, store, cloudflareClient)
 	permissionService := service.NewPermissionService(cfg, store, cloudflareClient)
 	quantityService := service.NewQuantityService(store)
+	creditClient := linuxdocredit.NewClient(
+		cfg.LinuxDOCredit.PID,
+		cfg.LinuxDOCredit.Key,
+		cfg.LinuxDOCredit.BaseURL,
+		cfg.LinuxDOCredit.NotifyURL,
+		cfg.LinuxDOCredit.ReturnURL,
+		cfg.LinuxDOCredit.Timeout,
+	)
+	paymentService := service.NewPaymentService(cfg, store, creditClient)
 
 	if err := domainService.EnsureDefaultManagedDomain(ctx); err != nil {
 		log.Fatalf("bootstrap default managed domain: %v", err)
@@ -77,6 +87,7 @@ func main() {
 		AdminService:      adminService,
 		PermissionService: permissionService,
 		QuantityService:   quantityService,
+		PaymentService:    paymentService,
 	})
 
 	server := &http.Server{

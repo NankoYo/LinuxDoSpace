@@ -500,6 +500,147 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("payment orders apply catch-all entitlements exactly once", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "paid-owner")
+
+		subscriptionProduct, err := store.GetPaymentProduct(ctx, "email_catch_all_subscription")
+		if err != nil {
+			t.Fatalf("load subscription payment product: %v", err)
+		}
+		quotaProduct, err := store.GetPaymentProduct(ctx, "email_catch_all_quota")
+		if err != nil {
+			t.Fatalf("load quota payment product: %v", err)
+		}
+
+		paidAt := time.Now().UTC().Truncate(time.Second)
+		createPaidOrder := func(product model.PaymentProduct, outTradeNo string, units int64) model.PaymentOrder {
+			t.Helper()
+
+			grantedTotal := product.GrantQuantity * units
+			totalPriceCents := product.UnitPriceCents * units
+			order, createErr := store.CreatePaymentOrder(ctx, storage.CreatePaymentOrderInput{
+				UserID:          user.ID,
+				ProductKey:      product.Key,
+				ProductName:     product.DisplayName,
+				Title:           product.DisplayName,
+				GatewayType:     model.PaymentGatewayLinuxDOCredit,
+				OutTradeNo:      outTradeNo,
+				Status:          model.PaymentOrderStatusCreated,
+				Units:           units,
+				GrantQuantity:   product.GrantQuantity,
+				GrantedTotal:    grantedTotal,
+				GrantUnit:       product.GrantUnit,
+				UnitPriceCents:  product.UnitPriceCents,
+				TotalPriceCents: totalPriceCents,
+				EffectType:      product.EffectType,
+			})
+			if createErr != nil {
+				t.Fatalf("create payment order %s: %v", outTradeNo, createErr)
+			}
+
+			order, createErr = store.UpdatePaymentOrderGatewayState(ctx, storage.UpdatePaymentOrderGatewayStateInput{
+				OutTradeNo:      order.OutTradeNo,
+				Status:          model.PaymentOrderStatusPaid,
+				ProviderTradeNo: "gateway-" + outTradeNo,
+				PaidAt:          &paidAt,
+			})
+			if createErr != nil {
+				t.Fatalf("mark payment order %s paid: %v", outTradeNo, createErr)
+			}
+			return order
+		}
+
+		subscriptionOrder := createPaidOrder(subscriptionProduct, "TEST-SUBSCRIPTION", 2)
+		appliedSubscription, applied, err := store.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
+			OutTradeNo: subscriptionOrder.OutTradeNo,
+			AppliedAt:  paidAt,
+		})
+		if err != nil {
+			t.Fatalf("apply subscription order entitlement: %v", err)
+		}
+		if !applied {
+			t.Fatalf("expected first subscription entitlement application to report applied=true")
+		}
+		if appliedSubscription.AppliedAt == nil {
+			t.Fatalf("expected applied subscription order to contain applied_at")
+		}
+
+		replayedSubscription, applied, err := store.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
+			OutTradeNo: subscriptionOrder.OutTradeNo,
+			AppliedAt:  paidAt.Add(time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("replay subscription order entitlement: %v", err)
+		}
+		if applied {
+			t.Fatalf("expected replayed subscription entitlement application to report applied=false")
+		}
+		if replayedSubscription.AppliedAt == nil {
+			t.Fatalf("expected replayed subscription order to keep applied_at")
+		}
+
+		quotaOrder := createPaidOrder(quotaProduct, "TEST-QUOTA", 3)
+		appliedQuota, applied, err := store.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
+			OutTradeNo: quotaOrder.OutTradeNo,
+			AppliedAt:  paidAt,
+		})
+		if err != nil {
+			t.Fatalf("apply quota order entitlement: %v", err)
+		}
+		if !applied {
+			t.Fatalf("expected quota entitlement application to report applied=true")
+		}
+		if appliedQuota.AppliedAt == nil {
+			t.Fatalf("expected applied quota order to contain applied_at")
+		}
+
+		access, err := store.GetEmailCatchAllAccessByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("load email catch-all access after payment application: %v", err)
+		}
+		if access.SubscriptionExpiresAt == nil {
+			t.Fatalf("expected subscription purchase to create a subscription expiry")
+		}
+		expectedRemainingCount := quotaProduct.GrantQuantity * 3
+		if access.RemainingCount != expectedRemainingCount {
+			t.Fatalf("expected remaining count %d, got %d", expectedRemainingCount, access.RemainingCount)
+		}
+
+		records, err := store.ListQuantityRecordsByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("list quantity records after payment application: %v", err)
+		}
+
+		subscriptionReferences := 0
+		quotaReferences := 0
+		for _, item := range records {
+			if item.ReferenceType != "payment_order" {
+				continue
+			}
+			switch item.ReferenceID {
+			case subscriptionOrder.OutTradeNo:
+				subscriptionReferences++
+				if item.ResourceKey != "email_catch_all_subscription_days" || item.Delta != int(subscriptionProduct.GrantQuantity*2) {
+					t.Fatalf("unexpected subscription quantity record: %+v", item)
+				}
+			case quotaOrder.OutTradeNo:
+				quotaReferences++
+				if item.ResourceKey != "email_catch_all_remaining_count" || item.Delta != int(expectedRemainingCount) {
+					t.Fatalf("unexpected quota quantity record: %+v", item)
+				}
+			}
+		}
+		if subscriptionReferences != 1 {
+			t.Fatalf("expected exactly one subscription quantity record, got %d", subscriptionReferences)
+		}
+		if quotaReferences != 1 {
+			t.Fatalf("expected exactly one quota quantity record, got %d", quotaReferences)
+		}
+	})
+
 	t.Run("admin application upsert stays idempotent per applicant target", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)

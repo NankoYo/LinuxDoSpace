@@ -201,3 +201,57 @@ type ConsumeEmailCatchAllInput struct {
 	DefaultDailyLimit int64
 	Now               time.Time
 }
+
+// UpsertPaymentProductInput describes one administrator-managed purchasable
+// Linux Do Credit product row.
+type UpsertPaymentProductInput struct {
+	Key            string
+	DisplayName    string
+	Description    string
+	Enabled        bool
+	UnitPriceCents int64
+	GrantQuantity  int64
+	GrantUnit      string
+	EffectType     string
+	SortOrder      int
+}
+
+// CreatePaymentOrderInput describes one locally persisted LDC order reserved
+// before the backend talks to the upstream payment gateway.
+type CreatePaymentOrderInput struct {
+	UserID          int64
+	ProductKey      string
+	ProductName     string
+	Title           string
+	GatewayType     string
+	OutTradeNo      string
+	Status          string
+	Units           int64
+	GrantQuantity   int64
+	GrantedTotal    int64
+	GrantUnit       string
+	UnitPriceCents  int64
+	TotalPriceCents int64
+	EffectType      string
+	PaymentURL      string
+}
+
+// UpdatePaymentOrderGatewayStateInput describes the mutable gateway-facing
+// portion of one local order, including checkout URL, upstream IDs, and raw
+// notification payload.
+type UpdatePaymentOrderGatewayStateInput struct {
+	OutTradeNo       string
+	Status           string
+	ProviderTradeNo  string
+	PaymentURL       string
+	NotifyPayloadRaw string
+	PaidAt           *time.Time
+	LastCheckedAt    *time.Time
+}
+
+// ApplyPaymentOrderEntitlementInput describes one idempotent request to turn a
+// paid order into local entitlements and immutable quantity ledger records.
+type ApplyPaymentOrderEntitlementInput struct {
+	OutTradeNo string
+	AppliedAt  time.Time
+}
