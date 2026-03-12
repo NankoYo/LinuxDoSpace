@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added Linux Do Credit purchase products, local payment orders, EasyPay-compatible signature verification, asynchronous notify handling, and idempotent entitlement application for catch-all subscription days, catch-all quota, and payment-test purchases.
+- Added dual runtime billing modes for `email_catch_all`: subscription time and prepaid remaining count, with subscription taking priority and all catch-all mail still capped by a configurable per-user UTC-day limit.
+- Added mutable catch-all access tables plus SMTP relay enforcement so `*@<username>.linuxdo.space` now checks real subscription/count state instead of relying only on permission approval.
+- Added administrator policy support for `default_daily_limit` and a dedicated admin endpoint for per-user catch-all access adjustments.
+- Added an append-only quantity ledger plus user/admin quantity APIs so future billing, redeem-code, and subscription work can track auditable resource deltas instead of mutating balances in place.
+- Added a built-in SMTP relay mode controlled by `EMAIL_FORWARDING_BACKEND=database_relay`, allowing LinuxDoSpace to receive mail itself and forward it according to database-stored routes instead of relying on Cloudflare catch-all delivery.
+- Added database-relay DNS bootstrap so LinuxDoSpace can automatically create its own managed MX/TXT records for routed mail domains and subdomains instead of depending on manual DNS setup.
+- Added `internal/mailrelay` with SMTP recipient resolution, route ownership checks, relay-loop protection headers, and upstream SMTP forwarding.
+- Added relay-aware config validation, health fields, deployment variables, Docker port exposure, and service tests that lock `database_relay` mode into a Cloudflare-free route execution path.
 - Added a storage-agnostic `internal/storage` contract layer so the service package no longer depends directly on SQLite DTO types.
 - Added a new PostgreSQL backend implementation with embedded PostgreSQL migrations and placeholder rebinding for the existing repository SQL.
 - Added runtime database driver selection through `DATABASE_DRIVER`, `DATABASE_POSTGRES_DSN`, and `DATABASE_URL`, while keeping SQLite available for local development and rollback.
