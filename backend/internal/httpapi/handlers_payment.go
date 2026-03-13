@@ -58,8 +58,8 @@ func (a *API) handleCreateMyPaymentOrder(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, item)
 }
 
-// handleMyPaymentOrder returns one specific order and opportunistically
-// refreshes its gateway status for the current user.
+// handleMyPaymentOrder returns one specific order without mutating its current
+// gateway state.
 func (a *API) handleMyPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	_, user, ok := a.requireActor(w, r)
 	if !ok {
@@ -73,6 +73,31 @@ func (a *API) handleMyPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	item, err := a.paymentService.GetMyOrder(r.Context(), *user, outTradeNo)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+// handleRefreshMyPaymentOrder explicitly refreshes one current user's order and
+// therefore requires CSRF protection.
+func (a *API) handleRefreshMyPaymentOrder(w http.ResponseWriter, r *http.Request) {
+	session, user, ok := a.requireActor(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	outTradeNo := strings.TrimSpace(r.PathValue("outTradeNo"))
+	if outTradeNo == "" {
+		writeError(w, service.ValidationError("outTradeNo is required"))
+		return
+	}
+
+	item, err := a.paymentService.RefreshMyOrder(r.Context(), *user, outTradeNo)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -130,8 +155,8 @@ func (a *API) handleAdminPaymentOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-// handleAdminPaymentOrder returns one specific LDC order and refreshes it from
-// the gateway when possible.
+// handleAdminPaymentOrder returns one specific LDC order without mutating its
+// current gateway state.
 func (a *API) handleAdminPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	_, _, ok := a.requireVerifiedAdmin(w, r)
 	if !ok {
@@ -145,6 +170,31 @@ func (a *API) handleAdminPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	item, err := a.paymentService.GetOrderForAdmin(r.Context(), outTradeNo)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+// handleAdminRefreshPaymentOrder explicitly refreshes one LDC order from the
+// gateway and therefore requires CSRF protection.
+func (a *API) handleAdminRefreshPaymentOrder(w http.ResponseWriter, r *http.Request) {
+	session, _, ok := a.requireVerifiedAdmin(w, r)
+	if !ok {
+		return
+	}
+	if !a.enforceCSRF(w, r, session) {
+		return
+	}
+
+	outTradeNo := strings.TrimSpace(r.PathValue("outTradeNo"))
+	if outTradeNo == "" {
+		writeError(w, service.ValidationError("outTradeNo is required"))
+		return
+	}
+
+	item, err := a.paymentService.RefreshOrderForAdmin(r.Context(), outTradeNo)
 	if err != nil {
 		writeError(w, err)
 		return

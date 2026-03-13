@@ -92,6 +92,78 @@ WHERE action = 'admin.session.verify_password_failed'
 	}
 }
 
+// TestHandleAdminVerifyPasswordRotatesSession verifies that a successful admin
+// password submission returns a fresh session cookie and CSRF token.
+func TestHandleAdminVerifyPasswordRotatesSession(t *testing.T) {
+	ctx := context.Background()
+	store := newAdminPasswordTestStore(t)
+
+	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
+		LinuxDOUserID:  1001,
+		Username:       "user2996",
+		DisplayName:    "User 2996",
+		AvatarURL:      "https://example.com/avatar.png",
+		TrustLevel:     4,
+		IsLinuxDOAdmin: false,
+		IsAppAdmin:     true,
+	})
+	if err != nil {
+		t.Fatalf("upsert admin user: %v", err)
+	}
+
+	session, err := store.CreateSession(ctx, sqlite.CreateSessionInput{
+		ID:                   "session-admin-rotate",
+		UserID:               user.ID,
+		CSRFToken:            "csrf-admin-rotate",
+		UserAgentFingerprint: "test-user-agent",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create admin session: %v", err)
+	}
+
+	cfg := config.Config{
+		App: config.AppConfig{
+			SessionCookieName:    "linuxdospace_session",
+			SessionBindUserAgent: false,
+			SessionTTL:           time.Hour,
+			AdminPassword:        "correct-horse-battery-staple",
+			AdminUsernames:       []string{"user2996"},
+		},
+	}
+
+	api := &API{
+		config:               cfg,
+		authService:          service.NewAuthService(cfg, store, nil),
+		domainService:        service.NewDomainService(cfg, store, nil),
+		adminPasswordLimiter: newAdminPasswordLimiter(5, 15*time.Minute, time.Hour),
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/admin/verify-password", strings.NewReader(`{"password":"correct-horse-battery-staple"}`))
+	request.AddCookie(&http.Cookie{Name: "linuxdospace_session", Value: session.ID})
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", session.CSRFToken)
+	request.Header.Set("User-Agent", "test-user-agent")
+
+	recorder := httptest.NewRecorder()
+	api.handleAdminVerifyPassword(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected successful verification to return 200, got %d with body %s", recorder.Code, recorder.Body.String())
+	}
+
+	cookies := recorder.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected successful verification to rotate the session cookie")
+	}
+	if cookies[0].Value == session.ID {
+		t.Fatalf("expected rotated session cookie value, got original session id")
+	}
+	if _, _, err := store.GetSessionWithUserByID(ctx, session.ID); !sqlite.IsNotFound(err) {
+		t.Fatalf("expected original session to be removed, got %v", err)
+	}
+}
+
 // TestRequestClientIPIgnoresSpoofedProxyHeaders verifies that the limiter no
 // longer trusts client-supplied forwarding headers unless the direct peer is a
 // trusted local proxy hop.
@@ -114,6 +186,22 @@ func TestRequestClientIPIgnoresSpoofedProxyHeaders(t *testing.T) {
 	request.Header.Set("X-Forwarded-For", "198.51.100.99, 203.0.113.44")
 	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "203.0.113.44" {
 		t.Fatalf("expected trusted proxy parsing to prefer the rightmost forwarded IP, got %q", got)
+	}
+
+	request.Header.Set("X-Forwarded-For", "198.51.100.99, 10.0.0.2, 10.0.0.3")
+	if got := requestClientIP(request, []netip.Prefix{
+		netip.MustParsePrefix("127.0.0.1/32"),
+		netip.MustParsePrefix("::1/128"),
+		netip.MustParsePrefix("10.0.0.0/8"),
+	}); got != "198.51.100.99" {
+		t.Fatalf("expected multi-hop trusted proxy parsing to resolve the first untrusted client IP, got %q", got)
+	}
+
+	request.Header.Set("CF-Connecting-IP", "not-an-ip")
+	request.Header.Set("X-Real-IP", "also-not-an-ip")
+	request.Header.Set("X-Forwarded-For", "198.51.100.88")
+	if got := requestClientIP(request, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}); got != "198.51.100.88" {
+		t.Fatalf("expected invalid single-value proxy headers to be ignored, got %q", got)
 	}
 }
 

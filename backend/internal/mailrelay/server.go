@@ -129,15 +129,6 @@ func (s *smtpSession) Data(r io.Reader) error {
 		}
 	}
 
-	for ownerUserID, count := range buildCatchAllUsagePlan(s.recipients) {
-		if s.accessManager == nil || count <= 0 {
-			continue
-		}
-		if err := s.accessManager.Consume(context.Background(), ownerUserID, count); err != nil {
-			return catchAllAccessSMTPError(err)
-		}
-	}
-
 	rawMessage, err := io.ReadAll(r)
 	if err != nil {
 		return &smtp.SMTPError{
@@ -148,6 +139,11 @@ func (s *smtpSession) Data(r io.Reader) error {
 	}
 
 	for _, group := range groupRecipientsByTarget(s.recipients) {
+		reservations, reservationErr := s.reserveCatchAllUsageForGroup(group)
+		if reservationErr != nil {
+			return catchAllAccessSMTPError(reservationErr)
+		}
+
 		forwardCtx, cancel := context.WithTimeout(context.Background(), s.forwardTimeout)
 		forwardErr := s.forwarder.Forward(forwardCtx, ForwardRequest{
 			OriginalEnvelopeFrom: s.mailFrom,
@@ -158,6 +154,7 @@ func (s *smtpSession) Data(r io.Reader) error {
 		cancel()
 
 		if forwardErr != nil {
+			s.releaseCatchAllReservations(reservations)
 			s.logger.Printf(
 				"linuxdospace mail relay forward failed: target=%s recipients=%v err=%v",
 				group.TargetEmail,
@@ -169,20 +166,6 @@ func (s *smtpSession) Data(r io.Reader) error {
 	}
 
 	return nil
-}
-
-// buildCatchAllUsagePlan collapses the accepted recipients into per-owner
-// catch-all usage reservations so one message can reserve quota exactly once
-// per owner before forwarding starts.
-func buildCatchAllUsagePlan(recipients []ResolvedRecipient) map[int64]int64 {
-	usageByOwner := make(map[int64]int64)
-	for _, item := range recipients {
-		if !item.UsedCatchAll || item.RouteOwnerUserID <= 0 {
-			continue
-		}
-		usageByOwner[item.RouteOwnerUserID]++
-	}
-	return usageByOwner
 }
 
 // Reset discards the current transaction state as required by the SMTP session
@@ -200,8 +183,9 @@ func (s *smtpSession) Logout() error {
 // groupedRecipients is the per-target message fan-out plan derived from the
 // accepted inbound SMTP recipients.
 type groupedRecipients struct {
-	TargetEmail        string
-	OriginalRecipients []string
+	TargetEmail          string
+	OriginalRecipients   []string
+	CatchAllOwnerUserIDs []int64
 }
 
 // groupRecipientsByTarget collapses multiple inbound recipients that share the
@@ -221,16 +205,77 @@ func groupRecipientsByTarget(recipients []ResolvedRecipient) []groupedRecipients
 			index = len(groups)
 			indexByTarget[targetEmail] = index
 			groups = append(groups, groupedRecipients{
-				TargetEmail:        targetEmail,
-				OriginalRecipients: []string{item.OriginalRecipient},
+				TargetEmail:          targetEmail,
+				OriginalRecipients:   []string{item.OriginalRecipient},
+				CatchAllOwnerUserIDs: uniqueCatchAllOwners(item),
 			})
 			continue
 		}
 
 		groups[index].OriginalRecipients = append(groups[index].OriginalRecipients, item.OriginalRecipient)
+		if item.UsedCatchAll && item.RouteOwnerUserID > 0 && !containsInt64(groups[index].CatchAllOwnerUserIDs, item.RouteOwnerUserID) {
+			groups[index].CatchAllOwnerUserIDs = append(groups[index].CatchAllOwnerUserIDs, item.RouteOwnerUserID)
+		}
 	}
 
 	return groups
+}
+
+// reserveCatchAllUsageForGroup reserves catch-all quota exactly once per owner
+// and final forward action for the current target group.
+func (s *smtpSession) reserveCatchAllUsageForGroup(group groupedRecipients) ([]CatchAllUsageReservation, error) {
+	if s.accessManager == nil || len(group.CatchAllOwnerUserIDs) == 0 {
+		return nil, nil
+	}
+
+	reservations := make([]CatchAllUsageReservation, 0, len(group.CatchAllOwnerUserIDs))
+	for _, ownerUserID := range group.CatchAllOwnerUserIDs {
+		reservation, err := s.accessManager.Reserve(context.Background(), ownerUserID, 1)
+		if err != nil {
+			s.releaseCatchAllReservations(reservations)
+			return nil, err
+		}
+		reservations = append(reservations, reservation)
+	}
+	return reservations, nil
+}
+
+// releaseCatchAllReservations best-effort rolls back reservations that were
+// created for a group whose upstream SMTP forward failed.
+func (s *smtpSession) releaseCatchAllReservations(reservations []CatchAllUsageReservation) {
+	if s.accessManager == nil {
+		return
+	}
+	for _, reservation := range reservations {
+		if err := s.accessManager.Release(context.Background(), reservation); err != nil {
+			s.logger.Printf(
+				"linuxdospace mail relay failed to release catch-all reservation: user_id=%d usage_date=%s err=%v",
+				reservation.UserID,
+				reservation.UsageDate,
+				err,
+			)
+		}
+	}
+}
+
+// uniqueCatchAllOwners starts one group with the single owner that should be
+// charged for a catch-all delivery when the route actually used catch-all.
+func uniqueCatchAllOwners(item ResolvedRecipient) []int64 {
+	if !item.UsedCatchAll || item.RouteOwnerUserID <= 0 {
+		return nil
+	}
+	return []int64{item.RouteOwnerUserID}
+}
+
+// containsInt64 reports whether the given owner was already counted for this
+// final forward action.
+func containsInt64(items []int64, target int64) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeOptionalEnvelopeSender accepts the empty sender used by SMTP bounces

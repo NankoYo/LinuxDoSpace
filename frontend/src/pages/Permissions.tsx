@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Clock3, CreditCard, ExternalLink, Key, List, LoaderCircle, Send, ShieldAlert, ShieldPlus, Ticket, XCircle } from 'lucide-react';
 import { GlassCard } from '../components/GlassCard';
 import { GlassSelect, type GlassSelectOption } from '../components/GlassSelect';
-import { APIError, createMyPaymentOrder, getMyPaymentOrder, listMyPaymentOrders, listMyPermissions, listPublicPaymentProducts } from '../lib/api';
+import { APIError, createMyPaymentOrder, listMyPaymentOrders, listMyPermissions, listPublicPaymentProducts, refreshMyPaymentOrder } from '../lib/api';
 import type { PaymentOrder, PaymentProduct, User, UserPermission } from '../types/api';
 
 interface PermissionsProps {
@@ -250,9 +250,9 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
   }
 
   async function refreshOnePaymentOrder(outTradeNo: string, silent = false): Promise<void> {
-    if (!outTradeNo || !authenticated) return;
+    if (!outTradeNo || !authenticated || !csrfToken) return;
     try {
-      const order = await getMyPaymentOrder(outTradeNo);
+      const order = await refreshMyPaymentOrder(outTradeNo, csrfToken);
       setPaymentOrders((current) => upsertPaymentOrder(current, order));
       if (order.status === 'paid' && order.applied_at) {
         setPollingOrderNo('');
@@ -287,11 +287,11 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       setPaymentOrders((current) => upsertPaymentOrder(current, order));
       setPollingOrderNo(order.out_trade_no);
 
-      const openedWindow = window.open(order.payment_url, '_blank', 'noopener,noreferrer');
+      const openedWindow = openTrustedPaymentWindow(order.payment_url);
       if (!openedWindow) {
         setPaymentNotice({
           tone: 'info',
-          message: `订单 ${order.out_trade_no} 已创建，但浏览器拦截了新窗口。请手动打开支付链接完成支付：${order.payment_url}`,
+          message: `订单 ${order.out_trade_no} 已创建，但浏览器拦截了新窗口，或者支付链接不是受信任的 Linux Do Credit 地址。`,
         });
         return;
       }
@@ -663,7 +663,7 @@ function PaymentExchangeSection({
                           {order.payment_url ? (
                             <button
                               type="button"
-                              onClick={() => window.open(order.payment_url, '_blank', 'noopener,noreferrer')}
+                              onClick={() => openTrustedPaymentWindow(order.payment_url)}
                               className="rounded-xl p-2 text-emerald-500 transition hover:bg-emerald-100 dark:hover:bg-emerald-900/25"
                               aria-label={`打开订单 ${order.out_trade_no} 的支付页`}
                             >
@@ -955,6 +955,18 @@ function upsertPaymentOrder(orders: PaymentOrder[], nextOrder: PaymentOrder): Pa
     return orders.map((item, index) => (index === existingIndex ? nextOrder : item));
   }
   return [nextOrder, ...orders].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
+function openTrustedPaymentWindow(rawURL: string): Window | null {
+  try {
+    const parsedURL = new URL(rawURL);
+    if (parsedURL.protocol !== 'https:' || parsedURL.hostname !== 'credit.linux.do') {
+      return null;
+    }
+    return window.open(parsedURL.toString(), '_blank', 'noopener,noreferrer');
+  } catch {
+    return null;
+  }
 }
 
 function normalizeIdentity(value: string): string {

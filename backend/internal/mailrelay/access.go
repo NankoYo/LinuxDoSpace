@@ -27,12 +27,24 @@ var (
 type CatchAllAccessStore interface {
 	GetPermissionPolicy(ctx context.Context, key string) (model.PermissionPolicy, error)
 	ConsumeEmailCatchAll(ctx context.Context, input storage.ConsumeEmailCatchAllInput) (model.EmailCatchAllConsumeResult, error)
+	RefundEmailCatchAll(ctx context.Context, input storage.RefundEmailCatchAllInput) error
+}
+
+// CatchAllUsageReservation records one successfully reserved catch-all usage
+// unit so SMTP forwarding can roll it back when the upstream delivery fails.
+type CatchAllUsageReservation struct {
+	UserID       int64
+	Count        int64
+	ConsumedMode string
+	UsageDate    string
 }
 
 // CatchAllAccessManager reserves catch-all delivery allowance for accepted SMTP
-// recipients before the message is forwarded upstream.
+// recipients before the message is forwarded upstream, and can roll the
+// reservation back when forwarding fails.
 type CatchAllAccessManager interface {
-	Consume(ctx context.Context, userID int64, count int64) error
+	Reserve(ctx context.Context, userID int64, count int64) (CatchAllUsageReservation, error)
+	Release(ctx context.Context, reservation CatchAllUsageReservation) error
 }
 
 // DBCatchAllAccessManager enforces catch-all delivery limits directly against
@@ -53,15 +65,15 @@ func NewDBCatchAllAccessManager(store CatchAllAccessStore) *DBCatchAllAccessMana
 	}
 }
 
-// Consume reserves catch-all delivery allowance for one owner.
-func (m *DBCatchAllAccessManager) Consume(ctx context.Context, userID int64, count int64) error {
+// Reserve reserves catch-all delivery allowance for one owner.
+func (m *DBCatchAllAccessManager) Reserve(ctx context.Context, userID int64, count int64) (CatchAllUsageReservation, error) {
 	if m == nil || m.store == nil || count <= 0 {
-		return nil
+		return CatchAllUsageReservation{}, nil
 	}
 
 	policy, err := m.store.GetPermissionPolicy(ctx, catchAllPermissionPolicyKey)
 	if err != nil {
-		return err
+		return CatchAllUsageReservation{}, err
 	}
 
 	defaultDailyLimit := policy.DefaultDailyLimit
@@ -69,21 +81,41 @@ func (m *DBCatchAllAccessManager) Consume(ctx context.Context, userID int64, cou
 		defaultDailyLimit = 1_000_000
 	}
 
-	_, err = m.store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
+	result, err := m.store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
 		UserID:            userID,
 		Count:             count,
 		DefaultDailyLimit: defaultDailyLimit,
 		Now:               m.now(),
 	})
 	if err == nil {
-		return nil
+		return CatchAllUsageReservation{
+			UserID:       userID,
+			Count:        count,
+			ConsumedMode: result.ConsumedMode,
+			UsageDate:    result.DailyUsage.UsageDate,
+		}, nil
 	}
 	switch {
 	case errors.Is(err, storage.ErrEmailCatchAllDailyLimitExceeded):
-		return ErrCatchAllDailyLimitExceeded
+		return CatchAllUsageReservation{}, ErrCatchAllDailyLimitExceeded
 	case errors.Is(err, storage.ErrEmailCatchAllInsufficientRemainingCount):
-		return ErrCatchAllAccessUnavailable
+		return CatchAllUsageReservation{}, ErrCatchAllAccessUnavailable
 	default:
-		return err
+		return CatchAllUsageReservation{}, err
 	}
+}
+
+// Release rolls back one previous reservation when forwarding fails before the
+// SMTP transaction completes successfully.
+func (m *DBCatchAllAccessManager) Release(ctx context.Context, reservation CatchAllUsageReservation) error {
+	if m == nil || m.store == nil || reservation.Count <= 0 {
+		return nil
+	}
+	return m.store.RefundEmailCatchAll(ctx, storage.RefundEmailCatchAllInput{
+		UserID:       reservation.UserID,
+		Count:        reservation.Count,
+		ConsumedMode: reservation.ConsumedMode,
+		UsageDate:    reservation.UsageDate,
+		Now:          m.now(),
+	})
 }

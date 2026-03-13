@@ -353,6 +353,7 @@ SELECT
 FROM payment_orders po
 INNER JOIN users u ON u.id = po.user_id
 WHERE po.out_trade_no = ?
+FOR UPDATE
 `, strings.TrimSpace(outTradeNo))
 	return scanPaymentOrder(row)
 }

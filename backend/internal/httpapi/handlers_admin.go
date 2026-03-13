@@ -102,7 +102,7 @@ func (a *API) handleAdminVerifyPassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	verifiedAt, err := a.authService.VerifyAdminPassword(r.Context(), *session, *user, request.Password)
+	verifiedSession, err := a.authService.VerifyAdminPassword(r.Context(), *session, *user, request.Password)
 	if err != nil {
 		if normalized := service.NormalizeError(err); normalized != nil && normalized.Code == "unauthorized" {
 			a.adminPasswordLimiter.RegisterFailure(session.ID, clientIP, time.Now().UTC())
@@ -111,6 +111,7 @@ func (a *API) handleAdminVerifyPassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	a.adminPasswordLimiter.Reset(session.ID, clientIP)
+	a.setSessionCookie(w, verifiedSession.ID)
 
 	managedDomains, err := a.domainService.ListAdminDomains(r.Context())
 	if err != nil {
@@ -124,9 +125,9 @@ func (a *API) handleAdminVerifyPassword(w http.ResponseWriter, r *http.Request) 
 		"password_verified":  true,
 		"oauth_configured":   a.config.OAuthConfigured(),
 		"user":               user,
-		"csrf_token":         session.CSRFToken,
-		"session_expires_at": session.ExpiresAt,
-		"admin_verified_at":  verifiedAt,
+		"csrf_token":         verifiedSession.CSRFToken,
+		"session_expires_at": verifiedSession.ExpiresAt,
+		"admin_verified_at":  verifiedSession.AdminVerifiedAt,
 		"managed_domains":    managedDomains,
 	})
 }

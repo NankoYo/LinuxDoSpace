@@ -88,15 +88,34 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		script = bytes.TrimPrefix(script, utf8BOM)
 
-		if _, err := s.db.ExecContext(ctx, string(script)); err != nil {
-			if isIgnorableMigrationError(err) {
-				continue
+		for _, statement := range splitMigrationStatements(string(script)) {
+			if _, err := s.db.ExecContext(ctx, statement); err != nil {
+				if isIgnorableMigrationError(err) {
+					continue
+				}
+				return fmt.Errorf("execute migration %s: %w", entry.Name(), err)
 			}
-			return fmt.Errorf("execute migration %s: %w", entry.Name(), err)
 		}
 	}
 
 	return nil
+}
+
+// splitMigrationStatements executes SQLite migrations statement-by-statement so
+// one ignorable duplicate-column error does not skip the rest of the file.
+// The embedded migration files are controlled project SQL and intentionally do
+// not contain semicolons inside string literals.
+func splitMigrationStatements(script string) []string {
+	rawStatements := strings.Split(script, ";")
+	statements := make([]string, 0, len(rawStatements))
+	for _, rawStatement := range rawStatements {
+		trimmed := strings.TrimSpace(rawStatement)
+		if trimmed == "" {
+			continue
+		}
+		statements = append(statements, trimmed)
+	}
+	return statements
 }
 
 // isIgnorableMigrationError reports whether one migration failure only means the

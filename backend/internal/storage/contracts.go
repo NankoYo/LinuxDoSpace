@@ -74,6 +74,7 @@ type Store interface {
 	UpsertEmailCatchAllAccess(ctx context.Context, input UpsertEmailCatchAllAccessInput) (model.EmailCatchAllAccess, error)
 	GetEmailCatchAllDailyUsage(ctx context.Context, userID int64, usageDate string) (model.EmailCatchAllDailyUsage, error)
 	ConsumeEmailCatchAll(ctx context.Context, input ConsumeEmailCatchAllInput) (model.EmailCatchAllConsumeResult, error)
+	RefundEmailCatchAll(ctx context.Context, input RefundEmailCatchAllInput) error
 	ListRedeemCodes(ctx context.Context) ([]model.RedeemCode, error)
 	CreateRedeemCode(ctx context.Context, input CreateRedeemCodeInput) (model.RedeemCode, error)
 	DeleteRedeemCode(ctx context.Context, id int64) error

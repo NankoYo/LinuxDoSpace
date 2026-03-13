@@ -202,6 +202,16 @@ type ConsumeEmailCatchAllInput struct {
 	Now               time.Time
 }
 
+// RefundEmailCatchAllInput describes one compensating rollback of a previous
+// catch-all usage reservation after SMTP forwarding fails.
+type RefundEmailCatchAllInput struct {
+	UserID       int64
+	Count        int64
+	ConsumedMode string
+	UsageDate    string
+	Now          time.Time
+}
+
 // UpsertPaymentProductInput describes one administrator-managed purchasable
 // Linux Do Credit product row.
 type UpsertPaymentProductInput struct {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CreditCard, ExternalLink, LoaderCircle, RefreshCw, Search } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { APIError, getAdminPaymentOrder, listAdminPaymentOrders } from '../lib/api';
+import { APIError, listAdminPaymentOrders, refreshAdminPaymentOrder } from '../lib/api';
 import { GlassCard } from '../components/GlassCard';
 import type { AdminPaymentOrder } from '../types/admin';
 
@@ -57,7 +57,7 @@ interface OrdersPageProps {
 
 // OrdersPage renders the administrator-facing Linux Do Credit order list so
 // operators can inspect current payment flow health and refresh one order.
-export function OrdersPage({ csrfToken: _csrfToken }: OrdersPageProps) {
+export function OrdersPage({ csrfToken }: OrdersPageProps) {
   const [orders, setOrders] = useState<AdminPaymentOrder[]>([]);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
@@ -101,7 +101,7 @@ export function OrdersPage({ csrfToken: _csrfToken }: OrdersPageProps) {
   async function refreshOrder(outTradeNo: string): Promise<void> {
     try {
       setRefreshingOrderNo(outTradeNo);
-      const item = await getAdminPaymentOrder(outTradeNo);
+      const item = await refreshAdminPaymentOrder(outTradeNo, csrfToken);
       setOrders((current) =>
         current
           .map((order) => (order.out_trade_no === item.out_trade_no ? item : order))
@@ -214,7 +214,7 @@ export function OrdersPage({ csrfToken: _csrfToken }: OrdersPageProps) {
                             {order.payment_url ? (
                               <button
                                 type="button"
-                                onClick={() => window.open(order.payment_url, '_blank', 'noopener,noreferrer')}
+                                onClick={() => openTrustedPaymentWindow(order.payment_url)}
                                 className="rounded-xl p-2 text-emerald-500 transition hover:bg-emerald-100 dark:hover:bg-emerald-900/25"
                                 aria-label={`打开订单 ${order.out_trade_no} 的支付页`}
                               >
@@ -253,4 +253,16 @@ export function OrdersPage({ csrfToken: _csrfToken }: OrdersPageProps) {
       </GlassCard>
     </div>
   );
+}
+
+function openTrustedPaymentWindow(rawURL: string): Window | null {
+  try {
+    const parsedURL = new URL(rawURL);
+    if (parsedURL.protocol !== 'https:' || parsedURL.hostname !== 'credit.linux.do') {
+      return null;
+    }
+    return window.open(parsedURL.toString(), '_blank', 'noopener,noreferrer');
+  } catch {
+    return null;
+  }
 }

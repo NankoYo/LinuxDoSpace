@@ -78,15 +78,16 @@ export class APIError extends Error {
   }
 }
 
-// notifyAdminAuthInvalidated broadcasts authentication-state failures back to
-// the admin shell so page-level loaders do not get stuck in a stale authorized UI.
+// notifyAdminAuthInvalidated broadcasts only real session invalidation and
+// second-factor expiry. Plain authorization failures should not force a global
+// logout in the admin shell.
 function notifyAdminAuthInvalidated(path: string, code: string, status: number, message: string): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  if (!['unauthorized', 'forbidden', 'admin_password_required'].includes(code)) {
-    return;
-  }
+	if (typeof window === 'undefined') {
+		return;
+	}
+	if (!['unauthorized', 'admin_password_required'].includes(code) && status !== 401) {
+		return;
+	}
   if (path === '/v1/admin/verify-password' && code === 'unauthorized') {
     return
   }
@@ -342,11 +343,18 @@ export function listAdminPaymentProducts(): Promise<PaymentProduct[]> {
 }
 
 export function listAdminPaymentOrders(): Promise<AdminPaymentOrder[]> {
-  return request<AdminPaymentOrder[]>('/v1/admin/ldc/orders');
+	return request<AdminPaymentOrder[]>('/v1/admin/ldc/orders');
 }
 
 export function getAdminPaymentOrder(outTradeNo: string): Promise<AdminPaymentOrder> {
-  return request<AdminPaymentOrder>(`/v1/admin/ldc/orders/${encodeURIComponent(outTradeNo)}`);
+	return request<AdminPaymentOrder>(`/v1/admin/ldc/orders/${encodeURIComponent(outTradeNo)}`);
+}
+
+export function refreshAdminPaymentOrder(outTradeNo: string, csrfToken: string): Promise<AdminPaymentOrder> {
+	return request<AdminPaymentOrder>(`/v1/admin/ldc/orders/${encodeURIComponent(outTradeNo)}/refresh`, {
+		method: 'POST',
+		headers: { 'X-CSRF-Token': csrfToken },
+	});
 }
 
 export function updateAdminPaymentProduct(productKey: string, input: UpdatePaymentProductInput, csrfToken: string): Promise<PaymentProduct> {

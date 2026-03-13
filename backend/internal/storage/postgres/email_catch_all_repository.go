@@ -12,6 +12,7 @@ import (
 
 type UpsertEmailCatchAllAccessInput = storage.UpsertEmailCatchAllAccessInput
 type ConsumeEmailCatchAllInput = storage.ConsumeEmailCatchAllInput
+type RefundEmailCatchAllInput = storage.RefundEmailCatchAllInput
 
 // GetEmailCatchAllAccessByUser loads the mutable catch-all delivery state for
 // one user.
@@ -197,6 +198,61 @@ RETURNING
 		EffectiveDailyLimit: effectiveDailyLimit,
 		ConsumedMode:        consumedMode,
 	}, nil
+}
+
+// RefundEmailCatchAll rolls back one previously reserved catch-all usage unit.
+// It is used when SMTP forwarding fails after quota was reserved successfully.
+func (s *Store) RefundEmailCatchAll(ctx context.Context, input RefundEmailCatchAllInput) error {
+	if input.Count <= 0 {
+		return fmt.Errorf("catch-all refund count must be positive")
+	}
+	if input.UsageDate == "" {
+		return fmt.Errorf("catch-all refund usage date is required")
+	}
+
+	now := input.Now.UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	access, accessExists, err := getEmailCatchAllAccessTx(ctx, tx, input.UserID)
+	if err != nil {
+		return err
+	}
+	if !accessExists {
+		return fmt.Errorf("catch-all access state does not exist")
+	}
+
+	usage, usageExists, err := getEmailCatchAllDailyUsageTx(ctx, tx, input.UserID, input.UsageDate)
+	if err != nil {
+		return err
+	}
+	if !usageExists || usage.UsedCount < input.Count {
+		return fmt.Errorf("catch-all daily usage cannot be refunded")
+	}
+
+	if input.ConsumedMode == "quantity" {
+		access.RemainingCount += input.Count
+		if _, err := tx.ExecContext(ctx, `
+UPDATE email_catch_all_access
+SET remaining_count = ?, updated_at = ?
+WHERE user_id = ?
+`, access.RemainingCount, formatTime(now), input.UserID); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE email_catch_all_daily_usage
+SET used_count = used_count - ?, updated_at = ?
+WHERE user_id = ? AND usage_date = ?
+`, input.Count, formatTime(now), input.UserID, input.UsageDate); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // getEmailCatchAllAccessTx loads and locks one access row inside an open

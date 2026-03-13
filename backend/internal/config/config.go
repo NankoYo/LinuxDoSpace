@@ -208,6 +208,9 @@ func Load() (Config, error) {
 	if cfg.Cloudflare.DefaultUserQuota < 1 {
 		return Config{}, fmt.Errorf("CLOUDFLARE_DEFAULT_USER_QUOTA must be at least 1")
 	}
+	if cfg.App.Env == "production" && !cfg.App.SessionSecure {
+		return Config{}, fmt.Errorf("APP_SESSION_SECURE must be true when APP_ENV=production")
+	}
 	if err := validateDatabaseConfig(cfg.Database); err != nil {
 		return Config{}, err
 	}

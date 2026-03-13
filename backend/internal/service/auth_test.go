@@ -326,6 +326,73 @@ func TestAuthenticateSessionReevaluatesAdminAllowlist(t *testing.T) {
 	}
 }
 
+// TestVerifyAdminPasswordRotatesSession verifies that the admin second-factor
+// flow invalidates the pre-verification session instead of upgrading it in
+// place.
+func TestVerifyAdminPasswordRotatesSession(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+
+	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
+		LinuxDOUserID:  606,
+		Username:       "user2996",
+		DisplayName:    "User 2996",
+		AvatarURL:      "https://example.com/avatar.png",
+		TrustLevel:     4,
+		IsLinuxDOAdmin: false,
+		IsAppAdmin:     true,
+	})
+	if err != nil {
+		t.Fatalf("upsert admin user: %v", err)
+	}
+
+	originalSession, err := store.CreateSession(ctx, sqlite.CreateSessionInput{
+		ID:                   "pre-verify-session",
+		UserID:               user.ID,
+		CSRFToken:            "csrf-pre-verify",
+		UserAgentFingerprint: "test-user-agent",
+		ExpiresAt:            time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create pre-verification session: %v", err)
+	}
+
+	service := NewAuthService(config.Config{
+		App: config.AppConfig{
+			SessionTTL:           time.Hour,
+			SessionBindUserAgent: true,
+			AdminVerificationTTL: 30 * time.Minute,
+			AdminUsernames:       []string{"user2996"},
+			AdminPassword:        "correct-horse-battery-staple",
+		},
+	}, store, nil)
+
+	rotatedSession, err := service.VerifyAdminPassword(ctx, originalSession, user, "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("verify admin password: %v", err)
+	}
+	if rotatedSession.ID == originalSession.ID {
+		t.Fatalf("expected verified admin session id to rotate")
+	}
+	if rotatedSession.CSRFToken == originalSession.CSRFToken {
+		t.Fatalf("expected verified admin csrf token to rotate")
+	}
+	if rotatedSession.AdminVerifiedAt == nil {
+		t.Fatalf("expected rotated session to carry admin verification timestamp")
+	}
+
+	if _, _, err := store.GetSessionWithUserByID(ctx, originalSession.ID); !storage.IsNotFound(err) {
+		t.Fatalf("expected original session to be retired, got %v", err)
+	}
+	reloadedSession, _, err := store.GetSessionWithUserByID(ctx, rotatedSession.ID)
+	if err != nil {
+		t.Fatalf("load rotated session: %v", err)
+	}
+	if reloadedSession.AdminVerifiedAt == nil {
+		t.Fatalf("expected stored rotated session to remain admin-verified")
+	}
+}
+
 // newAuthTestStore creates a temporary migrated store so auth tests can
 // exercise the real persistence layer instead of a hand-written mock.
 func newAuthTestStore(t *testing.T) *sqlite.Store {

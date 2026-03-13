@@ -350,22 +350,15 @@ var defaultTrustedProxyCIDRs = []netip.Prefix{
 // proxy CIDRs may influence the resolved address.
 func requestClientIP(r *http.Request, trustedProxyCIDRs []netip.Prefix) string {
 	if trustedProxyPeer(r.RemoteAddr, trustedProxyCIDRs) {
-		if value := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); value != "" {
+		if value, ok := parseHeaderIP(r.Header.Get("CF-Connecting-IP")); ok {
 			return value
 		}
 		if forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwardedFor != "" {
-			parts := strings.Split(forwardedFor, ",")
-			for index := len(parts) - 1; index >= 0; index-- {
-				candidate := strings.TrimSpace(parts[index])
-				if candidate == "" {
-					continue
-				}
-				if _, err := netip.ParseAddr(candidate); err == nil {
-					return candidate
-				}
+			if value, ok := firstUntrustedForwardedIP(forwardedFor, trustedProxyCIDRs); ok {
+				return value
 			}
 		}
-		if value := strings.TrimSpace(r.Header.Get("X-Real-IP")); value != "" {
+		if value, ok := parseHeaderIP(r.Header.Get("X-Real-IP")); ok {
 			return value
 		}
 	}
@@ -394,6 +387,69 @@ func trustedProxyPeer(remoteAddr string, trustedProxyCIDRs []netip.Prefix) bool 
 		effectiveCIDRs = defaultTrustedProxyCIDRs
 	}
 	for _, prefix := range effectiveCIDRs {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseHeaderIP validates one single-value proxy header before it is used as a
+// limiter key or audit attribute.
+func parseHeaderIP(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", false
+	}
+	address, err := netip.ParseAddr(value)
+	if err != nil {
+		return "", false
+	}
+	return address.String(), true
+}
+
+// firstUntrustedForwardedIP walks the X-Forwarded-For chain from right to left
+// and returns the first address that is not itself a trusted proxy. This keeps
+// multi-hop deployments aligned with the real client instead of an inner
+// reverse proxy.
+func firstUntrustedForwardedIP(raw string, trustedProxyCIDRs []netip.Prefix) (string, bool) {
+	parts := strings.Split(raw, ",")
+	if len(parts) == 0 {
+		return "", false
+	}
+
+	effectiveCIDRs := trustedProxyCIDRs
+	if len(effectiveCIDRs) == 0 {
+		effectiveCIDRs = defaultTrustedProxyCIDRs
+	}
+
+	for index := len(parts) - 1; index >= 0; index-- {
+		candidate := strings.TrimSpace(parts[index])
+		if candidate == "" {
+			continue
+		}
+		address, err := netip.ParseAddr(candidate)
+		if err != nil {
+			continue
+		}
+		if !addressInTrustedCIDRs(address, effectiveCIDRs) {
+			return address.String(), true
+		}
+	}
+
+	for _, part := range parts {
+		candidate := strings.TrimSpace(part)
+		if address, err := netip.ParseAddr(candidate); err == nil {
+			return address.String(), true
+		}
+	}
+	return "", false
+}
+
+// addressInTrustedCIDRs reports whether the given address belongs to the
+// configured trusted proxy set.
+func addressInTrustedCIDRs(address netip.Addr, trustedProxyCIDRs []netip.Prefix) bool {
+	for _, prefix := range trustedProxyCIDRs {
 		if prefix.Contains(address) {
 			return true
 		}

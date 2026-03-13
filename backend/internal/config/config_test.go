@@ -73,6 +73,7 @@ func TestLoadRejectsPartialAdminConfiguration(t *testing.T) {
 func TestLoadRequiresExplicitAdminConfigInProduction(t *testing.T) {
 	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_SESSION_SECURE", "true")
 	t.Setenv("APP_ADMIN_USERNAMES", "")
 	t.Setenv("APP_ADMIN_PASSWORD", "")
 
@@ -90,6 +91,7 @@ func TestLoadRequiresExplicitAdminConfigInProduction(t *testing.T) {
 func TestLoadAcceptsExplicitAdminConfigInProduction(t *testing.T) {
 	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
 	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_SESSION_SECURE", "true")
 	t.Setenv("APP_ADMIN_USERNAMES", "MoYeRanQianZhi,user2996")
 	t.Setenv("APP_ADMIN_PASSWORD", "strong-password")
 
@@ -102,6 +104,24 @@ func TestLoadAcceptsExplicitAdminConfigInProduction(t *testing.T) {
 	}
 	if cfg.App.AdminPassword != "strong-password" {
 		t.Fatalf("expected configured admin password to survive load, got %q", cfg.App.AdminPassword)
+	}
+}
+
+// TestLoadRejectsInsecureProductionCookies verifies that production cannot boot
+// with non-secure authentication cookies.
+func TestLoadRejectsInsecureProductionCookies(t *testing.T) {
+	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_SESSION_SECURE", "false")
+	t.Setenv("APP_ADMIN_USERNAMES", "MoYeRanQianZhi,user2996")
+	t.Setenv("APP_ADMIN_PASSWORD", "strong-password")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("expected insecure production cookie configuration to fail")
+	}
+	if !strings.Contains(err.Error(), "APP_SESSION_SECURE must be true") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

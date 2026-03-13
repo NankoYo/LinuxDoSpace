@@ -269,8 +269,8 @@ func (s *PaymentService) ListOrdersForAdmin(ctx context.Context) ([]model.Paymen
 	return items, nil
 }
 
-// GetMyOrder loads one specific order and opportunistically reconciles its
-// payment status so the frontend polling loop can converge on success.
+// GetMyOrder loads one specific order without mutating its current gateway
+// state. Use RefreshMyOrder when the caller explicitly wants reconciliation.
 func (s *PaymentService) GetMyOrder(ctx context.Context, user model.User, outTradeNo string) (model.PaymentOrder, error) {
 	order, err := s.db.GetPaymentOrderByOutTradeNo(ctx, strings.TrimSpace(outTradeNo))
 	if err != nil {
@@ -282,7 +282,16 @@ func (s *PaymentService) GetMyOrder(ctx context.Context, user model.User, outTra
 	if order.UserID != user.ID {
 		return model.PaymentOrder{}, ForbiddenError("payment order does not belong to the current user")
 	}
+	return order, nil
+}
 
+// RefreshMyOrder explicitly reconciles one current user's order against the
+// upstream gateway and applies entitlements when needed.
+func (s *PaymentService) RefreshMyOrder(ctx context.Context, user model.User, outTradeNo string) (model.PaymentOrder, error) {
+	order, err := s.GetMyOrder(ctx, user, outTradeNo)
+	if err != nil {
+		return model.PaymentOrder{}, err
+	}
 	order, err = s.syncAndApplyOrder(ctx, order)
 	if err != nil {
 		return model.PaymentOrder{}, err
@@ -290,8 +299,8 @@ func (s *PaymentService) GetMyOrder(ctx context.Context, user model.User, outTra
 	return order, nil
 }
 
-// GetOrderForAdmin loads one specific order for the administrator console and
-// opportunistically reconciles its current gateway state.
+// GetOrderForAdmin loads one specific order for the administrator console
+// without mutating its current gateway state.
 func (s *PaymentService) GetOrderForAdmin(ctx context.Context, outTradeNo string) (model.PaymentOrder, error) {
 	order, err := s.db.GetPaymentOrderByOutTradeNo(ctx, strings.TrimSpace(outTradeNo))
 	if err != nil {
@@ -300,7 +309,16 @@ func (s *PaymentService) GetOrderForAdmin(ctx context.Context, outTradeNo string
 		}
 		return model.PaymentOrder{}, InternalError("failed to load payment order", err)
 	}
+	return order, nil
+}
 
+// RefreshOrderForAdmin explicitly reconciles one order against the upstream
+// gateway for the administrator console.
+func (s *PaymentService) RefreshOrderForAdmin(ctx context.Context, outTradeNo string) (model.PaymentOrder, error) {
+	order, err := s.GetOrderForAdmin(ctx, outTradeNo)
+	if err != nil {
+		return model.PaymentOrder{}, err
+	}
 	order, err = s.syncAndApplyOrder(ctx, order)
 	if err != nil {
 		return model.PaymentOrder{}, err
@@ -402,8 +420,11 @@ func (s *PaymentService) validateOrderCreation(ctx context.Context, user model.U
 		if permissionErr != nil {
 			return model.PaymentProduct{}, 0, permissionErr
 		}
-		if permission.Status != "approved" && !permission.Eligible {
-			return model.PaymentProduct{}, 0, ForbiddenError(firstNonEmpty(permission.EligibilityReasons...))
+		if permission.Status != "approved" {
+			if len(permission.EligibilityReasons) > 0 {
+				return model.PaymentProduct{}, 0, ForbiddenError(firstNonEmpty(permission.EligibilityReasons...))
+			}
+			return model.PaymentProduct{}, 0, ForbiddenError("the catch-all email permission must be approved before this product can be purchased")
 		}
 	}
 

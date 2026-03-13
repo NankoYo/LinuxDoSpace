@@ -44,17 +44,34 @@ func TestDBCatchAllAccessManagerMapsStorageState(t *testing.T) {
 	fixedNow := time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return fixedNow }
 
-	if err := manager.Consume(ctx, user.ID, 1); err != nil {
-		t.Fatalf("consume first catch-all delivery: %v", err)
+	reservation, err := manager.Reserve(ctx, user.ID, 1)
+	if err != nil {
+		t.Fatalf("reserve first catch-all delivery: %v", err)
+	}
+	if reservation.ConsumedMode != "quantity" {
+		t.Fatalf("expected quantity reservation mode, got %q", reservation.ConsumedMode)
 	}
 
-	if err := manager.Consume(ctx, user.ID, 1); !errors.Is(err, ErrCatchAllDailyLimitExceeded) {
+	if err := manager.Release(ctx, reservation); err != nil {
+		t.Fatalf("release first catch-all delivery reservation: %v", err)
+	}
+
+	reusedReservation, err := manager.Reserve(ctx, user.ID, 1)
+	if err != nil {
+		t.Fatalf("reserve second catch-all delivery after release: %v", err)
+	}
+
+	if _, err := manager.Reserve(ctx, user.ID, 1); !errors.Is(err, ErrCatchAllDailyLimitExceeded) {
 		t.Fatalf("expected daily limit exceeded error, got %v", err)
 	}
 
 	manager.now = func() time.Time { return fixedNow.Add(24 * time.Hour) }
-	if err := manager.Consume(ctx, user.ID, 1); !errors.Is(err, ErrCatchAllAccessUnavailable) {
+	if _, err := manager.Reserve(ctx, user.ID, 1); !errors.Is(err, ErrCatchAllAccessUnavailable) {
 		t.Fatalf("expected access unavailable after remaining count exhaustion, got %v", err)
+	}
+
+	if err := manager.Release(ctx, reusedReservation); err != nil {
+		t.Fatalf("release reused reservation: %v", err)
 	}
 }
 

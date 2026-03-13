@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"strings"
 	"time"
 
@@ -232,18 +233,18 @@ func (s *AuthService) Logout(ctx context.Context, sessionID string, actorUserID 
 	return nil
 }
 
-// VerifyAdminPassword checks the extra administrator password and upgrades the
-// current session after a successful constant-time comparison.
-func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Session, actor model.User, password string) (time.Time, error) {
+// VerifyAdminPassword checks the extra administrator password, rotates the
+// session, and returns the newly verified administrator session.
+func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Session, actor model.User, password string) (model.Session, error) {
 	if !actor.IsAppAdmin {
-		return time.Time{}, ForbiddenError("admin permission required")
+		return model.Session{}, ForbiddenError("admin permission required")
 	}
 	if strings.TrimSpace(password) == "" {
-		return time.Time{}, ValidationError("admin password is required")
+		return model.Session{}, ValidationError("admin password is required")
 	}
 	now := time.Now().UTC()
 	if AdminVerificationIsFresh(session.AdminVerifiedAt, s.cfg.App.AdminVerificationTTL, now) {
-		return session.AdminVerifiedAt.UTC(), nil
+		return session, nil
 	}
 
 	expected := s.cfg.App.AdminPassword
@@ -255,23 +256,44 @@ func (s *AuthService) VerifyAdminPassword(ctx context.Context, session model.Ses
 			ResourceID:   session.ID,
 			MetadataJSON: `{"second_factor":"password","result":"rejected"}`,
 		}))
-		return time.Time{}, UnauthorizedError("invalid admin password")
+		return model.Session{}, UnauthorizedError("invalid admin password")
 	}
 
 	verifiedAt := now
-	if err := s.store.MarkSessionAdminVerified(ctx, session.ID, verifiedAt); err != nil {
-		return time.Time{}, InternalError("failed to persist admin password verification", err)
+	newSessionID, err := security.RandomToken(32)
+	if err != nil {
+		return model.Session{}, InternalError("failed to generate rotated admin session id", err)
+	}
+	newCSRFToken, err := security.RandomToken(32)
+	if err != nil {
+		return model.Session{}, InternalError("failed to generate rotated admin csrf token", err)
+	}
+
+	rotatedSession, err := s.store.CreateSession(ctx, storage.CreateSessionInput{
+		ID:                   newSessionID,
+		UserID:               actor.ID,
+		CSRFToken:            newCSRFToken,
+		UserAgentFingerprint: session.UserAgentFingerprint,
+		AdminVerifiedAt:      &verifiedAt,
+		ExpiresAt:            session.ExpiresAt,
+	})
+	if err != nil {
+		return model.Session{}, InternalError("failed to create rotated admin session", err)
+	}
+	if err := s.store.DeleteSession(ctx, session.ID); err != nil {
+		_ = s.store.DeleteSession(ctx, rotatedSession.ID)
+		return model.Session{}, InternalError("failed to retire pre-verification session", err)
 	}
 
 	logAuditWriteFailure("admin.session.verify_password", s.store.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &actor.ID,
 		Action:       "admin.session.verify_password",
 		ResourceType: "session",
-		ResourceID:   session.ID,
-		MetadataJSON: `{"second_factor":"password","result":"verified"}`,
+		ResourceID:   rotatedSession.ID,
+		MetadataJSON: fmt.Sprintf(`{"second_factor":"password","result":"verified","previous_session_id":"%s"}`, session.ID),
 	}))
 
-	return verifiedAt, nil
+	return rotatedSession, nil
 }
 
 // buildAvatarURL converts the avatar template returned by Linux Do into a directly fetchable image URL.

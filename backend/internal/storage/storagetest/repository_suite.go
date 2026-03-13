@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -710,6 +712,108 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 		if items[0].Username != user.Username || items[0].DisplayName != user.DisplayName {
 			t.Fatalf("expected admin order list to include user identity, got %+v", items[0])
+		}
+	})
+
+	t.Run("payment orders apply entitlements only once under concurrency", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "concurrent-paid-owner")
+		quotaProduct, err := store.GetPaymentProduct(ctx, "email_catch_all_quota")
+		if err != nil {
+			t.Fatalf("load quota payment product: %v", err)
+		}
+
+		if _, err := store.UpsertEmailCatchAllAccess(ctx, storage.UpsertEmailCatchAllAccessInput{
+			UserID:         user.ID,
+			RemainingCount: 10,
+		}); err != nil {
+			t.Fatalf("seed catch-all access: %v", err)
+		}
+
+		paidAt := time.Now().UTC().Truncate(time.Second)
+		order, err := store.CreatePaymentOrder(ctx, storage.CreatePaymentOrderInput{
+			UserID:          user.ID,
+			ProductKey:      quotaProduct.Key,
+			ProductName:     quotaProduct.DisplayName,
+			Title:           quotaProduct.DisplayName,
+			GatewayType:     model.PaymentGatewayLinuxDOCredit,
+			OutTradeNo:      "ORDER-CONCURRENT",
+			Status:          model.PaymentOrderStatusCreated,
+			Units:           1,
+			GrantQuantity:   quotaProduct.GrantQuantity,
+			GrantedTotal:    quotaProduct.GrantQuantity,
+			GrantUnit:       quotaProduct.GrantUnit,
+			UnitPriceCents:  quotaProduct.UnitPriceCents,
+			TotalPriceCents: quotaProduct.UnitPriceCents,
+			EffectType:      quotaProduct.EffectType,
+		})
+		if err != nil {
+			t.Fatalf("create concurrent payment order: %v", err)
+		}
+		if _, err := store.UpdatePaymentOrderGatewayState(ctx, storage.UpdatePaymentOrderGatewayStateInput{
+			OutTradeNo:      order.OutTradeNo,
+			Status:          model.PaymentOrderStatusPaid,
+			ProviderTradeNo: "gateway-concurrent",
+			PaidAt:          &paidAt,
+		}); err != nil {
+			t.Fatalf("mark concurrent payment order paid: %v", err)
+		}
+
+		var appliedCount atomic.Int32
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, applied, applyErr := store.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
+					OutTradeNo: order.OutTradeNo,
+					AppliedAt:  paidAt,
+				})
+				if applyErr != nil {
+					errs <- applyErr
+					return
+				}
+				if applied {
+					appliedCount.Add(1)
+				}
+			}()
+		}
+
+		wg.Wait()
+		close(errs)
+		for applyErr := range errs {
+			t.Fatalf("concurrent entitlement apply failed: %v", applyErr)
+		}
+
+		if appliedCount.Load() != 1 {
+			t.Fatalf("expected exactly one concurrent apply to report applied=true, got %d", appliedCount.Load())
+		}
+
+		access, err := store.GetEmailCatchAllAccessByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("load catch-all access after concurrent apply: %v", err)
+		}
+		expectedRemainingCount := int64(10) + quotaProduct.GrantQuantity
+		if access.RemainingCount != expectedRemainingCount {
+			t.Fatalf("expected remaining count %d after one successful apply, got %d", expectedRemainingCount, access.RemainingCount)
+		}
+
+		records, err := store.ListQuantityRecordsByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("list quantity records after concurrent apply: %v", err)
+		}
+		paymentReferenceCount := 0
+		for _, item := range records {
+			if item.ReferenceType == "payment_order" && item.ReferenceID == order.OutTradeNo {
+				paymentReferenceCount++
+			}
+		}
+		if paymentReferenceCount != 1 {
+			t.Fatalf("expected exactly one payment-order quantity record after concurrent apply, got %d", paymentReferenceCount)
 		}
 	})
 

@@ -69,18 +69,19 @@ export class APIError extends Error {
   }
 }
 
-// notifyAuthInvalid informs the top-level app shell about expired or forbidden
-// sessions while still letting the original caller handle the rejected request.
+// notifyAuthInvalid informs the top-level app shell only when the browser
+// session itself is no longer valid. Plain authorization failures should stay
+// local to the calling page instead of forcing a global logout.
 function notifyAuthInvalid(path: string, status: number, code: string): void {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  if (path === '/v1/me' || path === '/v1/auth/logout') {
-    return;
-  }
-  if (!(status === 401 || status === 403 || code === 'unauthorized' || code === 'forbidden')) {
-    return;
-  }
+	if (typeof window === 'undefined') {
+		return;
+	}
+	if (path === '/v1/me' || path === '/v1/auth/logout') {
+		return;
+	}
+	if (!(status === 401 || code === 'unauthorized')) {
+		return;
+	}
 
   window.dispatchEvent(
     new CustomEvent(authInvalidEventName, {
@@ -232,10 +233,20 @@ export function listMyPaymentOrders(): Promise<PaymentOrder[]> {
   return request<PaymentOrder[]>('/v1/my/ldc/orders');
 }
 
-// getMyPaymentOrder reloads one specific order and lets the backend reconcile
-// its current gateway status.
+// getMyPaymentOrder reads one specific order without triggering a refresh.
 export function getMyPaymentOrder(outTradeNo: string): Promise<PaymentOrder> {
-  return request<PaymentOrder>(`/v1/my/ldc/orders/${encodeURIComponent(outTradeNo)}`);
+	return request<PaymentOrder>(`/v1/my/ldc/orders/${encodeURIComponent(outTradeNo)}`);
+}
+
+// refreshMyPaymentOrder explicitly asks the backend to reconcile one order with
+// the upstream gateway and therefore requires CSRF protection.
+export function refreshMyPaymentOrder(outTradeNo: string, csrfToken: string): Promise<PaymentOrder> {
+	return request<PaymentOrder>(`/v1/my/ldc/orders/${encodeURIComponent(outTradeNo)}/refresh`, {
+		method: 'POST',
+		headers: {
+			'X-CSRF-Token': csrfToken,
+		},
+	});
 }
 
 // createMyPaymentOrder reserves one local order and returns the payment URL
