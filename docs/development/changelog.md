@@ -25,6 +25,8 @@
 - Fixed the public configuration center so `/v1/me` and `/v1/my/allocations` now return every namespace already owned by the user, including administrator-granted namespaces that do not match the Linux Do username.
 - Removed the accidental DNS-management lockout that previously restricted users to the root record of their default same-name namespace; owned namespaces now expose their full in-namespace record set again.
 - Redesigned the public settings page so the default namespace and every extra namespace appear as explicit selectable cards instead of being hidden behind a single implicit default view.
+- Added a documented child-zone probe workflow for real subdomain catch-all validation, plus a reusable PowerShell script that can bootstrap `test.<root-domain>` once the Cloudflare token has zone-create permission.
+- Recorded the 2026-03-11 architecture finding that the public same-zone `catch_all?subdomain=` API is not a safe basis for multi-user real catch-all support.
 - Hardened OAuth callback completion so per-state browser cookies support concurrent login tabs and SQLite now consumes the OAuth state only when the session insert succeeds.
 - Added live session invalidation hooks for both frontends so expired public or admin sessions are reflected without requiring a full-page reload.
 - Tightened reverse-proxy trust boundaries with configurable `APP_TRUSTED_PROXY_CIDRS`, defaulting to loopback-only forwarding headers for admin password rate limiting.
