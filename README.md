@@ -41,6 +41,11 @@ LinuxDoSpace 是一个基于 Cloudflare DNS 的二级域名分发站，主要面
 - GitHub Actions 自动构建并发布到 GHCR
 - 可选通过 SSH 自动部署到 Debian 服务器
 
+数据库说明：
+
+- 当前生产部署使用 PostgreSQL。
+- 仓库仍保留 SQLite 兼容实现，但它只用于本地开发、测试和回滚兜底场景，不是当前线上主数据库。
+
 当前未完成：
 
 - 前端 API 联调

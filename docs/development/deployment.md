@@ -9,6 +9,11 @@ The current recommended production layout is split deployment:
 - backend API on Debian with Docker, for example `https://api.example.com`
 - PostgreSQL as the production database backend
 
+Important note:
+
+- The production deployment used by this project is PostgreSQL-based.
+- SQLite support remains in the codebase only for local development, automated tests, and rollback-only fallback handling.
+
 The repository still supports single-image self-hosting because the Go backend can embed the frontend build output, but the main production path used by this project is the split frontend/backend model above.
 
 ## Docker image
