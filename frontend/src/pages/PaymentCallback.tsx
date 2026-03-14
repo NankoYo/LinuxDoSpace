@@ -176,12 +176,12 @@ export function PaymentCallback({
               </div>
               <h1 className="mt-4 text-3xl font-extrabold text-gray-900 dark:text-white md:text-4xl">正在确认你的支付结果</h1>
               <p className="mt-3 max-w-2xl text-sm leading-7 text-gray-600 dark:text-gray-300">
-                这是专门的支付回调页。当前支付平台不会回传订单参数，所以页面会直接以你账号下的最新订单为准，主动向后端刷新状态，并等待异步通知与权益发放完成。
+                这是专门的支付回调页。当前支付平台不会回传订单参数，所以页面会优先匹配当前浏览器最近创建过的订单，再回退到你账号下的最新订单，随后主动向后端刷新状态并等待异步通知与权益发放完成。
               </p>
             </div>
             <div className="rounded-[1.5rem] border border-white/20 bg-white/45 px-5 py-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
               <div>当前账号：{authenticated ? user?.username ?? '已登录' : '未登录'}</div>
-              <div>当前策略：以最新订单为准</div>
+              <div>当前策略：优先最近订单，回退最新订单</div>
               <div>回调路由：/payments/callback</div>
             </div>
           </div>
@@ -201,7 +201,7 @@ export function PaymentCallback({
               <div className="mt-6 grid gap-3 md:grid-cols-2">
                 <InfoStat title="实际核对订单号" value={resolvedOrderNo || '尚未确定'} mono />
                 <InfoStat title="刷新轮次" value={`${refreshAttempt + 1} / ${maxRefreshAttempts}`} />
-                <InfoStat title="状态来源" value="账号下最新订单" />
+                <InfoStat title="状态来源" value="优先本地记住的订单" />
                 <InfoStat title="订单状态" value={order ? readablePaymentStatus(order) : '尚未取得'} />
               </div>
 
@@ -232,7 +232,7 @@ export function PaymentCallback({
                 </div>
               ) : (
                 <div className="mt-4 text-sm leading-7 text-gray-600 dark:text-gray-300">
-                  当前还没有拿到订单详情。系统会直接从你账号下的最新订单开始核对。
+                  当前还没有拿到订单详情。系统会优先从当前浏览器记住的最近订单开始核对，找不到时才回退到账号下最新订单。
                 </div>
               )}
 

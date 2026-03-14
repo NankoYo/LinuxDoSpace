@@ -275,6 +275,34 @@ func TestEnforceCSRFFailsForUnexpectedOrigin(t *testing.T) {
 	}
 }
 
+// TestEnforceCSRFFailsForCrossSiteFetchWithoutOrigin verifies that Fetch
+// Metadata still blocks unsafe browser requests even when Origin/Referer are
+// missing.
+func TestEnforceCSRFFailsForCrossSiteFetchWithoutOrigin(t *testing.T) {
+	api := &API{
+		config: config.Config{
+			App: config.AppConfig{
+				AllowedOrigins:   []string{"https://app.example.com", "https://admin.example.com"},
+				FrontendURL:      "https://app.example.com",
+				AdminFrontendURL: "https://admin.example.com",
+			},
+		},
+	}
+
+	session := &model.Session{CSRFToken: "csrf-token"}
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	request.Header.Set("X-CSRF-Token", session.CSRFToken)
+
+	recorder := httptest.NewRecorder()
+	if api.enforceCSRF(recorder, request, session) {
+		t.Fatalf("expected cross-site fetch metadata to fail CSRF enforcement")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-site fetch metadata, got %d", recorder.Code)
+	}
+}
+
 // performAdminPasswordRequest sends one JSON password verification request into
 // the real handler with the session cookie and CSRF token already attached.
 func performAdminPasswordRequest(t *testing.T, api *API, sessionID string, csrfToken string, password string) *httptest.ResponseRecorder {

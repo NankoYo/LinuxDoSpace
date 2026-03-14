@@ -336,6 +336,10 @@ func (a *API) enforceCSRF(w http.ResponseWriter, r *http.Request, session *model
 func (a *API) requestOriginAllowed(r *http.Request) bool {
 	requestOrigin := strings.TrimSpace(r.Header.Get("Origin"))
 	if requestOrigin == "" {
+		fetchSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")))
+		if fetchSite == "cross-site" {
+			return false
+		}
 		refererValue := strings.TrimSpace(r.Header.Get("Referer"))
 		if refererValue == "" {
 			return true

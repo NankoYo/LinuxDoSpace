@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"linuxdospace/backend/internal/config"
 )
@@ -55,5 +56,31 @@ func TestShouldClearOAuthCookiesKeepsRetryableErrors(t *testing.T) {
 	}
 	if !shouldClearOAuthCookies("unauthorized") {
 		t.Fatalf("expected unauthorized callbacks to clear oauth cookies")
+	}
+}
+
+// TestAuthCookiesStayHostOnly verifies that authentication and OAuth cookies do
+// not set a shared Domain attribute. Host-only cookies prevent untrusted user
+// subdomains from overriding parent-site session state.
+func TestAuthCookiesStayHostOnly(t *testing.T) {
+	api := &API{
+		config: config.Config{
+			App: config.AppConfig{
+				SessionCookieName: "linuxdospace_session",
+				SessionSecure:     true,
+				SessionTTL:        time.Hour,
+			},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	api.setSessionCookie(recorder, "session-id")
+	api.setOAuthStateCookie(recorder, "state-1")
+	api.setOAuthTargetCookie(recorder, "state-1", oauthTargetApp)
+
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Domain != "" {
+			t.Fatalf("expected cookie %q to stay host-only, got domain %q", cookie.Name, cookie.Domain)
+		}
 	}
 }
