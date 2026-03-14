@@ -770,6 +770,9 @@ func (s *AdminService) UpdateApplication(ctx context.Context, actor model.User, 
 	nextApplication.Status = status
 	nextApplication.ReviewNote = strings.TrimSpace(request.ReviewNote)
 	nextApplication.ReviewedByUserID = &actor.ID
+	if err := ensureCatchAllRelayIngressDNSForApplication(ctx, s.cfg, s.cf, nextApplication); err != nil {
+		return model.AdminApplication{}, err
+	}
 	if err := s.disableCatchAllEmailRouteForApplication(ctx, actor, nextApplication); err != nil {
 		return model.AdminApplication{}, err
 	}

@@ -118,11 +118,6 @@ func (s emailRouteSyncState) Address() string {
 // local storage and the external provider do not silently diverge.
 func (p emailRoutingProvisioner) SyncForwardingState(ctx context.Context, before emailRouteSyncState, after emailRouteSyncState, persist func() error) error {
 	if p.cfg.UsesDatabaseMailRelay() {
-		if after.Exists {
-			if err := p.ensureDatabaseRelayIngressDNS(ctx, after.RootDomain); err != nil {
-				return err
-			}
-		}
 		return persist()
 	}
 

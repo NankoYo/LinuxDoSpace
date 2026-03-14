@@ -654,6 +654,12 @@ func (s *DomainService) listNamespaceRecords(ctx context.Context, allocation mod
 		if !BelongsToNamespace(record.Name, allocation.FQDN) {
 			continue
 		}
+		// Hide LinuxDoSpace-managed relay ingress records from the end-user DNS
+		// panel. These MX/TXT rows are system infrastructure, not user-editable
+		// namespace records.
+		if strings.EqualFold(strings.TrimSpace(record.Comment), strings.TrimSpace(databaseRelayManagedDNSComment)) {
+			continue
+		}
 		filtered = append(filtered, toModelDNSRecord(record, allocation.FQDN, RelativeNameFromAbsolute(record.Name, allocation.FQDN)))
 	}
 
