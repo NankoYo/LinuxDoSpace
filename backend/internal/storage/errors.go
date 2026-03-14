@@ -13,6 +13,14 @@ var (
 	// ErrEmailCatchAllInsufficientRemainingCount means the user has no active
 	// subscription and not enough prepaid remaining count to accept the mail.
 	ErrEmailCatchAllInsufficientRemainingCount = errors.New("email catch-all remaining count is insufficient")
+
+	// ErrPOWChallengeDailyLimitExceeded means the current user already claimed
+	// the maximum number of proof-of-work rewards allowed for the UTC day.
+	ErrPOWChallengeDailyLimitExceeded = errors.New("pow challenge daily limit exceeded")
+
+	// ErrPOWChallengeNotActive means the submitted challenge was already claimed
+	// or superseded before the caller attempted to redeem it.
+	ErrPOWChallengeNotActive = errors.New("pow challenge is not active")
 )
 
 // IsNotFound reports whether one storage call failed only because the target

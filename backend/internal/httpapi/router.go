@@ -18,6 +18,7 @@ type RouterDependencies struct {
 	PermissionService *service.PermissionService
 	QuantityService   *service.QuantityService
 	PaymentService    *service.PaymentService
+	POWService        *service.POWService
 }
 
 // NewRouter builds the complete HTTP router used by the backend process.
@@ -31,6 +32,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		permissionService:    deps.PermissionService,
 		quantityService:      deps.QuantityService,
 		paymentService:       deps.PaymentService,
+		powService:           deps.POWService,
 		adminPasswordLimiter: newAdminPasswordLimiter(adminPasswordMaxFailures, adminPasswordBlockDuration, adminPasswordStateTTL),
 	}
 
@@ -58,6 +60,9 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/my/permissions", api.handleMyPermissions)
 	mux.HandleFunc("GET /v1/my/quantity-records", api.handleMyQuantityRecords)
 	mux.HandleFunc("GET /v1/my/quantity-balances", api.handleMyQuantityBalances)
+	mux.HandleFunc("GET /v1/my/pow/status", api.handleMyPOWStatus)
+	mux.HandleFunc("POST /v1/my/pow/challenges", api.handleCreateMyPOWChallenge)
+	mux.HandleFunc("POST /v1/my/pow/challenges/claim", api.handleClaimMyPOWChallenge)
 	mux.HandleFunc("GET /v1/my/ldc/orders", api.handleMyPaymentOrders)
 	mux.HandleFunc("POST /v1/my/ldc/orders", api.handleCreateMyPaymentOrder)
 	mux.HandleFunc("GET /v1/my/ldc/orders/{outTradeNo}", api.handleMyPaymentOrder)

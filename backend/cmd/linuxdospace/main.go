@@ -65,6 +65,7 @@ func main() {
 	adminService := service.NewAdminService(cfg, store, cloudflareClient)
 	permissionService := service.NewPermissionService(cfg, store, cloudflareClient)
 	quantityService := service.NewQuantityService(store)
+	powService := service.NewPOWService(cfg, store)
 	creditClient := linuxdocredit.NewClient(
 		cfg.LinuxDOCredit.PID,
 		cfg.LinuxDOCredit.Key,
@@ -88,6 +89,7 @@ func main() {
 		PermissionService: permissionService,
 		QuantityService:   quantityService,
 		PaymentService:    paymentService,
+		POWService:        powService,
 	})
 
 	server := &http.Server{
