@@ -30,8 +30,8 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if createdChallenge.BenefitKey != model.POWBenefitEmailCatchAllRemainingCount {
 		t.Fatalf("expected email catch-all remaining-count benefit, got %+v", createdChallenge)
 	}
-	if createdChallenge.RewardQuantity < 15 || createdChallenge.RewardQuantity > 30 {
-		t.Fatalf("expected difficulty-3 reward between 15 and 30, got %d", createdChallenge.RewardQuantity)
+	if createdChallenge.BaseReward != 0 || createdChallenge.RewardQuantity != 0 {
+		t.Fatalf("expected unrevealed reward before solving, got %+v", createdChallenge)
 	}
 
 	nonce := solvePOWChallenge(t, createdChallenge)
@@ -42,12 +42,12 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit pow challenge: %v", err)
 	}
-
-	if result.GrantedQuantity != createdChallenge.RewardQuantity {
-		t.Fatalf("expected granted quantity %d, got %d", createdChallenge.RewardQuantity, result.GrantedQuantity)
+	if result.GrantedQuantity < 15 || result.GrantedQuantity > 30 {
+		t.Fatalf("expected difficulty-3 reward between 15 and 30, got %d", result.GrantedQuantity)
 	}
-	if result.CurrentRemainingCount != int64(createdChallenge.RewardQuantity) {
-		t.Fatalf("expected remaining count %d, got %d", createdChallenge.RewardQuantity, result.CurrentRemainingCount)
+
+	if result.CurrentRemainingCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected remaining count %d, got %d", result.GrantedQuantity, result.CurrentRemainingCount)
 	}
 	if result.CompletedToday != 1 || result.RemainingToday != 4 {
 		t.Fatalf("unexpected day counters after claim: %+v", result)
@@ -57,8 +57,8 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load catch-all access after pow claim: %v", err)
 	}
-	if access.RemainingCount != int64(createdChallenge.RewardQuantity) {
-		t.Fatalf("expected persisted remaining count %d, got %d", createdChallenge.RewardQuantity, access.RemainingCount)
+	if access.RemainingCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected persisted remaining count %d, got %d", result.GrantedQuantity, access.RemainingCount)
 	}
 
 	records, err := store.ListQuantityRecordsByUser(ctx, user.ID)
@@ -71,8 +71,8 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if records[0].ResourceKey != QuantityResourceEmailCatchAllRemainingCount {
 		t.Fatalf("expected remaining-count ledger entry, got %+v", records[0])
 	}
-	if records[0].Delta != createdChallenge.RewardQuantity {
-		t.Fatalf("expected quantity delta %d, got %d", createdChallenge.RewardQuantity, records[0].Delta)
+	if records[0].Delta != result.GrantedQuantity {
+		t.Fatalf("expected quantity delta %d, got %d", result.GrantedQuantity, records[0].Delta)
 	}
 
 	status, err := service.GetMyStatus(ctx, user)
@@ -82,8 +82,8 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if status.CurrentChallenge != nil {
 		t.Fatalf("expected no active challenge after successful claim, got %+v", status.CurrentChallenge)
 	}
-	if status.CurrentRemainingCount != int64(createdChallenge.RewardQuantity) {
-		t.Fatalf("expected status remaining count %d, got %d", createdChallenge.RewardQuantity, status.CurrentRemainingCount)
+	if status.CurrentRemainingCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected status remaining count %d, got %d", result.GrantedQuantity, status.CurrentRemainingCount)
 	}
 	if status.CompletedToday != 1 || status.RemainingToday != 4 {
 		t.Fatalf("unexpected status counters after claim: %+v", status)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Cpu, Gift, LoaderCircle, Pickaxe, RefreshCw, ShieldAlert, Sparkles, StopCircle } from 'lucide-react';
+import { Cpu, LoaderCircle, Pickaxe, RefreshCw, ShieldAlert, Sparkles } from 'lucide-react';
 
 import { claimMyPOWChallenge, createMyPOWChallenge, getMyPOWStatus, APIError } from '../lib/api';
 import type { POWChallenge, POWStatus, UserPermission } from '../types/api';
@@ -62,9 +62,9 @@ type SolverMessage = SolverProgressMessage | SolverSolvedMessage | SolverStopped
 const fallbackBenefitKey = 'email_catch_all_remaining_count';
 const fallbackDifficulty = '3';
 
-// POWBenefitSection renders the browser-side PoW welfare panel that sits below
-// the LDC exchange area. The backend still owns challenge generation and
-// verification; the frontend only uses a worker to search for a valid nonce.
+// POWBenefitSection renders the PoW welfare panel that sits below the LDC
+// exchange area. The backend still owns challenge generation and verification;
+// the frontend only performs local nonce search in the browser.
 export function POWBenefitSection({
   authenticated,
   csrfToken,
@@ -107,8 +107,13 @@ export function POWBenefitSection({
     () => status?.difficulty_options.find((item) => item.value === selectedDifficultyValue) ?? null,
     [selectedDifficultyValue, status?.difficulty_options],
   );
-  const canGenerate = authenticated && Boolean(csrfToken) && !creating && !claiming && (status?.remaining_today ?? 0) > 0;
-  const canSolve = canGenerate && Boolean(currentChallenge) && !solving;
+  const hasRemainingToday = (status?.remaining_today ?? 0) > 0;
+  const canStartOrReplace = authenticated && Boolean(csrfToken) && !creating && !claiming && hasRemainingToday;
+  const currentChallengeMatchesSelection = Boolean(
+    currentChallenge
+    && currentChallenge.benefit_key === selectedBenefitKey
+    && currentChallenge.difficulty === selectedDifficultyValue,
+  );
 
   useEffect(() => {
     if (!authenticated) {
@@ -176,17 +181,20 @@ export function POWBenefitSection({
     }
   }
 
-  async function handleCreateChallenge(): Promise<void> {
+  async function ensureChallengeForCurrentSelection(): Promise<POWChallenge | null> {
     if (!authenticated) {
       onLogin();
-      return;
+      return null;
     }
     if (!csrfToken) {
       setNotice({ tone: 'error', message: '当前会话缺少 CSRF Token，请重新登录后再试。' });
-      return;
+      return null;
     }
-    if (!canGenerate) {
-      return;
+    if (!canStartOrReplace) {
+      return null;
+    }
+    if (currentChallenge && currentChallengeMatchesSelection) {
+      return currentChallenge;
     }
 
     try {
@@ -205,33 +213,39 @@ export function POWBenefitSection({
         };
       });
       setSolveProgress(null);
-      setNotice({
-        tone: 'success',
-        message: `新的 PoW 题目已生成，本题奖励 ${challenge.reward_quantity}${challenge.reward_unit}。你现在可以启动浏览器 worker 开始解题。`,
-      });
+      return challenge;
     } catch (createError) {
       setNotice({ tone: 'error', message: readableErrorMessage(createError, '生成 PoW 题目失败。') });
+      return null;
     } finally {
       setCreating(false);
     }
   }
 
-  function handleStartSolving(): void {
-    if (!currentChallenge || !canSolve) {
+  async function handlePrimaryAction(): Promise<void> {
+    if (solving) {
+      handleStopSolving();
       return;
     }
+    const challenge = await ensureChallengeForCurrentSelection();
+    if (!challenge) {
+      return;
+    }
+    startSolving(challenge);
+  }
 
+  function startSolving(challenge: POWChallenge): void {
     stopWorker();
-    const worker = new Worker(new URL('../workers/pow-solver.worker.ts', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('../workers/pow-solver.runtime.ts', import.meta.url), { type: 'module' });
     const jobID = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${currentChallenge.id}-${Date.now()}`;
+      ? window.crypto.randomUUID()
+      : `${challenge.id}-${Date.now()}`;
 
     workerRef.current = worker;
     activeJobIDRef.current = jobID;
     setNotice({
       tone: 'info',
-      message: `浏览器 worker 已启动，正在为题目 ${currentChallenge.id} 搜索有效 nonce。当前难度按前导零 bit 数计算。`,
+      message: `已开始本地解题，正在为题目 ${challenge.id} 搜索有效答案。`,
     });
     setSolving(true);
     setSolveProgress({
@@ -265,7 +279,7 @@ export function POWBenefitSection({
             message: `已在浏览器本地找到有效 nonce，正在提交后端验题并发放奖励。总尝试次数 ${message.attempts.toLocaleString('zh-CN')}。`,
           });
           stopWorker(false);
-          void handleClaimChallenge(currentChallenge, message.nonce);
+          void handleClaimChallenge(challenge, message.nonce);
           break;
         case 'stopped':
           stopWorker(false);
@@ -276,7 +290,7 @@ export function POWBenefitSection({
           break;
         case 'error':
           stopWorker(false);
-          setNotice({ tone: 'error', message: `解题 worker 出错：${message.message}` });
+          setNotice({ tone: 'error', message: `本地解题出错：${message.message}` });
           break;
       }
     };
@@ -284,13 +298,13 @@ export function POWBenefitSection({
     worker.postMessage({
       type: 'start',
       job_id: jobID,
-      challenge: currentChallenge,
+      challenge,
     });
   }
 
   function handleStopSolving(): void {
     stopWorker();
-    setNotice({ tone: 'info', message: '浏览器 worker 已手动停止，当前题目仍然保留，你可以稍后继续。' });
+    setNotice({ tone: 'info', message: '本地解题已手动停止，当前题目仍然保留，你可以稍后继续。' });
   }
 
   async function handleClaimChallenge(challenge: POWChallenge, nonce: string): Promise<void> {
@@ -350,7 +364,7 @@ export function POWBenefitSection({
           </div>
           <h2 className="mt-3 text-2xl font-bold text-gray-900 dark:text-white">解开独立谜题，换取邮箱泛解析福利</h2>
           <p className="mt-2 max-w-3xl text-sm leading-7 text-gray-600 dark:text-gray-300">
-            每位用户每次都会拿到一题单独的 Argon2 题目，而不是和所有人竞争同一个谜题。后端负责出题和验题，前端 worker 只负责本地搜索 nonce。
+            选择福利类型和难度后即可开始本地解题。只有在验证成功之后，服务器才会随机生成最终奖励并发放到你的账号。
           </p>
         </div>
 
@@ -422,12 +436,20 @@ export function POWBenefitSection({
 
               <button
                 type="button"
-                onClick={() => void handleCreateChallenge()}
-                disabled={!canGenerate}
+                onClick={() => void handlePrimaryAction()}
+                disabled={solving ? false : !canStartOrReplace}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-3 font-semibold text-white shadow-lg transition hover:from-amber-600 hover:to-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {creating ? <LoaderCircle size={18} className="animate-spin" /> : <Gift size={18} />}
-                {creating ? '生成题目中...' : (status?.remaining_today ?? 0) > 0 ? '生成新题目' : '今日次数已用完'}
+                {creating || claiming ? <LoaderCircle size={18} className="animate-spin" /> : <Pickaxe size={18} />}
+                {creating
+                  ? '准备题目中...'
+                  : claiming
+                    ? '验题中...'
+                    : solving
+                      ? '停止解题'
+                      : hasRemainingToday
+                        ? '开始解题'
+                        : '今日次数已用完'}
               </button>
             </div>
 
@@ -460,21 +482,12 @@ export function POWBenefitSection({
                 </div>
                 <div className="mt-2 text-sm leading-7 text-gray-600 dark:text-gray-300">
                   {currentChallenge
-                    ? `本题奖励 ${currentChallenge.reward_quantity.toLocaleString('zh-CN')}${currentChallenge.reward_unit}，需要达到 ${currentChallenge.difficulty} 个前导零 bit。`
-                    : '生成新题后，前端 worker 才会开始本地尝试 nonce。生成新题会直接覆盖旧题。'}
+                    ? `当前题目难度为 ${currentChallenge.difficulty}，完成后将随机发放 ${estimateRewardRange(currentChallenge.difficulty)}。`
+                    : '点击“开始解题”后会自动准备题目并立刻开始本地解题。'}
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => (solving ? handleStopSolving() : handleStartSolving())}
-                  disabled={solving ? false : !canSolve}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:from-emerald-600 hover:to-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {solving ? <StopCircle size={16} /> : <Pickaxe size={16} />}
-                  {solving ? '停止解题' : '启动 worker 解题'}
-                </button>
                 <button
                   type="button"
                   onClick={() => void loadStatus()}
@@ -489,8 +502,8 @@ export function POWBenefitSection({
 
             {currentChallenge ? (
               <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <MiniStat title="基础奖励" value={`${currentChallenge.base_reward.toLocaleString('zh-CN')} 次`} />
-                <MiniStat title="总奖励" value={`${currentChallenge.reward_quantity.toLocaleString('zh-CN')} 次`} />
+                <MiniStat title="预计奖励" value={estimateRewardRange(currentChallenge.difficulty)} />
+                <MiniStat title="难度倍率" value={`${currentChallenge.difficulty}x`} />
                 <MiniStat title="Argon2 参数" value={`m=${currentChallenge.argon2_memory_kib}KiB t=${currentChallenge.argon2_iterations}`} />
                 <MiniStat title="创建时间" value={formatDate(currentChallenge.created_at)} />
               </div>
@@ -498,10 +511,10 @@ export function POWBenefitSection({
 
             {solving || solveProgress ? (
               <div className="mt-5 rounded-3xl border border-emerald-300/25 bg-emerald-50/80 p-4 dark:border-emerald-700/25 dark:bg-emerald-950/20">
-                <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">浏览器解题进度</div>
+                <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">本地解题进度</div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <MiniStat title="已尝试 nonce" value={solveProgress ? solveProgress.attempts.toLocaleString('zh-CN') : '0'} />
-                  <MiniStat title="最好成绩" value={solveProgress ? `${solveProgress.bestLeadingZeroBits} bit` : '0 bit'} />
+                  <MiniStat title="已尝试次数" value={solveProgress ? solveProgress.attempts.toLocaleString('zh-CN') : '0'} />
+                  <MiniStat title="当前最好进度" value={solveProgress ? `${solveProgress.bestLeadingZeroBits} bit` : '0 bit'} />
                   <MiniStat title="耗时" value={solveProgress ? formatElapsedMs(solveProgress.elapsedMs) : '0.0s'} />
                 </div>
               </div>
@@ -556,6 +569,10 @@ function formatDate(value?: string): string {
 
 function formatElapsedMs(value: number): string {
   return `${(value / 1000).toFixed(1)}s`;
+}
+
+function estimateRewardRange(difficulty: number): string {
+  return `${(difficulty * 5).toLocaleString('zh-CN')} ~ ${(difficulty * 10).toLocaleString('zh-CN')} 次`;
 }
 
 function describePermissionStatus(status: UserPermission['status']): string {

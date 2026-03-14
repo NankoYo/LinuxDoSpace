@@ -114,6 +114,7 @@ Important behavior:
 - difficulty is measured in leading zero **bits**, not hexadecimal digits
 - each user can keep only one active challenge at a time
 - generating a new challenge always supersedes the previous active one
+- the backend does **not** pre-generate the random reward amount when the challenge is created
 - the backend remains the only trusted source for challenge generation and verification
 
 ### `POST /v1/my/pow/challenges`
@@ -142,6 +143,7 @@ The backend:
 - reloads the currently active challenge for the user
 - recomputes the Argon2id hash using the stored challenge token and salt
 - verifies the leading-zero-bit target server-side
+- only after verification succeeds, generates the final random reward amount
 - enforces the per-user UTC-day completion cap
 - atomically grants the reward and writes one immutable quantity-ledger row
 

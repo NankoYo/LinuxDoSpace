@@ -293,6 +293,8 @@ type CreateOrReplacePOWChallengeInput struct {
 type ClaimPOWChallengeRewardInput struct {
 	UserID               int64
 	ChallengeID          int64
+	BaseReward           int
+	RewardQuantity       int
 	SolutionNonce        string
 	SolutionHashHex      string
 	ClaimedAt            time.Time

@@ -95,7 +95,7 @@ async function solveChallenge(jobID: string, challenge: POWChallenge): Promise<v
       }
     }
   } catch (error) {
-    const message = error instanceof Error && error.message.trim() !== '' ? error.message : 'worker 解题失败';
+    const message = error instanceof Error && error.message.trim() !== '' ? error.message : '本地解题失败';
     postMessage({
       type: 'error',
       job_id: jobID,

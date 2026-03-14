@@ -234,10 +234,6 @@ func (s *POWService) CreateChallenge(ctx context.Context, user model.User, reque
 		return POWChallengeView{}, TooManyRequestsError("你今天已经完成了 5 次 PoW 福利领取，请明天再来。")
 	}
 
-	baseReward, err := randomIntInRange(powBaseRewardMin, powBaseRewardMax)
-	if err != nil {
-		return POWChallengeView{}, InternalError("failed to generate proof-of-work reward", err)
-	}
 	saltHex, err := randomHex(powSaltBytes)
 	if err != nil {
 		return POWChallengeView{}, InternalError("failed to generate proof-of-work salt", err)
@@ -253,8 +249,8 @@ func (s *POWService) CreateChallenge(ctx context.Context, user model.User, reque
 		ResourceKey:       benefit.ResourceKey,
 		Scope:             benefit.Scope,
 		Difficulty:        difficulty,
-		BaseReward:        baseReward,
-		RewardQuantity:    baseReward * difficulty,
+		BaseReward:        0,
+		RewardQuantity:    0,
 		RewardUnit:        benefit.RewardUnit,
 		ChallengeToken:    challengeToken,
 		SaltHex:           saltHex,
@@ -273,8 +269,6 @@ func (s *POWService) CreateChallenge(ctx context.Context, user model.User, reque
 		"challenge_id":     item.ID,
 		"benefit_key":      item.BenefitKey,
 		"difficulty":       item.Difficulty,
-		"base_reward":      item.BaseReward,
-		"reward_quantity":  item.RewardQuantity,
 		"challenge_status": item.Status,
 	})
 	logAuditWriteFailure("pow.challenge.create", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
@@ -319,6 +313,11 @@ func (s *POWService) SubmitChallenge(ctx context.Context, user model.User, reque
 	if solveErr != nil {
 		return SubmitPOWChallengeResult{}, solveErr
 	}
+	baseReward, err := randomIntInRange(powBaseRewardMin, powBaseRewardMax)
+	if err != nil {
+		return SubmitPOWChallengeResult{}, InternalError("failed to generate proof-of-work reward", err)
+	}
+	rewardQuantity := baseReward * challenge.Difficulty
 
 	now := time.Now().UTC()
 	startOfDay := utcStartOfDay(now)
@@ -327,13 +326,15 @@ func (s *POWService) SubmitChallenge(ctx context.Context, user model.User, reque
 	claimedChallenge, access, claimErr := s.db.ClaimPOWChallengeReward(ctx, storage.ClaimPOWChallengeRewardInput{
 		UserID:               user.ID,
 		ChallengeID:          challenge.ID,
+		BaseReward:           baseReward,
+		RewardQuantity:       rewardQuantity,
 		SolutionNonce:        nonce,
 		SolutionHashHex:      hashHex,
 		ClaimedAt:            now,
 		DailyWindowStart:     startOfDay,
 		DailyWindowEnd:       endOfDay,
 		MaxDailyCompletions:  powMaxDailyCompletions,
-		QuantityRecordReason: buildPOWRewardReason(challenge),
+		QuantityRecordReason: buildPOWRewardReason(challenge.Difficulty, baseReward, rewardQuantity, challenge.RewardUnit),
 	})
 	if claimErr != nil {
 		switch {
@@ -521,8 +522,8 @@ func countLeadingZeroBits(hashBytes []byte) int {
 
 // buildPOWRewardReason keeps quantity-ledger history self-explanatory once the
 // reward is granted.
-func buildPOWRewardReason(challenge model.POWChallenge) string {
-	return fmt.Sprintf("PoW 福利奖励：难度 %d，基础奖励 %d，发放 %d%s", challenge.Difficulty, challenge.BaseReward, challenge.RewardQuantity, challenge.RewardUnit)
+func buildPOWRewardReason(difficulty int, baseReward int, rewardQuantity int, rewardUnit string) string {
+	return fmt.Sprintf("PoW 福利奖励：难度 %d，基础奖励 %d，发放 %d%s", difficulty, baseReward, rewardQuantity, rewardUnit)
 }
 
 // normalizePOWDifficulty rejects unsupported difficulty values so frontend

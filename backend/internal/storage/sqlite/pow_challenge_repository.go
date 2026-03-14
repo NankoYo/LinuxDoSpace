@@ -191,6 +191,9 @@ func (s *Store) ClaimPOWChallengeReward(ctx context.Context, input ClaimPOWChall
 	if input.MaxDailyCompletions <= 0 {
 		return model.POWChallenge{}, model.EmailCatchAllAccess{}, fmt.Errorf("max daily pow completions must be positive")
 	}
+	if input.BaseReward < 1 || input.RewardQuantity < 1 {
+		return model.POWChallenge{}, model.EmailCatchAllAccess{}, fmt.Errorf("pow reward must be positive")
+	}
 
 	now := input.ClaimedAt.UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -225,7 +228,7 @@ func (s *Store) ClaimPOWChallengeReward(ctx context.Context, input ClaimPOWChall
 
 	switch challenge.ResourceKey {
 	case model.POWBenefitEmailCatchAllRemainingCount:
-		nextRemainingCount := access.RemainingCount + int64(challenge.RewardQuantity)
+		nextRemainingCount := access.RemainingCount + int64(input.RewardQuantity)
 		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, nextRemainingCount, access.DailyLimitOverride, now); err != nil {
 			return model.POWChallenge{}, model.EmailCatchAllAccess{}, err
 		}
@@ -251,11 +254,11 @@ INSERT INTO quantity_records (
     created_by_user_id,
     created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-`,
+	`,
 		input.UserID,
 		challenge.ResourceKey,
 		challenge.Scope,
-		challenge.RewardQuantity,
+		input.RewardQuantity,
 		powQuantitySource,
 		strings.TrimSpace(input.QuantityRecordReason),
 		powQuantityReferenceType,
@@ -270,6 +273,8 @@ INSERT INTO quantity_records (
 UPDATE pow_challenges
 SET
     status = ?,
+    base_reward = ?,
+    reward_quantity = ?,
     solution_nonce = ?,
     solution_hash_hex = ?,
     claimed_at = ?,
@@ -301,6 +306,8 @@ RETURNING
     updated_at
 `,
 		model.POWChallengeStatusClaimed,
+		input.BaseReward,
+		input.RewardQuantity,
 		strings.TrimSpace(input.SolutionNonce),
 		strings.TrimSpace(input.SolutionHashHex),
 		formatTime(now),
