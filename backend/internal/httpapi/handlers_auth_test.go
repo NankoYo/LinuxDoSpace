@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -82,5 +83,22 @@ func TestAuthCookiesStayHostOnly(t *testing.T) {
 		if cookie.Domain != "" {
 			t.Fatalf("expected cookie %q to stay host-only, got domain %q", cookie.Name, cookie.Domain)
 		}
+	}
+}
+
+// TestLegacyOAuthCookiesAreIgnored verifies that old shared cookie names no
+// longer influence active callback routing once the per-state cookies exist.
+func TestLegacyOAuthCookiesAreIgnored(t *testing.T) {
+	api := &API{}
+
+	request := httptest.NewRequest("GET", "/v1/auth/callback?state=state-app", nil)
+	request.AddCookie(&http.Cookie{Name: legacyOAuthStateCookieName, Value: "state-app"})
+	request.AddCookie(&http.Cookie{Name: legacyOAuthTargetCookieName, Value: oauthTargetAdmin})
+
+	if got := api.currentOAuthStateCookie(request, "state-app"); got != "" {
+		t.Fatalf("expected legacy oauth state cookie to be ignored, got %q", got)
+	}
+	if got := api.currentOAuthTargetCookie(request, "state-app"); got != oauthTargetApp {
+		t.Fatalf("expected legacy oauth target cookie to be ignored, got %q", got)
 	}
 }

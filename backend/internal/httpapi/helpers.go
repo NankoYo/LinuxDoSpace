@@ -24,8 +24,9 @@ const oauthStateCookiePrefix = "linuxdospace_oauth_state_"
 // target that should receive the post-login redirect.
 const oauthTargetCookiePrefix = "linuxdospace_oauth_target_"
 
-// The legacy shared cookie names remain readable during the deployment window
-// so callbacks that started before this change can still finish successfully.
+// The legacy shared cookie names are still cleared on write/delete so old
+// browsers drop them naturally, but the current code no longer trusts them
+// while resolving active OAuth callbacks.
 const legacyOAuthStateCookieName = "linuxdospace_oauth_state"
 const legacyOAuthTargetCookieName = "linuxdospace_oauth_target"
 
@@ -154,12 +155,6 @@ func (a *API) currentOAuthStateCookie(r *http.Request, stateID string) string {
 	if cookie, err := r.Cookie(oauthStateCookieName(stateID)); err == nil {
 		return strings.TrimSpace(cookie.Value)
 	}
-	if cookie, err := r.Cookie(legacyOAuthStateCookieName); err == nil {
-		value := strings.TrimSpace(cookie.Value)
-		if value == stateID {
-			return value
-		}
-	}
 	return ""
 }
 
@@ -201,18 +196,9 @@ func (a *API) clearOAuthTargetCookie(w http.ResponseWriter, stateID string) {
 }
 
 // currentOAuthTargetCookie reads the short-lived login target cookie for the
-// callback's state, falling back to the legacy shared cookie while old flows
-// are still in flight during deployment.
+// callback's state.
 func (a *API) currentOAuthTargetCookie(r *http.Request, stateID string) string {
 	if cookie, err := r.Cookie(oauthTargetCookieName(stateID)); err == nil {
-		return normalizeOAuthTarget(cookie.Value)
-	}
-	if a.currentOAuthStateCookie(r, stateID) == stateID {
-		if cookie, err := r.Cookie(legacyOAuthTargetCookieName); err == nil {
-			return normalizeOAuthTarget(cookie.Value)
-		}
-	}
-	if cookie, err := r.Cookie(legacyOAuthTargetCookieName); err == nil && strings.TrimSpace(stateID) == "" {
 		return normalizeOAuthTarget(cookie.Value)
 	}
 	return oauthTargetApp
