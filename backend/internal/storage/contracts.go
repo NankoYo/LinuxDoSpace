@@ -27,6 +27,10 @@ type Store interface {
 	DeleteOAuthState(ctx context.Context, stateID string) error
 	GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error)
 	UpsertUserControl(ctx context.Context, input UpsertUserControlInput) (model.UserControl, error)
+	GetAdminPasswordAttempt(ctx context.Context, bucketType string, bucketKey string) (model.AdminPasswordAttempt, error)
+	RegisterAdminPasswordFailure(ctx context.Context, bucketType string, bucketKey string, maxFailures int, blockDuration time.Duration, now time.Time) (model.AdminPasswordAttempt, error)
+	DeleteAdminPasswordAttempt(ctx context.Context, bucketType string, bucketKey string) error
+	DeleteStaleAdminPasswordAttempts(ctx context.Context, cutoff time.Time, now time.Time) error
 	ListAdminUsers(ctx context.Context) ([]model.AdminUserSummary, error)
 	ListManagedDomains(ctx context.Context, includeDisabled bool) ([]model.ManagedDomain, error)
 	GetManagedDomainByID(ctx context.Context, id int64) (model.ManagedDomain, error)

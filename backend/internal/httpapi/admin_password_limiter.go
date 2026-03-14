@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 )
 
 const (
@@ -19,11 +23,18 @@ const (
 	adminPasswordStateTTL = time.Hour
 )
 
-// adminPasswordAttemptState keeps the mutable counters for one limiter bucket.
-type adminPasswordAttemptState struct {
-	FailureCount int
-	BlockedUntil time.Time
-	LastSeenAt   time.Time
+const (
+	adminPasswordBucketSession = "session"
+	adminPasswordBucketIP      = "client_ip"
+)
+
+// adminPasswordAttemptStore is the narrow persistence contract needed by the
+// admin second-factor limiter.
+type adminPasswordAttemptStore interface {
+	GetAdminPasswordAttempt(ctx context.Context, bucketType string, bucketKey string) (model.AdminPasswordAttempt, error)
+	RegisterAdminPasswordFailure(ctx context.Context, bucketType string, bucketKey string, maxFailures int, blockDuration time.Duration, now time.Time) (model.AdminPasswordAttempt, error)
+	DeleteAdminPasswordAttempt(ctx context.Context, bucketType string, bucketKey string) error
+	DeleteStaleAdminPasswordAttempts(ctx context.Context, cutoff time.Time, now time.Time) error
 }
 
 // adminPasswordLimiter tracks sensitive admin-password verification failures by
@@ -31,28 +42,26 @@ type adminPasswordAttemptState struct {
 // rotating only one side of the request identity.
 type adminPasswordLimiter struct {
 	mu            sync.Mutex
+	store         adminPasswordAttemptStore
 	maxFailures   int
 	blockDuration time.Duration
 	stateTTL      time.Duration
-	bySessionID   map[string]adminPasswordAttemptState
-	byClientIP    map[string]adminPasswordAttemptState
 }
 
 // newAdminPasswordLimiter constructs one in-memory limiter tuned for the admin
 // second-factor password endpoint.
-func newAdminPasswordLimiter(maxFailures int, blockDuration time.Duration, stateTTL time.Duration) *adminPasswordLimiter {
+func newAdminPasswordLimiter(store adminPasswordAttemptStore, maxFailures int, blockDuration time.Duration, stateTTL time.Duration) *adminPasswordLimiter {
 	return &adminPasswordLimiter{
+		store:         store,
 		maxFailures:   maxFailures,
 		blockDuration: blockDuration,
 		stateTTL:      stateTTL,
-		bySessionID:   make(map[string]adminPasswordAttemptState),
-		byClientIP:    make(map[string]adminPasswordAttemptState),
 	}
 }
 
 // Check reports whether the current session or client IP is still inside a
 // temporary lockout window and returns the remaining block duration.
-func (l *adminPasswordLimiter) Check(sessionID string, clientIP string, now time.Time) (time.Duration, bool) {
+func (l *adminPasswordLimiter) Check(ctx context.Context, sessionID string, clientIP string, now time.Time) (time.Duration, bool) {
 	if l == nil {
 		return 0, false
 	}
@@ -60,8 +69,8 @@ func (l *adminPasswordLimiter) Check(sessionID string, clientIP string, now time
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.cleanup(now)
-	blockedUntil := l.maxBlockedUntil(now, sessionID, clientIP)
+	l.cleanup(ctx, now)
+	blockedUntil := l.maxBlockedUntil(ctx, now, sessionID, clientIP)
 	if blockedUntil.IsZero() {
 		return 0, false
 	}
@@ -70,7 +79,7 @@ func (l *adminPasswordLimiter) Check(sessionID string, clientIP string, now time
 
 // RegisterFailure increments the failed-attempt counters for the current
 // session and client IP after one incorrect admin password submission.
-func (l *adminPasswordLimiter) RegisterFailure(sessionID string, clientIP string, now time.Time) {
+func (l *adminPasswordLimiter) RegisterFailure(ctx context.Context, sessionID string, clientIP string, now time.Time) {
 	if l == nil {
 		return
 	}
@@ -78,15 +87,15 @@ func (l *adminPasswordLimiter) RegisterFailure(sessionID string, clientIP string
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.cleanup(now)
-	l.bySessionID = l.registerFailureForMap(l.bySessionID, sessionID, now)
-	l.byClientIP = l.registerFailureForMap(l.byClientIP, clientIP, now)
+	l.cleanup(ctx, now)
+	l.registerFailureForKey(ctx, adminPasswordBucketSession, sessionID, now)
+	l.registerFailureForKey(ctx, adminPasswordBucketIP, clientIP, now)
 }
 
 // Reset clears the limiter state for the current session and client IP after a
 // successful password verification so legitimate admins are not penalized by
 // earlier mistakes.
-func (l *adminPasswordLimiter) Reset(sessionID string, clientIP string) {
+func (l *adminPasswordLimiter) Reset(ctx context.Context, sessionID string, clientIP string) {
 	if l == nil {
 		return
 	}
@@ -94,68 +103,65 @@ func (l *adminPasswordLimiter) Reset(sessionID string, clientIP string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	delete(l.bySessionID, sessionID)
-	delete(l.byClientIP, clientIP)
+	_ = l.deleteAttempt(ctx, adminPasswordBucketSession, sessionID)
+	_ = l.deleteAttempt(ctx, adminPasswordBucketIP, clientIP)
 }
 
 // maxBlockedUntil returns the later block boundary across the two identity buckets.
-func (l *adminPasswordLimiter) maxBlockedUntil(now time.Time, sessionID string, clientIP string) time.Time {
+func (l *adminPasswordLimiter) maxBlockedUntil(ctx context.Context, now time.Time, sessionID string, clientIP string) time.Time {
 	var blockedUntil time.Time
 
-	if state, ok := l.bySessionID[sessionID]; ok && state.BlockedUntil.After(now) {
-		blockedUntil = state.BlockedUntil
+	if state, ok := l.loadAttempt(ctx, adminPasswordBucketSession, sessionID, now); ok && state.BlockedUntil != nil && state.BlockedUntil.After(now) {
+		blockedUntil = *state.BlockedUntil
 	}
-	if state, ok := l.byClientIP[clientIP]; ok && state.BlockedUntil.After(blockedUntil) {
-		blockedUntil = state.BlockedUntil
+	if state, ok := l.loadAttempt(ctx, adminPasswordBucketIP, clientIP, now); ok && state.BlockedUntil != nil && state.BlockedUntil.After(blockedUntil) {
+		blockedUntil = *state.BlockedUntil
 	}
 
 	return blockedUntil
 }
 
-// registerFailureForMap mutates one limiter bucket map in place and returns it
-// so callers can share the same logic across session-ID and client-IP tracking.
-func (l *adminPasswordLimiter) registerFailureForMap(items map[string]adminPasswordAttemptState, key string, now time.Time) map[string]adminPasswordAttemptState {
-	if key == "" {
-		return items
+// registerFailureForKey records one failed attempt for the target limiter
+// bucket. Storage errors are ignored so the password endpoint still fails
+// closed for the caller.
+func (l *adminPasswordLimiter) registerFailureForKey(ctx context.Context, bucketType string, bucketKey string, now time.Time) {
+	if l.store == nil || bucketKey == "" {
+		return
 	}
-
-	state := l.normalizeState(items[key], now)
-	state.FailureCount++
-	state.LastSeenAt = now
-	if state.FailureCount >= l.maxFailures {
-		state.FailureCount = 0
-		state.BlockedUntil = now.Add(l.blockDuration)
-	}
-	items[key] = state
-	return items
+	_, _ = l.store.RegisterAdminPasswordFailure(ctx, bucketType, bucketKey, l.maxFailures, l.blockDuration, now)
 }
 
 // cleanup discards long-idle limiter buckets so memory usage stays bounded.
-func (l *adminPasswordLimiter) cleanup(now time.Time) {
-	cutoff := now.Add(-l.stateTTL)
-	for key, state := range l.bySessionID {
-		normalized := l.normalizeState(state, now)
-		if normalized.LastSeenAt.Before(cutoff) && !normalized.BlockedUntil.After(now) {
-			delete(l.bySessionID, key)
-			continue
-		}
-		l.bySessionID[key] = normalized
+func (l *adminPasswordLimiter) cleanup(ctx context.Context, now time.Time) {
+	if l.store == nil {
+		return
 	}
-	for key, state := range l.byClientIP {
-		normalized := l.normalizeState(state, now)
-		if normalized.LastSeenAt.Before(cutoff) && !normalized.BlockedUntil.After(now) {
-			delete(l.byClientIP, key)
-			continue
-		}
-		l.byClientIP[key] = normalized
-	}
+	_ = l.store.DeleteStaleAdminPasswordAttempts(ctx, now.Add(-l.stateTTL), now)
 }
 
-// normalizeState resets one expired block window so new failures start a fresh count.
-func (l *adminPasswordLimiter) normalizeState(state adminPasswordAttemptState, now time.Time) adminPasswordAttemptState {
-	if !state.BlockedUntil.IsZero() && !state.BlockedUntil.After(now) {
-		state.BlockedUntil = time.Time{}
-		state.FailureCount = 0
+// loadAttempt fetches one limiter bucket and normalizes expired block windows.
+func (l *adminPasswordLimiter) loadAttempt(ctx context.Context, bucketType string, bucketKey string, now time.Time) (model.AdminPasswordAttempt, bool) {
+	if l.store == nil || bucketKey == "" {
+		return model.AdminPasswordAttempt{}, false
 	}
-	return state
+	item, err := l.store.GetAdminPasswordAttempt(ctx, bucketType, bucketKey)
+	if err != nil {
+		if storage.IsNotFound(err) {
+			return model.AdminPasswordAttempt{}, false
+		}
+		return model.AdminPasswordAttempt{}, false
+	}
+	if item.BlockedUntil != nil && !item.BlockedUntil.After(now) {
+		return item, true
+	}
+	return item, true
+}
+
+// deleteAttempt removes one persisted limiter bucket when verification
+// succeeds.
+func (l *adminPasswordLimiter) deleteAttempt(ctx context.Context, bucketType string, bucketKey string) error {
+	if l.store == nil || bucketKey == "" {
+		return nil
+	}
+	return l.store.DeleteAdminPasswordAttempt(ctx, bucketType, bucketKey)
 }

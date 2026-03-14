@@ -83,6 +83,7 @@ func main() {
 	handler := httpapi.NewRouter(httpapi.RouterDependencies{
 		Config:            cfg,
 		Version:           version,
+		Store:             store,
 		AuthService:       authService,
 		DomainService:     domainService,
 		AdminService:      adminService,

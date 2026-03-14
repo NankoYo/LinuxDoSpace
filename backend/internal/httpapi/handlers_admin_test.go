@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"linuxdospace/backend/internal/config"
+	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/service"
 	"linuxdospace/backend/internal/storage/sqlite"
 )
@@ -58,7 +59,7 @@ func TestHandleAdminVerifyPasswordRateLimitsRepeatedFailures(t *testing.T) {
 	api := &API{
 		config:               cfg,
 		authService:          service.NewAuthService(cfg, store, nil),
-		adminPasswordLimiter: newAdminPasswordLimiter(5, 15*time.Minute, time.Hour),
+		adminPasswordLimiter: newAdminPasswordLimiter(store, 5, 15*time.Minute, time.Hour),
 	}
 
 	for attempt := 1; attempt <= 5; attempt++ {
@@ -66,6 +67,14 @@ func TestHandleAdminVerifyPasswordRateLimitsRepeatedFailures(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: expected status 401, got %d with body %s", attempt, recorder.Code, recorder.Body.String())
 		}
+	}
+
+	// Recreate the limiter to prove the lockout now survives process-local state
+	// loss and is backed by the shared database.
+	api = &API{
+		config:               cfg,
+		authService:          service.NewAuthService(cfg, store, nil),
+		adminPasswordLimiter: newAdminPasswordLimiter(store, 5, 15*time.Minute, time.Hour),
 	}
 
 	blocked := performAdminPasswordRequest(t, api, session.ID, session.CSRFToken, "wrong-password")
@@ -136,7 +145,7 @@ func TestHandleAdminVerifyPasswordRotatesSession(t *testing.T) {
 		config:               cfg,
 		authService:          service.NewAuthService(cfg, store, nil),
 		domainService:        service.NewDomainService(cfg, store, nil),
-		adminPasswordLimiter: newAdminPasswordLimiter(5, 15*time.Minute, time.Hour),
+		adminPasswordLimiter: newAdminPasswordLimiter(store, 5, 15*time.Minute, time.Hour),
 	}
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/admin/verify-password", strings.NewReader(`{"password":"correct-horse-battery-staple"}`))
@@ -233,6 +242,36 @@ func TestWithCORSRestrictsAdminEndpointsToAdminOrigin(t *testing.T) {
 	handler.ServeHTTP(adminOriginRecorder, adminOriginRequest)
 	if got := adminOriginRecorder.Header().Get("Access-Control-Allow-Origin"); got != "https://admin.example.com" {
 		t.Fatalf("expected admin origin to be allowed for admin endpoint CORS, got %q", got)
+	}
+}
+
+// TestEnforceCSRFFailsForUnexpectedOrigin verifies that unsafe requests with an
+// explicit browser origin must come from one configured frontend origin.
+func TestEnforceCSRFFailsForUnexpectedOrigin(t *testing.T) {
+	api := &API{
+		config: config.Config{
+			App: config.AppConfig{
+				AllowedOrigins:   []string{"https://app.example.com", "https://admin.example.com"},
+				FrontendURL:      "https://app.example.com",
+				AdminFrontendURL: "https://admin.example.com",
+			},
+		},
+	}
+
+	session := &model.Session{CSRFToken: "csrf-token"}
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.Header.Set("Origin", "https://evil.example.com")
+	request.Header.Set("X-CSRF-Token", session.CSRFToken)
+
+	recorder := httptest.NewRecorder()
+	if api.enforceCSRF(recorder, request, session) {
+		t.Fatalf("expected unexpected origin to fail CSRF enforcement")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for unexpected origin, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "forbidden") {
+		t.Fatalf("expected forbidden response body, got %s", recorder.Body.String())
 	}
 }
 

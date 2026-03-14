@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -318,9 +319,58 @@ func (a *API) enforceCSRF(w http.ResponseWriter, r *http.Request, session *model
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return true
 	}
+	if !a.requestOriginAllowed(r) {
+		writeError(w, service.ForbiddenError("request origin is not allowed"))
+		return false
+	}
 	if strings.TrimSpace(r.Header.Get("X-CSRF-Token")) != session.CSRFToken {
 		writeError(w, service.UnauthorizedError("invalid csrf token"))
 		return false
+	}
+	return true
+}
+
+// requestOriginAllowed validates one unsafe request's browser origin when the
+// caller supplied `Origin` or `Referer`. Requests without either header remain
+// accepted for compatibility with tests and non-browser debugging tools.
+func (a *API) requestOriginAllowed(r *http.Request) bool {
+	requestOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+	if requestOrigin == "" {
+		refererValue := strings.TrimSpace(r.Header.Get("Referer"))
+		if refererValue == "" {
+			return true
+		}
+		refererURL, err := url.Parse(refererValue)
+		if err != nil || refererURL.Scheme == "" || refererURL.Host == "" {
+			return false
+		}
+		requestOrigin = refererURL.Scheme + "://" + refererURL.Host
+	}
+
+	allowedOrigins := make(map[string]struct{}, len(a.config.App.AllowedOrigins)+2)
+	for _, origin := range a.config.App.AllowedOrigins {
+		trimmedOrigin := strings.TrimRight(strings.TrimSpace(origin), "/")
+		if trimmedOrigin == "" {
+			continue
+		}
+		allowedOrigins[trimmedOrigin] = struct{}{}
+	}
+	for _, frontendOrigin := range []string{a.config.App.FrontendURL, a.config.App.AdminFrontendURL} {
+		trimmedOrigin := strings.TrimRight(strings.TrimSpace(frontendOrigin), "/")
+		if trimmedOrigin == "" {
+			continue
+		}
+		allowedOrigins[trimmedOrigin] = struct{}{}
+	}
+
+	normalizedOrigin := strings.TrimRight(requestOrigin, "/")
+	_, allowed := allowedOrigins[normalizedOrigin]
+	if !allowed {
+		return false
+	}
+	if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+		adminOrigin := strings.TrimRight(strings.TrimSpace(a.config.App.AdminFrontendURL), "/")
+		return adminOrigin != "" && normalizedOrigin == adminOrigin
 	}
 	return true
 }

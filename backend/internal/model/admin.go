@@ -11,6 +11,18 @@ type UserControl struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AdminPasswordAttempt stores one persisted limiter bucket for the
+// administrator second-factor password endpoint.
+type AdminPasswordAttempt struct {
+	BucketType   string     `json:"bucket_type"`
+	BucketKey    string     `json:"bucket_key"`
+	FailureCount int        `json:"failure_count"`
+	BlockedUntil *time.Time `json:"blocked_until,omitempty"`
+	LastSeenAt   time.Time  `json:"last_seen_at"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
 // AdminUserSummary represents the compact user row rendered by the admin console user table.
 type AdminUserSummary struct {
 	ID              int64     `json:"id"`

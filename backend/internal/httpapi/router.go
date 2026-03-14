@@ -12,6 +12,7 @@ import (
 type RouterDependencies struct {
 	Config            config.Config
 	Version           string
+	Store             adminPasswordAttemptStore
 	AuthService       *service.AuthService
 	DomainService     *service.DomainService
 	AdminService      *service.AdminService
@@ -33,7 +34,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 		quantityService:      deps.QuantityService,
 		paymentService:       deps.PaymentService,
 		powService:           deps.POWService,
-		adminPasswordLimiter: newAdminPasswordLimiter(adminPasswordMaxFailures, adminPasswordBlockDuration, adminPasswordStateTTL),
+		adminPasswordLimiter: newAdminPasswordLimiter(deps.Store, adminPasswordMaxFailures, adminPasswordBlockDuration, adminPasswordStateTTL),
 	}
 
 	mux := http.NewServeMux()
