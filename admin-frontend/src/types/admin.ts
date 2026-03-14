@@ -1,5 +1,5 @@
 ﻿// AdminTabKey enumerates the top-level tabs rendered by the standalone admin console.
-export type AdminTabKey = 'users' | 'domains' | 'emails' | 'applications' | 'orders' | 'redeem';
+export type AdminTabKey = 'users' | 'domains' | 'emails' | 'applications' | 'orders' | 'pow' | 'redeem';
 
 // UserStatus is the simplified moderation status displayed in the admin UI.
 export type UserStatus = 'active' | 'banned';
@@ -298,6 +298,75 @@ export interface AdminUserPermission {
   can_apply: boolean;
   can_manage_route: boolean;
   application?: AdminPermissionApplicationSummary;
+}
+
+// AdminPOWGlobalSettings mirrors the administrator-editable global PoW configuration.
+export interface AdminPOWGlobalSettings {
+  enabled: boolean;
+  default_daily_completion_limit: number;
+  base_reward_min: number;
+  base_reward_max: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// AdminPOWBenefitSettings mirrors one administrator-editable PoW benefit toggle row.
+export interface AdminPOWBenefitSettings {
+  key: string;
+  display_name: string;
+  description: string;
+  reward_unit: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// AdminPOWDifficultySettings mirrors one administrator-editable difficulty toggle row.
+export interface AdminPOWDifficultySettings {
+  difficulty: number;
+  label: string;
+  description: string;
+  reward_multiplier: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// AdminPOWSettings mirrors the complete administrator-facing PoW settings payload.
+export interface AdminPOWSettings {
+  global: AdminPOWGlobalSettings;
+  benefits: AdminPOWBenefitSettings[];
+  difficulties: AdminPOWDifficultySettings[];
+}
+
+// UpdateAdminPOWGlobalSettingsInput mirrors the PATCH payload for global PoW settings.
+export interface UpdateAdminPOWGlobalSettingsInput {
+  enabled?: boolean;
+  default_daily_completion_limit?: number;
+  base_reward_min?: number;
+  base_reward_max?: number;
+}
+
+// UpdateAdminPOWToggleInput mirrors the small enabled/disabled toggle payload used by benefit and difficulty rows.
+export interface UpdateAdminPOWToggleInput {
+  enabled?: boolean;
+}
+
+// AdminUserPOWSettings mirrors one target user's current PoW override payload.
+export interface AdminUserPOWSettings {
+  user_id: number;
+  daily_completion_limit_override?: number;
+  effective_daily_completion_limit: number;
+  completed_today: number;
+  remaining_today: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// UpdateAdminUserPOWSettingsInput mirrors the per-user PoW override PATCH payload.
+export interface UpdateAdminUserPOWSettingsInput {
+  daily_completion_limit_override?: number;
+  clear_daily_completion_limit_override?: boolean;
 }
 
 // SetAdminUserPermissionInput mirrors the direct administrator override payload.

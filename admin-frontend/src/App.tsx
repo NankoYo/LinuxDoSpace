@@ -7,6 +7,7 @@ import { ApplicationsPage } from './pages/ApplicationsPage';
 import { DomainsPage } from './pages/DomainsPage';
 import { EmailsPage } from './pages/EmailsPage';
 import { OrdersPage } from './pages/OrdersPage';
+import { PowPage } from './pages/PowPage';
 import { RedeemCodesPage } from './pages/RedeemCodesPage';
 import { UsersPage } from './pages/UsersPage';
 import type { AdminSessionResponse, AdminTabKey, ManagedDomain } from './types/admin';
@@ -42,6 +43,8 @@ function tabFromHash(hash: string): AdminTabKey {
       return 'orders';
     case 'redeem':
       return 'redeem';
+    case 'pow':
+      return 'pow';
     case 'users':
     default:
       return 'users';
@@ -233,6 +236,8 @@ export default function App() {
         return <ApplicationsPage csrfToken={session.csrf_token} />;
       case 'orders':
         return <OrdersPage csrfToken={session.csrf_token} />;
+      case 'pow':
+        return <PowPage csrfToken={session.csrf_token} />;
       case 'redeem':
         return <RedeemCodesPage csrfToken={session.csrf_token} />;
       case 'users':

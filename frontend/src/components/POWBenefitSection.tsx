@@ -95,20 +95,22 @@ export function POWBenefitSection({
     [status?.benefits],
   );
   const difficultyOptions = useMemo<GlassSelectOption[]>(
-    () => (status?.difficulty_options ?? []).map((item) => ({
+    () => (status?.difficulty_options ?? []).filter((item) => item.enabled).map((item) => ({
       value: String(item.value),
       label: `${item.label} · ${item.reward_multiplier}x 奖励`,
     })),
     [status?.difficulty_options],
   );
   const currentChallenge = status?.current_challenge;
+  const featureEnabled = status?.feature_enabled ?? true;
   const selectedDifficultyValue = Number.parseInt(selectedDifficulty, 10) || 3;
   const selectedDifficultyMeta = useMemo(
     () => status?.difficulty_options.find((item) => item.value === selectedDifficultyValue) ?? null,
     [selectedDifficultyValue, status?.difficulty_options],
   );
   const hasRemainingToday = (status?.remaining_today ?? 0) > 0;
-  const canStartOrReplace = authenticated && Boolean(csrfToken) && !creating && !claiming && hasRemainingToday;
+  const hasEnabledSelections = benefitOptions.length > 0 && difficultyOptions.length > 0;
+  const canStartOrReplace = authenticated && Boolean(csrfToken) && !creating && !claiming && hasRemainingToday && featureEnabled && hasEnabledSelections;
   const currentChallengeMatchesSelection = Boolean(
     currentChallenge
     && currentChallenge.benefit_key === selectedBenefitKey
@@ -379,6 +381,8 @@ export function POWBenefitSection({
       {loading ? <InlineNotice tone="info" message="正在加载 PoW 福利状态..." /> : null}
       {error ? <InlineNotice tone="error" message={error} /> : null}
       {notice ? <InlineNotice tone={notice.tone} message={notice.message} /> : null}
+      {!loading && authenticated && !featureEnabled ? <InlineNotice tone="info" message="管理员当前已关闭 PoW 福利功能。" /> : null}
+      {!loading && authenticated && featureEnabled && !hasEnabledSelections ? <InlineNotice tone="info" message="当前没有可用的福利项目或难度配置，请等待管理员开放。" /> : null}
 
       {!authenticated ? (
         <div className="rounded-3xl border border-dashed border-white/25 bg-white/25 px-5 py-8 text-center dark:border-white/10 dark:bg-black/15">
@@ -447,8 +451,12 @@ export function POWBenefitSection({
                     ? '验题中...'
                     : solving
                       ? '停止解题'
-                      : hasRemainingToday
+                      : featureEnabled && hasEnabledSelections && hasRemainingToday
                         ? '开始解题'
+                        : !featureEnabled
+                          ? '功能已关闭'
+                          : !hasEnabledSelections
+                            ? '当前无可用配置'
                         : '今日次数已用完'}
               </button>
             </div>
@@ -506,17 +514,9 @@ export function POWBenefitSection({
                 <MiniStat title="难度倍率" value={`${currentChallenge.difficulty}x`} />
                 <MiniStat title="Argon2 参数" value={`m=${currentChallenge.argon2_memory_kib}KiB t=${currentChallenge.argon2_iterations}`} />
                 <MiniStat title="创建时间" value={formatDate(currentChallenge.created_at)} />
-              </div>
-            ) : null}
-
-            {solving || solveProgress ? (
-              <div className="mt-5 rounded-3xl border border-emerald-300/25 bg-emerald-50/80 p-4 dark:border-emerald-700/25 dark:bg-emerald-950/20">
-                <div className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">本地解题进度</div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <MiniStat title="已尝试次数" value={solveProgress ? solveProgress.attempts.toLocaleString('zh-CN') : '0'} />
-                  <MiniStat title="当前最好进度" value={solveProgress ? `${solveProgress.bestLeadingZeroBits} bit` : '0 bit'} />
-                  <MiniStat title="耗时" value={solveProgress ? formatElapsedMs(solveProgress.elapsedMs) : '0.0s'} />
-                </div>
+                <MiniStat title="当前尝试次数" value={solveProgress ? solveProgress.attempts.toLocaleString('zh-CN') : '尚未开始'} />
+                <MiniStat title="当前最好进度" value={solveProgress ? `${solveProgress.bestLeadingZeroBits} bit` : '尚未开始'} />
+                <MiniStat title="当前耗时" value={solveProgress ? formatElapsedMs(solveProgress.elapsedMs) : '尚未开始'} />
               </div>
             ) : null}
           </div>

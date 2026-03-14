@@ -3,17 +3,19 @@ import { Ban, CheckCircle2, Edit2, LoaderCircle, Mail, Search, Shield, Users, XC
 import { AnimatePresence, motion } from 'motion/react';
 import {
   APIError,
+  getAdminUserPOWSettings,
   getAdminUserDetail,
   listAdminUserPermissions,
   listAdminUsers,
   setAdminUserPermission,
   setUserQuota,
+  updateAdminUserPOWSettings,
   updateAdminUser,
 } from '../lib/api';
 import { AdminSelect } from '../components/AdminSelect';
 import { GlassCard } from '../components/GlassCard';
 import { AdminSwitch } from '../components/AdminSwitch';
-import type { AdminUserDetail, AdminUserPermission, AdminUserRecord, ApplicationStatus, ManagedDomain } from '../types/admin';
+import type { AdminUserDetail, AdminUserPOWSettings, AdminUserPermission, AdminUserRecord, ApplicationStatus, ManagedDomain } from '../types/admin';
 
 interface UsersPageProps {
   csrfToken: string;
@@ -71,6 +73,9 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
   const [permissionsLoading, setPermissionsLoading] = useState(false);
   const [permissionDrafts, setPermissionDrafts] = useState<Record<string, { status: ApplicationStatus; review_note: string; reason: string }>>({});
   const [savingPermissionKey, setSavingPermissionKey] = useState('');
+  const [powSettings, setPowSettings] = useState<AdminUserPOWSettings | null>(null);
+  const [powSettingsLoading, setPowSettingsLoading] = useState(false);
+  const [draftPOWDailyLimit, setDraftPOWDailyLimit] = useState('');
 
   const filteredRecords = useMemo(() => {
     const search = keyword.trim().toLowerCase();
@@ -108,7 +113,12 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
     try {
       setEditingLoading(true);
       setPermissionsLoading(true);
-      const [detail, nextPermissions] = await Promise.all([getAdminUserDetail(record.id), listAdminUserPermissions(record.id)]);
+      setPowSettingsLoading(true);
+      const [detail, nextPermissions, nextPOWSettings] = await Promise.all([
+        getAdminUserDetail(record.id),
+        listAdminUserPermissions(record.id),
+        getAdminUserPOWSettings(record.id),
+      ]);
       setEditingDetail(detail);
       setDraftBanned(detail.user.is_banned);
       setDraftBanNote(detail.ban_note);
@@ -116,6 +126,8 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
         Object.fromEntries(detail.quotas.map((quota) => [quota.root_domain, quota.effective_quota])),
       );
       setPermissions(nextPermissions);
+      setPowSettings(nextPOWSettings);
+      setDraftPOWDailyLimit(nextPOWSettings.daily_completion_limit_override != null ? String(nextPOWSettings.daily_completion_limit_override) : '');
       setPermissionDrafts(
         Object.fromEntries(
           nextPermissions.map((permission) => [
@@ -133,6 +145,7 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
     } finally {
       setEditingLoading(false);
       setPermissionsLoading(false);
+      setPowSettingsLoading(false);
     }
   }
 
@@ -178,6 +191,24 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
         );
       }
 
+      if (powSettings) {
+        const trimmedPOWValue = draftPOWDailyLimit.trim();
+        const currentOverride = powSettings.daily_completion_limit_override;
+        const nextOverride = trimmedPOWValue === '' ? undefined : Math.max(1, Math.round(Number(trimmedPOWValue) || 1));
+        const powDirty = (currentOverride ?? undefined) !== nextOverride;
+        if (powDirty) {
+          const updatedPOWSettings = await updateAdminUserPOWSettings(
+            editingDetail.user.id,
+            nextOverride === undefined
+              ? { clear_daily_completion_limit_override: true }
+              : { daily_completion_limit_override: nextOverride },
+            csrfToken,
+          );
+          setPowSettings(updatedPOWSettings);
+          setDraftPOWDailyLimit(updatedPOWSettings.daily_completion_limit_override != null ? String(updatedPOWSettings.daily_completion_limit_override) : '');
+        }
+      }
+
       await loadUsers();
       const refreshedDetail = await getAdminUserDetail(editingDetail.user.id);
       setEditingDetail(refreshedDetail);
@@ -186,6 +217,9 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
       setDraftQuotas(
         Object.fromEntries(refreshedDetail.quotas.map((quota) => [quota.root_domain, quota.effective_quota])),
       );
+      const refreshedPOWSettings = await getAdminUserPOWSettings(editingDetail.user.id);
+      setPowSettings(refreshedPOWSettings);
+      setDraftPOWDailyLimit(refreshedPOWSettings.daily_completion_limit_override != null ? String(refreshedPOWSettings.daily_completion_limit_override) : '');
     } catch (saveError) {
       setError(saveError instanceof APIError ? saveError.message : '保存用户设置失败。');
     } finally {
@@ -443,6 +477,47 @@ export function UsersPage({ csrfToken, managedDomains }: UsersPageProps) {
                     </div>
                   ) : null}
                 </div>
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">PoW 每日次数</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">为空时继承全局默认值。这里设置的是该用户每天最多成功领取 PoW 福利的次数。</div>
+                  </div>
+                </div>
+                {powSettingsLoading ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-black/35 dark:text-slate-300">
+                    正在加载 PoW 设置...
+                  </div>
+                ) : (
+                  <div className="space-y-3 rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-black/35">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">每日成功次数覆盖</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={draftPOWDailyLimit}
+                          onChange={(event) => setDraftPOWDailyLimit(event.target.value)}
+                          placeholder="留空则继承全局默认值"
+                          className="w-full rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-400/20 dark:border-slate-600 dark:bg-slate-900 dark:text-white"
+                        />
+                      </div>
+                      <div className="grid gap-3">
+                        <div className="rounded-2xl border border-white/20 bg-white/40 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-black/20 dark:text-slate-200">
+                          当前生效上限：{powSettings?.effective_daily_completion_limit ?? '暂无'}
+                        </div>
+                        <div className="rounded-2xl border border-white/20 bg-white/40 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-black/20 dark:text-slate-200">
+                          今日已完成：{powSettings?.completed_today ?? 0}，剩余：{powSettings?.remaining_today ?? 0}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      当前覆盖值：{powSettings?.daily_completion_limit_override != null ? `${powSettings.daily_completion_limit_override} 次/日` : '未设置，使用全局默认值'}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="lg:col-span-2">

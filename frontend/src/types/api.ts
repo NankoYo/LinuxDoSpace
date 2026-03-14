@@ -189,6 +189,7 @@ export interface POWDifficultyOption {
   label: string;
   description: string;
   reward_multiplier: number;
+  enabled: boolean;
 }
 
 // POWChallenge mirrors one backend-generated proof-of-work puzzle row.
@@ -215,6 +216,7 @@ export interface POWChallenge {
 
 // POWStatus mirrors the full proof-of-work dashboard state returned by the backend.
 export interface POWStatus {
+  feature_enabled: boolean;
   benefits: POWBenefitOption[];
   difficulty_options: POWDifficultyOption[];
   max_daily_completions: number;

@@ -9,6 +9,8 @@
   AdminSessionResponse,
   UpdateAdminAllocationInput,
   AdminUserPermission,
+  AdminPOWSettings,
+  AdminUserPOWSettings,
   AdminUserDetail,
   AdminUserRecord,
   GenerateRedeemCodesInput,
@@ -18,6 +20,9 @@
   SetAdminUserPermissionInput,
   SetUserQuotaInput,
   UpdatePaymentProductInput,
+  UpdateAdminPOWGlobalSettingsInput,
+  UpdateAdminPOWToggleInput,
+  UpdateAdminUserPOWSettingsInput,
   UpdateEmailRouteInput,
   UpdateAdminUserInput,
   UpdateApplicationInput,
@@ -344,6 +349,46 @@ export function listAdminPaymentProducts(): Promise<PaymentProduct[]> {
 
 export function listAdminPaymentOrders(): Promise<AdminPaymentOrder[]> {
 	return request<AdminPaymentOrder[]>('/v1/admin/ldc/orders');
+}
+
+export function getAdminPOWSettings(): Promise<AdminPOWSettings> {
+  return request<AdminPOWSettings>('/v1/admin/pow/settings');
+}
+
+export function updateAdminPOWGlobalSettings(input: UpdateAdminPOWGlobalSettingsInput, csrfToken: string): Promise<AdminPOWSettings['global']> {
+  return request<AdminPOWSettings['global']>('/v1/admin/pow/settings', {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateAdminPOWBenefit(benefitKey: string, input: UpdateAdminPOWToggleInput, csrfToken: string): Promise<AdminPOWSettings['benefits'][number]> {
+  return request<AdminPOWSettings['benefits'][number]>(`/v1/admin/pow/benefits/${encodeURIComponent(benefitKey)}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateAdminPOWDifficulty(difficulty: number, input: UpdateAdminPOWToggleInput, csrfToken: string): Promise<AdminPOWSettings['difficulties'][number]> {
+  return request<AdminPOWSettings['difficulties'][number]>(`/v1/admin/pow/difficulties/${encodeURIComponent(String(difficulty))}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  });
+}
+
+export function getAdminUserPOWSettings(userID: number): Promise<AdminUserPOWSettings> {
+  return request<AdminUserPOWSettings>(`/v1/admin/users/${userID}/pow-settings`);
+}
+
+export function updateAdminUserPOWSettings(userID: number, input: UpdateAdminUserPOWSettingsInput, csrfToken: string): Promise<AdminUserPOWSettings> {
+  return request<AdminUserPOWSettings>(`/v1/admin/users/${userID}/pow-settings`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(input),
+  });
 }
 
 export function getAdminPaymentOrder(outTradeNo: string): Promise<AdminPaymentOrder> {

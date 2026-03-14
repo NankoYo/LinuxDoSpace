@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState } from 'react';
 import {
   Cloud,
+  Cpu,
   CreditCard,
   FileText,
   LogOut,
@@ -29,6 +30,7 @@ const navItems: Array<{ id: AdminTabKey; label: string; icon: typeof Users }> = 
   { id: 'emails', label: '邮箱管理', icon: Mail },
   { id: 'applications', label: '权限申请', icon: FileText },
   { id: 'orders', label: '订单管理', icon: CreditCard },
+  { id: 'pow', label: 'PoW 福利', icon: Cpu },
   { id: 'redeem', label: '兑换码', icon: Ticket },
 ];
 
