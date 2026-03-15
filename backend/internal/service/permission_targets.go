@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +21,10 @@ const (
 	// EmailTargetVerificationVerified means Cloudflare has confirmed ownership
 	// of the external inbox and the address can be selected for forwarding.
 	EmailTargetVerificationVerified = "verified"
+
+	// emailTargetVerificationResendCooldown prevents users from hammering the
+	// resend endpoint and repeatedly burning Cloudflare destination-address quota.
+	emailTargetVerificationResendCooldown = time.Minute
 )
 
 // UserEmailTargetView describes one user-owned forwarding destination email
@@ -112,28 +118,23 @@ func (s *PermissionService) ResendMyEmailTargetVerification(ctx context.Context,
 		return UserEmailTargetView{}, ValidationError("targetID is required")
 	}
 
-	items, err := s.db.ListEmailTargetsByOwner(ctx, user.ID)
+	unlock := s.lockEmailTargetResend(targetID)
+	defer unlock()
+
+	item, err := s.loadOwnedEmailTargetByID(ctx, user.ID, targetID)
 	if err != nil {
-		return UserEmailTargetView{}, InternalError("failed to load user email targets", err)
+		return UserEmailTargetView{}, err
 	}
 
-	var item *model.EmailTarget
-	for index := range items {
-		if items[index].ID == targetID {
-			item = &items[index]
-			break
-		}
-	}
-	if item == nil {
-		return UserEmailTargetView{}, NotFoundError("email target not found")
-	}
-
-	refreshed, err := s.syncSingleEmailTargetWithCloudflare(ctx, *item, false)
+	refreshed, err := s.syncSingleEmailTargetWithCloudflare(ctx, item, false)
 	if err != nil {
 		return UserEmailTargetView{}, err
 	}
 	if refreshed.VerifiedAt != nil {
 		return UserEmailTargetView{}, ConflictError("该目标邮箱已完成验证，无需重新发送验证邮件")
+	}
+	if wait := remainingEmailTargetVerificationResendCooldown(refreshed, time.Now().UTC()); wait > 0 {
+		return UserEmailTargetView{}, TooManyRequestsError(fmt.Sprintf("验证邮件发送过于频繁，请在 %s 后再试", formatEmailTargetResendWait(wait)))
 	}
 
 	accountID, err := s.resolveEmailRoutingAccountID(ctx)
@@ -145,20 +146,25 @@ func (s *PermissionService) ResendMyEmailTargetVerification(ctx context.Context,
 	if err != nil {
 		return UserEmailTargetView{}, err
 	}
-	if snapshot, found := snapshots[strings.ToLower(strings.TrimSpace(refreshed.Email))]; found && strings.TrimSpace(snapshot.AddressID) != "" {
-		if deleteErr := s.cf.DeleteEmailRoutingDestinationAddress(ctx, accountID, snapshot.AddressID); deleteErr != nil {
-			return UserEmailTargetView{}, wrapEmailRoutingUnavailable("failed to delete cloudflare email routing destination address before resending verification", deleteErr)
-		}
+	if err := s.deleteCloudflareEmailTargetBeforeResend(ctx, accountID, refreshed, snapshots); err != nil {
+		return UserEmailTargetView{}, err
 	}
 
+	now := time.Now().UTC()
 	created, err := s.cf.CreateEmailRoutingDestinationAddress(ctx, accountID, refreshed.Email)
 	if err != nil {
+		repaired, repairedOK, repairErr := s.repairEmailTargetAfterFailedResendCreate(ctx, refreshed, now)
+		if repairErr != nil {
+			return UserEmailTargetView{}, repairErr
+		}
+		if repairedOK {
+			return userEmailTargetViewFromModel(repaired), nil
+		}
 		return UserEmailTargetView{}, wrapEmailRoutingUnavailable("failed to recreate cloudflare email routing destination address", err)
 	}
 
 	var sentAt *time.Time
 	if created.Verified == nil {
-		now := time.Now().UTC()
 		sentAt = &now
 	}
 
@@ -169,7 +175,7 @@ func (s *PermissionService) ResendMyEmailTargetVerification(ctx context.Context,
 		LastVerificationSentAt: sentAt,
 	})
 	if err != nil {
-		return UserEmailTargetView{}, InternalError("failed to update email target after resending verification", err)
+		return UserEmailTargetView{}, s.rollbackEmailTargetAfterFailedResendUpdate(ctx, accountID, refreshed, strings.TrimSpace(created.ID), err)
 	}
 
 	metadata, _ := json.Marshal(map[string]any{
@@ -187,6 +193,140 @@ func (s *PermissionService) ResendMyEmailTargetVerification(ctx context.Context,
 	}))
 
 	return userEmailTargetViewFromModel(updated), nil
+}
+
+// loadOwnedEmailTargetByID loads one email-target row owned by the specified
+// user. The current storage contract does not expose a direct lookup by id, so
+// the service narrows the owned set in memory.
+func (s *PermissionService) loadOwnedEmailTargetByID(ctx context.Context, ownerUserID int64, targetID int64) (model.EmailTarget, error) {
+	items, err := s.db.ListEmailTargetsByOwner(ctx, ownerUserID)
+	if err != nil {
+		return model.EmailTarget{}, InternalError("failed to load user email targets", err)
+	}
+	for _, item := range items {
+		if item.ID == targetID {
+			return item, nil
+		}
+	}
+	return model.EmailTarget{}, NotFoundError("email target not found")
+}
+
+// remainingEmailTargetVerificationResendCooldown reports how long the caller
+// still has to wait before another resend becomes allowed.
+func remainingEmailTargetVerificationResendCooldown(item model.EmailTarget, now time.Time) time.Duration {
+	if item.LastVerificationSentAt == nil {
+		return 0
+	}
+	readyAt := item.LastVerificationSentAt.UTC().Add(emailTargetVerificationResendCooldown)
+	if !readyAt.After(now.UTC()) {
+		return 0
+	}
+	return readyAt.Sub(now.UTC())
+}
+
+// formatEmailTargetResendWait renders the cooldown into a compact Chinese
+// string so the API can tell the frontend exactly when another resend is safe.
+func formatEmailTargetResendWait(wait time.Duration) string {
+	if wait <= 0 {
+		return "稍后"
+	}
+
+	wait = wait.Round(time.Second)
+	if wait < time.Second {
+		wait = time.Second
+	}
+
+	if wait < time.Minute {
+		return fmt.Sprintf("%d 秒", int(wait/time.Second))
+	}
+
+	minutes := int(wait / time.Minute)
+	seconds := int((wait % time.Minute) / time.Second)
+	if seconds == 0 {
+		return fmt.Sprintf("%d 分钟", minutes)
+	}
+	return fmt.Sprintf("%d 分 %d 秒", minutes, seconds)
+}
+
+// deleteCloudflareEmailTargetBeforeResend prefers the locally bound
+// CloudflareAddressID and only falls back to the latest Cloudflare snapshot id
+// when the local row is already stale. This narrows the chance of deleting an
+// unrelated remote address after prior drift.
+func (s *PermissionService) deleteCloudflareEmailTargetBeforeResend(ctx context.Context, accountID string, item model.EmailTarget, snapshots map[string]cloudflareEmailTargetSnapshot) error {
+	emailKey := strings.ToLower(strings.TrimSpace(item.Email))
+	snapshot := snapshots[emailKey]
+
+	candidates := make([]string, 0, 2)
+	if currentID := strings.TrimSpace(item.CloudflareAddressID); currentID != "" {
+		candidates = append(candidates, currentID)
+	}
+	if snapshotID := strings.TrimSpace(snapshot.AddressID); snapshotID != "" && (len(candidates) == 0 || candidates[0] != snapshotID) {
+		candidates = append(candidates, snapshotID)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	var deleteErr error
+	for _, candidateID := range candidates {
+		deleteErr = s.cf.DeleteEmailRoutingDestinationAddress(ctx, accountID, candidateID)
+		if deleteErr == nil {
+			return nil
+		}
+	}
+	return wrapEmailRoutingUnavailable("failed to delete cloudflare email routing destination address before resending verification", deleteErr)
+}
+
+// repairEmailTargetAfterFailedResendCreate reconciles the local database after
+// Cloudflare recreate returned an error. When the remote create actually
+// succeeded but the response failed, the follow-up snapshot repair turns the
+// operation into a successful resend. Otherwise the stale local id is cleared.
+func (s *PermissionService) repairEmailTargetAfterFailedResendCreate(ctx context.Context, item model.EmailTarget, resendSentAt time.Time) (model.EmailTarget, bool, error) {
+	repaired, err := s.syncSingleEmailTargetWithCloudflare(ctx, item, false)
+	if err != nil {
+		return model.EmailTarget{}, false, err
+	}
+	if strings.TrimSpace(repaired.CloudflareAddressID) == "" {
+		return repaired, false, nil
+	}
+	if repaired.VerifiedAt != nil {
+		return repaired, true, nil
+	}
+	if equalOptionalTimes(repaired.LastVerificationSentAt, &resendSentAt) {
+		return repaired, true, nil
+	}
+
+	repaired, err = s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
+		ID:                     repaired.ID,
+		CloudflareAddressID:    repaired.CloudflareAddressID,
+		VerifiedAt:             repaired.VerifiedAt,
+		LastVerificationSentAt: &resendSentAt,
+	})
+	if err != nil {
+		return model.EmailTarget{}, false, InternalError("failed to repair email target after recreate response loss", err)
+	}
+	return repaired, true, nil
+}
+
+// rollbackEmailTargetAfterFailedResendUpdate compensates for the case where the
+// new Cloudflare destination was created but the local database update failed.
+// The rollback removes the freshly created remote address and then re-syncs the
+// local row so the user does not remain stuck with a dangling Cloudflare id.
+func (s *PermissionService) rollbackEmailTargetAfterFailedResendUpdate(ctx context.Context, accountID string, previous model.EmailTarget, createdID string, updateErr error) error {
+	var rollbackErrs []error
+
+	if createdID = strings.TrimSpace(createdID); createdID != "" {
+		if deleteErr := s.cf.DeleteEmailRoutingDestinationAddress(ctx, accountID, createdID); deleteErr != nil {
+			rollbackErrs = append(rollbackErrs, wrapEmailRoutingUnavailable("failed to roll back recreated cloudflare email routing destination address", deleteErr))
+		}
+	}
+
+	if _, repairErr := s.syncSingleEmailTargetWithCloudflare(ctx, previous, false); repairErr != nil {
+		rollbackErrs = append(rollbackErrs, repairErr)
+	}
+
+	rollbackErrs = append([]error{InternalError("failed to update email target after resending verification", updateErr)}, rollbackErrs...)
+	return errors.Join(rollbackErrs...)
 }
 
 // requireVerifiedOwnedEmailTarget enforces that one forwarding target email is

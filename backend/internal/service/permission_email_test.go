@@ -29,6 +29,8 @@ type fakeEmailRoutingCloudflare struct {
 	createdAddresses           []string
 	enabledDNSZones            []string
 	updatedCatchAllSubdomains  []string
+	failNextCreateAddress      error
+	deleteAddressErrors        map[string]error
 }
 
 // ResolveZone returns the configured in-memory zone for the requested root.
@@ -156,6 +158,12 @@ func (f *fakeEmailRoutingCloudflare) ListEmailRoutingDestinationAddresses(ctx co
 // CreateEmailRoutingDestinationAddress stores one new in-memory destination
 // address so tests can emulate Cloudflare's verification lifecycle.
 func (f *fakeEmailRoutingCloudflare) CreateEmailRoutingDestinationAddress(ctx context.Context, accountID string, email string) (cloudflare.EmailRoutingDestinationAddress, error) {
+	if f.failNextCreateAddress != nil {
+		err := f.failNextCreateAddress
+		f.failNextCreateAddress = nil
+		return cloudflare.EmailRoutingDestinationAddress{}, err
+	}
+
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	for _, item := range f.addressesByAccount[accountID] {
 		if strings.EqualFold(strings.TrimSpace(item.Email), normalizedEmail) {
@@ -178,6 +186,10 @@ func (f *fakeEmailRoutingCloudflare) CreateEmailRoutingDestinationAddress(ctx co
 // DeleteEmailRoutingDestinationAddress removes one in-memory destination
 // address so tests can emulate a resend-verification flow.
 func (f *fakeEmailRoutingCloudflare) DeleteEmailRoutingDestinationAddress(ctx context.Context, accountID string, addressID string) error {
+	if err := f.deleteAddressErrors[strings.TrimSpace(addressID)]; err != nil {
+		return err
+	}
+
 	addresses := f.addressesByAccount[accountID]
 	filtered := make([]cloudflare.EmailRoutingDestinationAddress, 0, len(addresses))
 	for _, item := range addresses {

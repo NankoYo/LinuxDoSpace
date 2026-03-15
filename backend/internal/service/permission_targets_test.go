@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/storage"
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
@@ -166,6 +168,16 @@ func TestResendMyEmailTargetVerificationRecreatesPendingAddress(t *testing.T) {
 		t.Fatalf("create pending email target: %v", err)
 	}
 
+	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
+	if _, err := store.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
+		ID:                     item.ID,
+		CloudflareAddressID:    item.CloudflareAddressID,
+		VerifiedAt:             nil,
+		LastVerificationSentAt: &oldSentAt,
+	}); err != nil {
+		t.Fatalf("age pending email target verification timestamp: %v", err)
+	}
+
 	resent, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID)
 	if err != nil {
 		t.Fatalf("resend email target verification: %v", err)
@@ -216,6 +228,141 @@ func TestResendMyEmailTargetVerificationRejectsVerifiedTarget(t *testing.T) {
 	if NormalizeError(err).Code != "conflict" {
 		t.Fatalf("expected conflict for verified target resend, got %v", err)
 	}
+}
+
+// TestResendMyEmailTargetVerificationRejectsRapidRepeat verifies that the
+// endpoint enforces a server-side resend cooldown instead of trusting the
+// frontend to suppress duplicate clicks.
+func TestResendMyEmailTargetVerificationRejectsRapidRepeat(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 503, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+
+	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
+	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+
+	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "rapid@example.com"})
+	if err != nil {
+		t.Fatalf("create pending email target: %v", err)
+	}
+
+	_, err = service.ResendMyEmailTargetVerification(ctx, user, item.ID)
+	if err == nil {
+		t.Fatalf("expected resend cooldown rejection")
+	}
+
+	normalized := NormalizeError(err)
+	if normalized.Code != "too_many_requests" {
+		t.Fatalf("expected too_many_requests error, got %s: %v", normalized.Code, err)
+	}
+}
+
+// TestResendMyEmailTargetVerificationClearsStaleBindingAfterCreateFailure
+// verifies that a failed recreate does not leave the local row pointing at a
+// deleted Cloudflare destination id.
+func TestResendMyEmailTargetVerificationClearsStaleBindingAfterCreateFailure(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 504, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+
+	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
+	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+
+	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "recover@example.com"})
+	if err != nil {
+		t.Fatalf("create pending email target: %v", err)
+	}
+
+	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
+	if _, err := store.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
+		ID:                     item.ID,
+		CloudflareAddressID:    item.CloudflareAddressID,
+		VerifiedAt:             nil,
+		LastVerificationSentAt: &oldSentAt,
+	}); err != nil {
+		t.Fatalf("age pending email target verification timestamp: %v", err)
+	}
+
+	cf.failNextCreateAddress = errors.New("upstream create failed")
+	if _, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID); err == nil {
+		t.Fatalf("expected recreate failure")
+	}
+
+	stored, err := store.GetEmailTargetByEmail(ctx, "recover@example.com")
+	if err != nil {
+		t.Fatalf("reload repaired email target: %v", err)
+	}
+	if stored.CloudflareAddressID != "" {
+		t.Fatalf("expected stale cloudflare destination id to be cleared, got %q", stored.CloudflareAddressID)
+	}
+	if stored.VerifiedAt != nil {
+		t.Fatalf("expected failed recreate to keep target pending")
+	}
+}
+
+// TestResendMyEmailTargetVerificationRollsBackNewDestinationOnDBFailure
+// verifies that the service deletes the freshly created Cloudflare destination
+// when the local persistence update fails afterward.
+func TestResendMyEmailTargetVerificationRollsBackNewDestinationOnDBFailure(t *testing.T) {
+	ctx := context.Background()
+	innerStore := newAuthTestStore(t)
+	store := &failingEmailTargetUpdateStore{Store: innerStore}
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, innerStore, 505, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, innerStore)
+
+	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
+	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+
+	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "rollback@example.com"})
+	if err != nil {
+		t.Fatalf("create pending email target: %v", err)
+	}
+
+	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
+	if _, err := innerStore.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
+		ID:                     item.ID,
+		CloudflareAddressID:    item.CloudflareAddressID,
+		VerifiedAt:             nil,
+		LastVerificationSentAt: &oldSentAt,
+	}); err != nil {
+		t.Fatalf("age pending email target verification timestamp: %v", err)
+	}
+
+	store.failNextUpdate = true
+	if _, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID); err == nil {
+		t.Fatalf("expected local update failure")
+	}
+
+	if len(cf.deletedAddresses) < 2 {
+		t.Fatalf("expected original + rollback destination deletion, got %v", cf.deletedAddresses)
+	}
+
+	stored, err := innerStore.GetEmailTargetByEmail(ctx, "rollback@example.com")
+	if err != nil {
+		t.Fatalf("reload rolled back email target: %v", err)
+	}
+	if stored.CloudflareAddressID != "" {
+		t.Fatalf("expected rolled back target to clear the stale cloudflare id, got %q", stored.CloudflareAddressID)
+	}
+}
+
+// failingEmailTargetUpdateStore lets one test simulate a persistence failure on
+// the resend path without reimplementing the full storage contract.
+type failingEmailTargetUpdateStore struct {
+	*sqlite.Store
+	failNextUpdate bool
+}
+
+// UpdateEmailTarget fails once when requested so the service rollback path can
+// be exercised against the real SQLite-backed repository implementation.
+func (s *failingEmailTargetUpdateStore) UpdateEmailTarget(ctx context.Context, input storage.UpdateEmailTargetInput) (model.EmailTarget, error) {
+	if s.failNextUpdate {
+		s.failNextUpdate = false
+		return model.EmailTarget{}, errors.New("simulated update failure")
+	}
+	return s.Store.UpdateEmailTarget(ctx, input)
 }
 
 // seedPermissionEmailTestUserWithLinuxDOID inserts one local user while letting

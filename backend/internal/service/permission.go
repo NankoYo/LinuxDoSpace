@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"linuxdospace/backend/internal/config"
@@ -56,6 +57,11 @@ type PermissionService struct {
 	cfg config.Config
 	db  Store
 	cf  CloudflareClient
+
+	// emailTargetResendLocks serializes resend-verification operations per local
+	// target row so one process cannot concurrently delete and recreate the same
+	// Cloudflare destination address multiple times.
+	emailTargetResendLocks sync.Map
 }
 
 const (
@@ -210,6 +216,15 @@ type catchAllNamespace struct {
 // user-side permission and email-routing flows.
 func NewPermissionService(cfg config.Config, db Store, cf CloudflareClient) *PermissionService {
 	return &PermissionService{cfg: cfg, db: db, cf: cf}
+}
+
+// lockEmailTargetResend acquires the in-process mutex protecting one concrete
+// email-target resend flow and returns the matching unlock function.
+func (s *PermissionService) lockEmailTargetResend(targetID int64) func() {
+	lockValue, _ := s.emailTargetResendLocks.LoadOrStore(targetID, &sync.Mutex{})
+	locker := lockValue.(*sync.Mutex)
+	locker.Lock()
+	return locker.Unlock
 }
 
 // ListMyPermissions returns the single currently supported permission card for
