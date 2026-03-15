@@ -364,6 +364,11 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 	if err != nil {
 		return UserEmailRouteView{}, err
 	}
+	if targetEmail != "" {
+		if err := ensureDatabaseRelayIngressDNSForRootDomain(ctx, s.cfg, s.cf, namespace.RootDomain); err != nil {
+			return UserEmailRouteView{}, err
+		}
+	}
 
 	beforeState := newDeletedCatchAllEmailRouteSyncState(namespace.RootDomain)
 	var existingRoute *model.EmailRoute
@@ -977,20 +982,7 @@ func ensureCatchAllRelayIngressDNSForApplication(ctx context.Context, cfg config
 	if err != nil {
 		return InternalError("failed to parse catch-all permission target", err)
 	}
-
-	normalizedRoot := normalizeDNSName(rootDomain)
-	defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
-	if normalizedRoot == "" {
-		return ValidationError("catch-all relay namespace is empty")
-	}
-	if defaultRoot != "" && normalizedRoot == defaultRoot {
-		return UnavailableError(
-			"refusing to bootstrap mail-relay dns on the parent root domain",
-			fmt.Errorf("parent root %s must stay on cloudflare mail routing", defaultRoot),
-		)
-	}
-
-	return newEmailRoutingProvisioner(cfg, cf).ensureDatabaseRelayIngressDNS(ctx, normalizedRoot)
+	return ensureDatabaseRelayIngressDNSForRootDomain(ctx, cfg, cf, rootDomain)
 }
 
 // buildLegacyCatchAllApplicationTarget preserves compatibility with early

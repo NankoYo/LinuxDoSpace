@@ -79,6 +79,9 @@ func main() {
 	if err := domainService.EnsureDefaultManagedDomain(ctx); err != nil {
 		log.Fatalf("bootstrap default managed domain: %v", err)
 	}
+	if err := service.EnsureDatabaseRelayIngressDNSState(ctx, cfg, store, cloudflareClient); err != nil {
+		log.Fatalf("bootstrap database mail relay ingress dns: %v", err)
+	}
 
 	handler := httpapi.NewRouter(httpapi.RouterDependencies{
 		Config:            cfg,

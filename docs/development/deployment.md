@@ -183,9 +183,15 @@ Additional requirement for `EMAIL_FORWARDING_BACKEND=database_relay`:
 
 Operational DNS note for `database_relay`:
 
+- `MAIL_RELAY_MX_TARGET` must be a real mail host name such as `mail.linuxdo.space`,
+  not a raw IP address; the corresponding `A`/`AAAA` record must stay `DNS only`
+  so SMTP can reach the server directly
 - when `MAIL_RELAY_ENSURE_DNS=true`, LinuxDoSpace will create or update its own
   managed `MX` and optional `TXT` records for routed mail domains and
   subdomains, pointing them at `MAIL_RELAY_MX_TARGET`
+- on startup, LinuxDoSpace also scans already-approved catch-all namespaces and
+  existing subdomain relay routes, then backfills any missing relay `MX/TXT`
+  records before serving traffic
 - parent-root exact mailboxes intentionally do not receive these relay `MX/TXT`
   records, because they keep using Cloudflare's exact-address forwarding path
 - LinuxDoSpace only updates DNS records carrying its own mail-relay comment, so
