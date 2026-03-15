@@ -104,7 +104,6 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
   const [paymentUnits, setPaymentUnits] = useState<Record<string, number>>({});
   const [creatingProductKey, setCreatingProductKey] = useState('');
   const [paymentNotice, setPaymentNotice] = useState<PaymentNotice | null>(null);
-  const [pollingOrderNo, setPollingOrderNo] = useState('');
   const [selectedKey, setSelectedKey] = useState(emailCatchAllPermissionKey);
   const [redeemCode, setRedeemCode] = useState('');
   const [plannedTarget, setPlannedTarget] = useState(builtinCatalog[1].target());
@@ -145,6 +144,7 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
     () => rows.filter((row) => row.permission?.application).map((row) => ({ row, application: row.permission?.application! })),
     [rows],
   );
+  const pollingOrderNos = useMemo(() => listPollablePaymentOrderNos(paymentOrders), [paymentOrders]);
 
   useEffect(() => {
     if (!selectedItem || selectedItem.stage !== 'planned') return;
@@ -167,7 +167,6 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       setPaymentOrdersLoading(false);
       setPaymentOrdersError('');
       setCreatingProductKey('');
-      setPollingOrderNo('');
       setPaymentNotice(null);
       return;
     }
@@ -176,13 +175,13 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
   }, [authenticated]);
 
   useEffect(() => {
-    if (!pollingOrderNo || !authenticated) return;
+    if (!authenticated || pollingOrderNos.length === 0) return;
 
     const timer = window.setTimeout(() => {
-      void refreshOnePaymentOrder(pollingOrderNo, true);
+      void Promise.all(pollingOrderNos.map((outTradeNo) => refreshOnePaymentOrder(outTradeNo, true)));
     }, 3000);
     return () => window.clearTimeout(timer);
-  }, [authenticated, paymentOrders, pollingOrderNo]);
+  }, [authenticated, pollingOrderNos]);
 
   useEffect(() => {
     setPaymentUnits((current) => {
@@ -238,8 +237,6 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       if (requestToken !== paymentOrdersRequestTokenRef.current) return;
       setPaymentOrders(items);
       setPaymentOrdersError('');
-      const pendingOrder = items.find((item) => item.status === 'created' || item.status === 'pending' || (item.status === 'paid' && !item.applied_at));
-      setPollingOrderNo(pendingOrder?.out_trade_no ?? '');
     } catch (loadError) {
       if (requestToken !== paymentOrdersRequestTokenRef.current) return;
       setPaymentOrders([]);
@@ -255,13 +252,12 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       const order = await refreshMyPaymentOrder(outTradeNo, csrfToken);
       setPaymentOrders((current) => upsertPaymentOrder(current, order));
       if (order.status === 'paid' && order.applied_at) {
-        setPollingOrderNo('');
         clearRememberedPaymentOrder(order.out_trade_no);
+        void loadPermissions();
         if (!silent) {
           setPaymentNotice({ tone: 'success', message: `订单 ${order.out_trade_no} 已支付成功，权益已经发放。` });
         }
       } else if (order.status === 'failed' || order.status === 'refunded') {
-        setPollingOrderNo('');
         clearRememberedPaymentOrder(order.out_trade_no);
       }
     } catch (refreshError) {
@@ -287,7 +283,6 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       setPaymentNotice(null);
       const order = await createMyPaymentOrder({ product_key: product.key, units }, csrfToken);
       setPaymentOrders((current) => upsertPaymentOrder(current, order));
-      setPollingOrderNo(order.out_trade_no);
       rememberLatestPaymentOrder(order.out_trade_no);
 
       const openedWindow = openTrustedPaymentWindow(order.payment_url);
@@ -483,6 +478,16 @@ export function Permissions({ authenticated, sessionLoading, user, csrfToken, on
       />
     </div>
   );
+}
+
+// listPollablePaymentOrderNos returns every order that still needs upstream
+// status reconciliation, sorted from newest to oldest so the freshest order is
+// always refreshed first when the browser tab is active.
+function listPollablePaymentOrderNos(orders: PaymentOrder[]): string[] {
+  return orders
+    .filter((order) => isOrderWaitingForRefresh(order))
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .map((order) => order.out_trade_no);
 }
 
 interface PaymentExchangeSectionProps {
