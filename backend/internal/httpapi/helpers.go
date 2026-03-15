@@ -80,7 +80,7 @@ func pathInt64(r *http.Request, key string) (int64, error) {
 
 // currentSessionCookieValue reads the current session cookie value from the request.
 func (a *API) currentSessionCookieValue(r *http.Request) string {
-	cookie, err := r.Cookie(a.config.App.SessionCookieName)
+	cookie, err := r.Cookie(a.sessionCookieName())
 	if err != nil {
 		return ""
 	}
@@ -90,7 +90,7 @@ func (a *API) currentSessionCookieValue(r *http.Request) string {
 // setSessionCookie writes the authenticated session cookie.
 func (a *API) setSessionCookie(w http.ResponseWriter, sessionID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     a.config.App.SessionCookieName,
+		Name:     a.sessionCookieName(),
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
@@ -103,7 +103,7 @@ func (a *API) setSessionCookie(w http.ResponseWriter, sessionID string) {
 // clearSessionCookie removes the authenticated session cookie.
 func (a *API) clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     a.config.App.SessionCookieName,
+		Name:     a.sessionCookieName(),
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -111,12 +111,23 @@ func (a *API) clearSessionCookie(w http.ResponseWriter) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+	if legacyName := strings.TrimSpace(a.config.App.SessionCookieName); legacyName != "" && legacyName != a.sessionCookieName() {
+		http.SetCookie(w, &http.Cookie{
+			Name:     legacyName,
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   a.config.App.SessionSecure,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   -1,
+		})
+	}
 }
 
 // setOAuthStateCookie writes the short-lived per-state OAuth cookie.
 func (a *API) setOAuthStateCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName(stateID),
+		Name:     a.oauthStateCookieName(stateID),
 		Value:    stateID,
 		Path:     "/",
 		HttpOnly: true,
@@ -130,7 +141,7 @@ func (a *API) setOAuthStateCookie(w http.ResponseWriter, stateID string) {
 // specified state and also clears the legacy shared cookie names.
 func (a *API) clearOAuthStateCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthStateCookieName(stateID),
+		Name:     a.oauthStateCookieName(stateID),
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -152,7 +163,7 @@ func (a *API) clearOAuthStateCookie(w http.ResponseWriter, stateID string) {
 // currentOAuthStateCookie reads the short-lived OAuth state cookie bound to the
 // current callback's state identifier.
 func (a *API) currentOAuthStateCookie(r *http.Request, stateID string) string {
-	if cookie, err := r.Cookie(oauthStateCookieName(stateID)); err == nil {
+	if cookie, err := r.Cookie(a.oauthStateCookieName(stateID)); err == nil {
 		return strings.TrimSpace(cookie.Value)
 	}
 	return ""
@@ -162,7 +173,7 @@ func (a *API) currentOAuthStateCookie(r *http.Request, stateID string) string {
 // specific OAuth state so separate tabs can complete independently.
 func (a *API) setOAuthTargetCookie(w http.ResponseWriter, stateID string, target string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthTargetCookieName(stateID),
+		Name:     a.oauthTargetCookieName(stateID),
 		Value:    normalizeOAuthTarget(target),
 		Path:     "/",
 		HttpOnly: true,
@@ -176,7 +187,7 @@ func (a *API) setOAuthTargetCookie(w http.ResponseWriter, stateID string, target
 // specified state and clears the legacy shared cookie name too.
 func (a *API) clearOAuthTargetCookie(w http.ResponseWriter, stateID string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     oauthTargetCookieName(stateID),
+		Name:     a.oauthTargetCookieName(stateID),
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -198,10 +209,17 @@ func (a *API) clearOAuthTargetCookie(w http.ResponseWriter, stateID string) {
 // currentOAuthTargetCookie reads the short-lived login target cookie for the
 // callback's state.
 func (a *API) currentOAuthTargetCookie(r *http.Request, stateID string) string {
-	if cookie, err := r.Cookie(oauthTargetCookieName(stateID)); err == nil {
+	if cookie, err := r.Cookie(a.oauthTargetCookieName(stateID)); err == nil {
 		return normalizeOAuthTarget(cookie.Value)
 	}
 	return oauthTargetApp
+}
+
+// sessionCookieName derives the effective authentication cookie name. In
+// secure deployments the backend upgrades to a `__Host-` name so untrusted
+// user-controlled subdomains cannot toss a same-name parent-domain cookie.
+func (a *API) sessionCookieName() string {
+	return secureHostCookieName(a.config.App.SessionCookieName, a.config.App.SessionSecure)
 }
 
 // normalizeOAuthTarget restricts login targets to the two supported frontend applications.
@@ -223,12 +241,38 @@ func oauthStateCookieName(stateID string) string {
 	return oauthStateCookiePrefix + strings.TrimSpace(stateID)
 }
 
+// oauthStateCookieName derives the per-state cookie name and upgrades it to a
+// `__Host-` cookie in secure deployments for the same anti-tossing reason as
+// the authenticated session cookie.
+func (a *API) oauthStateCookieName(stateID string) string {
+	return secureHostCookieName(oauthStateCookieName(stateID), a.config.App.SessionSecure)
+}
+
 // oauthTargetCookieName derives the matching per-state target cookie name.
 func oauthTargetCookieName(stateID string) string {
 	if strings.TrimSpace(stateID) == "" {
 		return legacyOAuthTargetCookieName
 	}
 	return oauthTargetCookiePrefix + strings.TrimSpace(stateID)
+}
+
+// oauthTargetCookieName derives the matching per-state target cookie name and
+// upgrades it to `__Host-` in secure deployments.
+func (a *API) oauthTargetCookieName(stateID string) string {
+	return secureHostCookieName(oauthTargetCookieName(stateID), a.config.App.SessionSecure)
+}
+
+// secureHostCookieName upgrades one host-only cookie name to the `__Host-`
+// prefix in secure deployments. Existing explicit `__Host-` names stay intact.
+func secureHostCookieName(baseName string, secure bool) string {
+	trimmedName := strings.TrimSpace(baseName)
+	if trimmedName == "" {
+		return ""
+	}
+	if !secure || strings.HasPrefix(trimmedName, "__Host-") {
+		return trimmedName
+	}
+	return "__Host-" + trimmedName
 }
 
 // optionalActor attempts to resolve the current user but gracefully treats invalid sessions as signed out.

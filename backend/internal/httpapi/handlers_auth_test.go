@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,9 @@ func TestAuthCookiesStayHostOnly(t *testing.T) {
 	api.setOAuthTargetCookie(recorder, "state-1", oauthTargetApp)
 
 	for _, cookie := range recorder.Result().Cookies() {
+		if !strings.HasPrefix(cookie.Name, "__Host-") {
+			t.Fatalf("expected cookie %q to use the __Host- prefix in secure mode", cookie.Name)
+		}
 		if cookie.Domain != "" {
 			t.Fatalf("expected cookie %q to stay host-only, got domain %q", cookie.Name, cookie.Domain)
 		}
@@ -100,5 +104,27 @@ func TestLegacyOAuthCookiesAreIgnored(t *testing.T) {
 	}
 	if got := api.currentOAuthTargetCookie(request, "state-app"); got != oauthTargetApp {
 		t.Fatalf("expected legacy oauth target cookie to be ignored, got %q", got)
+	}
+}
+
+// TestSecureSessionCookieIgnoresLegacyUnprefixedName verifies that secure
+// deployments only trust the `__Host-` session cookie name and ignore the old
+// unprefixed variant.
+func TestSecureSessionCookieIgnoresLegacyUnprefixedName(t *testing.T) {
+	api := &API{
+		config: config.Config{
+			App: config.AppConfig{
+				SessionCookieName: "linuxdospace_session",
+				SessionSecure:     true,
+			},
+		},
+	}
+
+	request := httptest.NewRequest("GET", "/v1/me", nil)
+	request.AddCookie(&http.Cookie{Name: "linuxdospace_session", Value: "legacy-session"})
+	request.AddCookie(&http.Cookie{Name: "__Host-linuxdospace_session", Value: "secure-session"})
+
+	if got := api.currentSessionCookieValue(request); got != "secure-session" {
+		t.Fatalf("expected secure __Host- session cookie to win, got %q", got)
 	}
 }
