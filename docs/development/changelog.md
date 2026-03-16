@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hardened paid domain purchases with exact-prefix reservation keys, stale checkout release, Cloudflare realtime conflict re-checking during entitlement apply, and public/generic payment-flow isolation for the internal `domain_allocation_purchase` product.
+- Updated managed-domain bootstrap defaults so built-in sale roots start at `10 LDC` base price, skip optional unresolved zones during startup, and no longer overwrite administrator-edited configuration on restart.
 - Added per-root-domain sale settings plus public dynamic namespace purchase flow on the domain search page, with fixed length multipliers, hidden random 12+ character purchases, and built-in bootstrap roots for `cifang.love`, `openapi.best`, and `metapi.cc`.
 - Added dedicated dynamic Linux Do Credit domain-order creation plus paid entitlement application so successful checkouts can automatically create new allocation namespaces.
 - Added a reviewed-but-not-auto-applied reserved-prefix audit draft for common single-character, digit, infrastructure, and high-value prefixes.

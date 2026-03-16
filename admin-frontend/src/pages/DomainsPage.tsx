@@ -53,7 +53,7 @@ const blankManagedDomainDraft: UpsertManagedDomainInput = {
   is_default: false,
   enabled: true,
   sale_enabled: false,
-  sale_base_price_cents: 0,
+  sale_base_price_cents: 1000,
 };
 
 interface AllocationDraft {

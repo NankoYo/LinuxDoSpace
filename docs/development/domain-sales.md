@@ -21,13 +21,14 @@
 - `enabled=true`
 - `auto_provision=false`
 - `sale_enabled=false`
-- `sale_base_price_cents=0`
+- `sale_base_price_cents=1000`
 
-也就是说，它们会先进入系统，但不会在未定价前直接开放销售。
+也就是说，它们会先进入系统，并带着默认基础价 `10 LDC`，但不会在未显式开放销售前直接对外售卖。
 
 ## 定价规则
 
 每个根域名的基础价格由管理员在 `managed_domains.sale_base_price_cents` 中单独设置。
+当前初始化默认值统一为 `1000`，即 `10 LDC`。
 前端与后端共用以下固定倍率：
 
 ### 精确购买
@@ -59,6 +60,13 @@
 - `purchase_assigned_fqdn`
 
 这允许系统在支付成功后自动发放 allocation，并在订单记录中保留最终分配结果。
+
+另外，精确购买会额外写入一条内部 reservation key：
+
+- `purchase_reservation_key`
+- `purchase_reservation_expires_at`
+
+它用于在下单到支付完成之间锁住同一个精确前缀，防止并发超卖。
 
 ## API
 
@@ -97,8 +105,9 @@
 
 - 仅当根域名 `sale_enabled=true` 且 `sale_base_price_cents>0` 时可下单
 - 精确购买会实时检查数据库占用与 Cloudflare 现存 DNS 冲突
+- 精确购买下单成功后会在订单层占用该前缀，避免两个用户并发为同一前缀支付
 - 随机购买不会在下单前暴露具体字符
-- 支付成功后由后端自动创建 allocation
+- 支付成功后会再次根据 Cloudflare 实时 DNS 快照复核冲突，再自动创建 allocation
 
 ## 前端行为
 
