@@ -584,13 +584,14 @@ func applyCatchAllSubscriptionDaysTx(ctx context.Context, tx *queryTx, order mod
 	if !found {
 		access = model.EmailCatchAllAccess{UserID: order.UserID}
 	}
+	access = access.NormalizeTemporaryReward(appliedAt)
 
 	base := appliedAt
 	if access.SubscriptionExpiresAt != nil && access.SubscriptionExpiresAt.After(appliedAt) {
 		base = access.SubscriptionExpiresAt.UTC()
 	}
 	nextExpiresAt := base.AddDate(0, 0, int(order.GrantedTotal))
-	if err := upsertEmailCatchAllAccessTx(ctx, tx, order.UserID, &nextExpiresAt, access.RemainingCount, access.DailyLimitOverride, appliedAt); err != nil {
+	if err := upsertEmailCatchAllAccessTx(ctx, tx, order.UserID, &nextExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, appliedAt); err != nil {
 		return err
 	}
 
@@ -611,40 +612,13 @@ func applyCatchAllRemainingCountTx(ctx context.Context, tx *queryTx, order model
 	if !found {
 		access = model.EmailCatchAllAccess{UserID: order.UserID}
 	}
+	access = access.NormalizeTemporaryReward(appliedAt)
 	nextRemainingCount := access.RemainingCount + order.GrantedTotal
-	if err := upsertEmailCatchAllAccessTx(ctx, tx, order.UserID, access.SubscriptionExpiresAt, nextRemainingCount, access.DailyLimitOverride, appliedAt); err != nil {
+	if err := upsertEmailCatchAllAccessTx(ctx, tx, order.UserID, access.SubscriptionExpiresAt, nextRemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, appliedAt); err != nil {
 		return err
 	}
 
 	return insertPaymentQuantityRecordTx(ctx, tx, order.UserID, paymentQuantityResourceRemainingCount, paymentQuantityScopeCatchAll, order.GrantedTotal, order.Title, order.OutTradeNo, appliedAt)
-}
-
-// upsertEmailCatchAllAccessTx persists the current mutable catch-all access
-// snapshot inside the surrounding entitlement-application transaction.
-func upsertEmailCatchAllAccessTx(ctx context.Context, tx *queryTx, userID int64, subscriptionExpiresAt *time.Time, remainingCount int64, dailyLimitOverride *int64, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `
-INSERT INTO email_catch_all_access (
-    user_id,
-    subscription_expires_at,
-    remaining_count,
-    daily_limit_override,
-    created_at,
-    updated_at
-) VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(user_id) DO UPDATE SET
-    subscription_expires_at=excluded.subscription_expires_at,
-    remaining_count=excluded.remaining_count,
-    daily_limit_override=excluded.daily_limit_override,
-    updated_at=excluded.updated_at
-`,
-		userID,
-		formatNullableTime(subscriptionExpiresAt),
-		remainingCount,
-		normalizeNullableInt64(dailyLimitOverride),
-		formatTime(now),
-		formatTime(now),
-	)
-	return err
 }
 
 // insertPaymentQuantityRecordTx appends one immutable quantity-ledger row that

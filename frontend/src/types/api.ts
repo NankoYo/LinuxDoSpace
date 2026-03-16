@@ -121,6 +121,9 @@ export interface UserPermission {
     subscription_active: boolean;
     subscription_expires_at?: string;
     remaining_count: number;
+    permanent_remaining_count: number;
+    temporary_reward_count: number;
+    temporary_reward_expires_at?: string;
     daily_usage_date: string;
     daily_used_count: number;
     daily_remaining_count: number;
@@ -223,6 +226,9 @@ export interface POWStatus {
   completed_today: number;
   remaining_today: number;
   current_remaining_count: number;
+  current_permanent_remaining_count: number;
+  current_temporary_reward_count: number;
+  current_temporary_reward_expires_at?: string;
   current_challenge?: POWChallenge;
 }
 
@@ -233,6 +239,9 @@ export interface SubmitPOWChallengeResult {
   granted_quantity: number;
   reward_unit: string;
   current_remaining_count: number;
+  current_permanent_remaining_count: number;
+  current_temporary_reward_count: number;
+  current_temporary_reward_expires_at?: string;
   completed_today: number;
   remaining_today: number;
 }

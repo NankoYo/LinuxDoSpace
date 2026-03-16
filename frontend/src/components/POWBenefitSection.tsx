@@ -329,7 +329,7 @@ export function POWBenefitSection({
 
       setNotice({
         tone: 'success',
-        message: `PoW 奖励已到账，本次发放 ${result.granted_quantity}${result.reward_unit}。当前邮箱泛解析剩余次数为 ${result.current_remaining_count.toLocaleString('zh-CN')}。`,
+        message: `PoW 奖励已到账，本次发放 ${result.granted_quantity}${result.reward_unit}。当前邮箱泛解析总剩余次数为 ${result.current_remaining_count.toLocaleString('zh-CN')}，其中临时奖励会在上海时区次日 00:00 自动刷新。`,
       });
     } catch (claimError) {
       setNotice({ tone: 'error', message: readableErrorMessage(claimError, 'PoW 奖励领取失败。') });
@@ -368,12 +368,19 @@ export function POWBenefitSection({
           <p className="mt-2 max-w-3xl text-sm leading-7 text-gray-600 dark:text-gray-300">
             选择福利类型和难度后即可开始本地解题。只有在验证成功之后，服务器才会随机生成最终奖励并发放到你的账号。
           </p>
+          <p className="mt-2 max-w-3xl text-sm leading-7 text-gray-600 dark:text-gray-300">
+            PoW 发放的是临时奖励次数，会在上海时区次日 00:00 自动清零；购买获得的永久次数不受这个刷新影响。卡片里显示的是两者相加后的总次数，悬浮后可看详情。
+          </p>
         </div>
 
         <div className="grid min-w-[240px] gap-3 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2">
           <StatCard title="今日已完成" value={`${status?.completed_today ?? 0} / ${status?.max_daily_completions ?? 5}`} />
           <StatCard title="剩余可完成" value={`${status?.remaining_today ?? 0} 次`} />
-          <StatCard title="当前累计福利" value={`${status?.current_remaining_count?.toLocaleString('zh-CN') ?? '0'} 次`} />
+          <StatCard
+            title="当前累计福利"
+            value={`${status?.current_remaining_count?.toLocaleString('zh-CN') ?? '0'} 次`}
+            tooltip={buildPowBalanceTooltip(status)}
+          />
           <StatCard title="邮箱权限状态" value={permissionStatusLabel} />
         </div>
       </div>
@@ -536,11 +543,12 @@ function InlineNotice({ tone, message }: SectionNotice) {
   return <div className={`rounded-2xl border px-4 py-3 text-sm leading-7 ${palette}`}>{message}</div>;
 }
 
-function StatCard({ title, value }: { title: string; value: string }) {
+function StatCard({ title, value, tooltip }: { title: string; value: string; tooltip?: string }) {
   return (
-    <div className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
+    <div title={tooltip} className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{title}</div>
       <div className="mt-2 text-base font-semibold text-gray-900 dark:text-white">{value}</div>
+      {tooltip ? <div className="mt-2 text-xs leading-6 text-gray-500 dark:text-gray-400">悬浮查看详情</div> : null}
     </div>
   );
 }
@@ -573,6 +581,22 @@ function formatElapsedMs(value: number): string {
 
 function estimateRewardRange(difficulty: number): string {
   return `${(difficulty * 5).toLocaleString('zh-CN')} ~ ${(difficulty * 10).toLocaleString('zh-CN')} 次`;
+}
+
+function buildPowBalanceTooltip(status: POWStatus | null): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+
+  const lines = [
+    `永久次数：${status.current_permanent_remaining_count.toLocaleString('zh-CN')}`,
+    `临时奖励：${status.current_temporary_reward_count.toLocaleString('zh-CN')}`,
+  ];
+  if (status.current_temporary_reward_count > 0 && status.current_temporary_reward_expires_at) {
+    lines.push(`临时奖励到期：${formatDate(status.current_temporary_reward_expires_at)}`);
+  }
+  lines.push('说明：显示值 = 永久次数 + 仍在有效期内的临时奖励。');
+  return lines.join('\n');
 }
 
 function describePermissionStatus(status: UserPermission['status']): string {

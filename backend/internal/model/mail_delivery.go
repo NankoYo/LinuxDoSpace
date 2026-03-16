@@ -23,10 +23,13 @@ const (
 // MailDeliveryReservation records one catch-all quota reservation that was
 // consumed when the inbound SMTP transaction was durably enqueued.
 type MailDeliveryReservation struct {
-	UserID       int64  `json:"user_id"`
-	Count        int64  `json:"count"`
-	ConsumedMode string `json:"consumed_mode"`
-	UsageDate    string `json:"usage_date"`
+	UserID                       int64      `json:"user_id"`
+	Count                        int64      `json:"count"`
+	ConsumedMode                 string     `json:"consumed_mode"`
+	ConsumedPermanentCount       int64      `json:"consumed_permanent_count"`
+	ConsumedTemporaryRewardCount int64      `json:"consumed_temporary_reward_count"`
+	TemporaryRewardExpiresAt     *time.Time `json:"temporary_reward_expires_at,omitempty"`
+	UsageDate                    string     `json:"usage_date"`
 }
 
 // MailDeliveryJob stores one durable outbound delivery task together with the

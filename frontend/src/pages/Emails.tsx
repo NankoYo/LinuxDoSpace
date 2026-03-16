@@ -830,6 +830,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                       <InfoStat
                         title="剩余次数"
                         value={permission.catch_all_access.remaining_count.toLocaleString('zh-CN')}
+                        tooltip={buildCatchAllBalanceTooltip(permission.catch_all_access)}
                       />
                       <InfoStat
                         title="今日剩余"
@@ -988,13 +989,15 @@ interface InfoStatProps {
   title: string;
   value: string;
   mono?: boolean;
+  tooltip?: string;
 }
 
-function InfoStat({ title, value, mono = false }: InfoStatProps) {
+function InfoStat({ title, value, mono = false, tooltip }: InfoStatProps) {
   return (
-    <div className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
+    <div title={tooltip} className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{title}</div>
       <div className={`mt-2 text-base font-semibold text-gray-900 dark:text-white ${mono ? 'font-mono break-all' : ''}`}>{value}</div>
+      {tooltip ? <div className="mt-2 text-xs leading-6 text-gray-500 dark:text-gray-400">悬浮查看详情</div> : null}
     </div>
   );
 }
@@ -1102,11 +1105,27 @@ function describeCatchAllAccessMode(permission: UserPermission): string {
   switch (permission.catch_all_access.access_mode) {
     case 'subscription':
       return '订阅时长';
+    case 'reward_then_quantity':
+      return '临时奖励 + 按量额度';
+    case 'temporary_reward':
+      return '临时奖励';
     case 'quantity':
       return '按量额度';
     default:
       return permission.status === 'approved' ? '已授权' : '未开通';
   }
+}
+
+function buildCatchAllBalanceTooltip(access: NonNullable<UserPermission['catch_all_access']>): string {
+  const lines = [
+    `永久次数：${access.permanent_remaining_count.toLocaleString('zh-CN')}`,
+    `临时奖励：${access.temporary_reward_count.toLocaleString('zh-CN')}`,
+  ];
+  if (access.temporary_reward_count > 0 && access.temporary_reward_expires_at) {
+    lines.push(`临时奖励到期：${formatDate(access.temporary_reward_expires_at)}`);
+  }
+  lines.push('说明：显示值 = 永久次数 + 仍在有效期内的临时奖励。');
+  return lines.join('\n');
 }
 
 function describePermissionStatus(status: PermissionStatus): ChipDescriptor {

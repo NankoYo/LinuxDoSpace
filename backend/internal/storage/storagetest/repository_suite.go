@@ -11,6 +11,7 @@ import (
 
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 // Factory opens one migrated backend instance dedicated to the current test
@@ -409,7 +410,7 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 	})
 
-	t.Run("email catch-all consumption prefers subscription and then decrements remaining count", func(t *testing.T) {
+	t.Run("email catch-all consumption prefers subscription then temporary rewards then permanent count", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
 
@@ -499,6 +500,149 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		})
 		if !errors.Is(err, storage.ErrEmailCatchAllInsufficientRemainingCount) {
 			t.Fatalf("expected insufficient remaining count error, got %v", err)
+		}
+
+		temporaryRewardExpiresAt := timeutil.NextShanghaiMidnightUTC(secondDay).Add(2 * time.Hour)
+		if _, err := store.UpsertEmailCatchAllAccess(ctx, storage.UpsertEmailCatchAllAccessInput{
+			UserID:                   user.ID,
+			SubscriptionExpiresAt:    &expiredSubscription,
+			RemainingCount:           5,
+			TemporaryRewardCount:     4,
+			TemporaryRewardExpiresAt: &temporaryRewardExpiresAt,
+			DailyLimitOverride:       &resetDailyLimit,
+		}); err != nil {
+			t.Fatalf("upsert email catch-all access with temporary reward balance: %v", err)
+		}
+
+		thirdMoment := timeutil.NextShanghaiMidnightUTC(secondDay).Add(time.Hour)
+		thirdConsume, err := store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
+			UserID:            user.ID,
+			Count:             2,
+			DefaultDailyLimit: policy.DefaultDailyLimit,
+			Now:               thirdMoment,
+		})
+		if err != nil {
+			t.Fatalf("consume email catch-all using temporary reward only: %v", err)
+		}
+		if thirdConsume.ConsumedMode != "temporary_reward" {
+			t.Fatalf("expected temporary_reward mode, got %q", thirdConsume.ConsumedMode)
+		}
+		if thirdConsume.ConsumedTemporaryRewardCount != 2 || thirdConsume.ConsumedPermanentCount != 0 {
+			t.Fatalf("expected only temporary reward consumption, got %+v", thirdConsume)
+		}
+		if thirdConsume.Access.RemainingCount != 5 || thirdConsume.Access.TemporaryRewardCount != 2 {
+			t.Fatalf("expected permanent count 5 and temporary reward count 2 after reward-only consume, got %+v", thirdConsume.Access)
+		}
+
+		fourthConsume, err := store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
+			UserID:            user.ID,
+			Count:             4,
+			DefaultDailyLimit: policy.DefaultDailyLimit,
+			Now:               thirdMoment.Add(time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("consume email catch-all using temporary reward and permanent count: %v", err)
+		}
+		if fourthConsume.ConsumedMode != "mixed" {
+			t.Fatalf("expected mixed mode after temporary reward is partially exhausted, got %q", fourthConsume.ConsumedMode)
+		}
+		if fourthConsume.ConsumedTemporaryRewardCount != 2 || fourthConsume.ConsumedPermanentCount != 2 {
+			t.Fatalf("expected mixed reward/permanent consumption, got %+v", fourthConsume)
+		}
+		if fourthConsume.Access.RemainingCount != 3 || fourthConsume.Access.TemporaryRewardCount != 0 {
+			t.Fatalf("expected permanent count 3 and temporary reward count 0 after mixed consume, got %+v", fourthConsume.Access)
+		}
+	})
+
+	t.Run("email catch-all refunds restore only still-active temporary rewards", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "catchall-refund-owner")
+		policy, err := store.GetPermissionPolicy(ctx, "email_catch_all")
+		if err != nil {
+			t.Fatalf("load email catch-all policy: %v", err)
+		}
+
+		now := time.Now().UTC().Truncate(time.Second)
+		rewardExpiry := now.Add(2 * time.Hour)
+		dailyLimitOverride := int64(10)
+		if _, err := store.UpsertEmailCatchAllAccess(ctx, storage.UpsertEmailCatchAllAccessInput{
+			UserID:                   user.ID,
+			RemainingCount:           3,
+			TemporaryRewardCount:     2,
+			TemporaryRewardExpiresAt: &rewardExpiry,
+			DailyLimitOverride:       &dailyLimitOverride,
+		}); err != nil {
+			t.Fatalf("seed catch-all access with temporary reward: %v", err)
+		}
+
+		consumed, err := store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
+			UserID:            user.ID,
+			Count:             2,
+			DefaultDailyLimit: policy.DefaultDailyLimit,
+			Now:               now,
+		})
+		if err != nil {
+			t.Fatalf("consume catch-all access before refund: %v", err)
+		}
+		if consumed.ConsumedMode != "temporary_reward" {
+			t.Fatalf("expected temporary reward consumption before refund, got %q", consumed.ConsumedMode)
+		}
+
+		if err := store.RefundEmailCatchAll(ctx, storage.RefundEmailCatchAllInput{
+			UserID:                       user.ID,
+			Count:                        2,
+			ConsumedMode:                 consumed.ConsumedMode,
+			ConsumedPermanentCount:       consumed.ConsumedPermanentCount,
+			ConsumedTemporaryRewardCount: consumed.ConsumedTemporaryRewardCount,
+			TemporaryRewardExpiresAt:     consumed.ConsumedTemporaryRewardExpiresAt,
+			UsageDate:                    consumed.DailyUsage.UsageDate,
+			Now:                          now.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("refund catch-all access before reward expiry: %v", err)
+		}
+
+		access, err := store.GetEmailCatchAllAccessByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("load catch-all access after successful refund: %v", err)
+		}
+		if access.RemainingCount != 3 || access.TemporaryRewardCount != 2 {
+			t.Fatalf("expected both permanent and temporary balances to be restored before expiry, got %+v", access)
+		}
+
+		consumedAgain, err := store.ConsumeEmailCatchAll(ctx, storage.ConsumeEmailCatchAllInput{
+			UserID:            user.ID,
+			Count:             2,
+			DefaultDailyLimit: policy.DefaultDailyLimit,
+			Now:               now.Add(30 * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("consume catch-all access for expired-refund scenario: %v", err)
+		}
+
+		if err := store.RefundEmailCatchAll(ctx, storage.RefundEmailCatchAllInput{
+			UserID:                       user.ID,
+			Count:                        2,
+			ConsumedMode:                 consumedAgain.ConsumedMode,
+			ConsumedPermanentCount:       consumedAgain.ConsumedPermanentCount,
+			ConsumedTemporaryRewardCount: consumedAgain.ConsumedTemporaryRewardCount,
+			TemporaryRewardExpiresAt:     consumedAgain.ConsumedTemporaryRewardExpiresAt,
+			UsageDate:                    consumedAgain.DailyUsage.UsageDate,
+			Now:                          rewardExpiry.Add(time.Minute),
+		}); err != nil {
+			t.Fatalf("refund catch-all access after reward expiry: %v", err)
+		}
+
+		access, err = store.GetEmailCatchAllAccessByUser(ctx, user.ID)
+		if err != nil {
+			t.Fatalf("reload catch-all access after expired refund: %v", err)
+		}
+		if access.RemainingCount != 3 {
+			t.Fatalf("expected permanent balance to stay 3 after expired refund, got %d", access.RemainingCount)
+		}
+		if access.TemporaryRewardCount != 0 || access.TemporaryRewardExpiresAt != nil {
+			t.Fatalf("expected expired temporary reward not to be restored, got %+v", access)
 		}
 	})
 
@@ -962,7 +1106,7 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 			t.Fatalf("expected remaining count to decrement to 1 after enqueue, got %d", access.RemainingCount)
 		}
 
-		usage, err := store.GetEmailCatchAllDailyUsage(ctx, user.ID, now.Format("2006-01-02"))
+		usage, err := store.GetEmailCatchAllDailyUsage(ctx, user.ID, timeutil.ShanghaiDayKey(now))
 		if err != nil {
 			t.Fatalf("load catch-all usage after enqueue: %v", err)
 		}
@@ -1041,7 +1185,7 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 			t.Fatalf("expected terminal failure to refund remaining count to 2, got %d", access.RemainingCount)
 		}
 
-		usage, err = store.GetEmailCatchAllDailyUsage(ctx, user.ID, now.Format("2006-01-02"))
+		usage, err = store.GetEmailCatchAllDailyUsage(ctx, user.ID, timeutil.ShanghaiDayKey(now))
 		if err != nil {
 			t.Fatalf("reload catch-all usage after failure: %v", err)
 		}

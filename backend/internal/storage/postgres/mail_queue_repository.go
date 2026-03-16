@@ -10,6 +10,7 @@ import (
 
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 type EnqueueMailDeliveryBatchInput = storage.EnqueueMailDeliveryBatchInput
@@ -597,7 +598,7 @@ WHERE key = ?
 // tables inside the current queue transaction so quota and enqueue commit as a
 // single atomic unit.
 func consumeMailQueueCatchAllReservationTx(ctx context.Context, tx *queryTx, userID int64, count int64, defaultDailyLimit int64, now time.Time) (model.MailDeliveryReservation, error) {
-	usageDate := now.Format("2006-01-02")
+	usageDate := timeutil.ShanghaiDayKey(now)
 
 	access, accessExists, err := getEmailCatchAllAccessTx(ctx, tx, userID)
 	if err != nil {
@@ -607,6 +608,14 @@ func consumeMailQueueCatchAllReservationTx(ctx context.Context, tx *queryTx, use
 		access = model.EmailCatchAllAccess{
 			UserID:         userID,
 			RemainingCount: 0,
+		}
+	}
+	if normalizedAccess, changed := normalizeTemporaryRewardAccess(access, now); changed {
+		access = normalizedAccess
+		if accessExists {
+			if err := upsertEmailCatchAllAccessTx(ctx, tx, userID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
+				return model.MailDeliveryReservation{}, err
+			}
 		}
 	}
 
@@ -634,22 +643,36 @@ func consumeMailQueueCatchAllReservationTx(ctx context.Context, tx *queryTx, use
 	}
 
 	consumedMode := "subscription"
+	consumedPermanentCount := int64(0)
+	consumedTemporaryRewardCount := int64(0)
+	consumedTemporaryRewardExpiresAt := access.ActiveTemporaryRewardExpiry(now)
 	subscriptionActive := access.SubscriptionExpiresAt != nil && access.SubscriptionExpiresAt.After(now)
 	if !subscriptionActive {
-		if access.RemainingCount < count {
+		remainingCountToConsume := count
+		activeTemporaryRewardCount := access.ActiveTemporaryRewardCount(now)
+		if activeTemporaryRewardCount > 0 {
+			consumedTemporaryRewardCount = minInt64(activeTemporaryRewardCount, remainingCountToConsume)
+			remainingCountToConsume -= consumedTemporaryRewardCount
+		}
+		if access.RemainingCount < remainingCountToConsume {
 			return model.MailDeliveryReservation{}, storage.ErrEmailCatchAllInsufficientRemainingCount
 		}
-		access.RemainingCount -= count
-		consumedMode = "quantity"
-		if _, err := tx.ExecContext(ctx, `
-UPDATE email_catch_all_access
-SET remaining_count = ?, updated_at = ?
-WHERE user_id = ?
-`,
-			access.RemainingCount,
-			formatTime(now),
-			userID,
-		); err != nil {
+		consumedPermanentCount = remainingCountToConsume
+		access.RemainingCount -= consumedPermanentCount
+		access.TemporaryRewardCount = activeTemporaryRewardCount - consumedTemporaryRewardCount
+		if access.TemporaryRewardCount <= 0 {
+			access.TemporaryRewardCount = 0
+			access.TemporaryRewardExpiresAt = nil
+		}
+		switch {
+		case consumedTemporaryRewardCount > 0 && consumedPermanentCount > 0:
+			consumedMode = "mixed"
+		case consumedTemporaryRewardCount > 0:
+			consumedMode = "temporary_reward"
+		default:
+			consumedMode = "quantity"
+		}
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, userID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
 			return model.MailDeliveryReservation{}, err
 		}
 	}
@@ -688,10 +711,13 @@ INSERT INTO email_catch_all_daily_usage (
 	}
 
 	return model.MailDeliveryReservation{
-		UserID:       userID,
-		Count:        count,
-		ConsumedMode: consumedMode,
-		UsageDate:    usageDate,
+		UserID:                       userID,
+		Count:                        count,
+		ConsumedMode:                 consumedMode,
+		ConsumedPermanentCount:       consumedPermanentCount,
+		ConsumedTemporaryRewardCount: consumedTemporaryRewardCount,
+		TemporaryRewardExpiresAt:     consumedTemporaryRewardExpiresAt,
+		UsageDate:                    usageDate,
 	}, nil
 }
 
@@ -705,6 +731,12 @@ func refundMailQueueCatchAllReservationTx(ctx context.Context, tx *queryTx, rese
 	if !accessExists {
 		return fmt.Errorf("catch-all access state does not exist")
 	}
+	if normalizedAccess, changed := normalizeTemporaryRewardAccess(access, now); changed {
+		access = normalizedAccess
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, reservation.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
+			return err
+		}
+	}
 
 	usage, usageExists, err := getEmailCatchAllDailyUsageTx(ctx, tx, reservation.UserID, reservation.UsageDate)
 	if err != nil {
@@ -714,17 +746,27 @@ func refundMailQueueCatchAllReservationTx(ctx context.Context, tx *queryTx, rese
 		return fmt.Errorf("catch-all daily usage cannot be refunded")
 	}
 
-	if reservation.ConsumedMode == "quantity" {
-		access.RemainingCount += reservation.Count
-		if _, err := tx.ExecContext(ctx, `
-UPDATE email_catch_all_access
-SET remaining_count = ?, updated_at = ?
-WHERE user_id = ?
-`,
-			access.RemainingCount,
-			formatTime(now),
-			reservation.UserID,
-		); err != nil {
+	shouldRestoreTemporaryReward := reservation.ConsumedTemporaryRewardCount > 0 &&
+		reservation.TemporaryRewardExpiresAt != nil &&
+		reservation.TemporaryRewardExpiresAt.After(now)
+	if reservation.ConsumedPermanentCount > 0 {
+		access.RemainingCount += reservation.ConsumedPermanentCount
+	}
+	if shouldRestoreTemporaryReward {
+		currentExpiry := access.ActiveTemporaryRewardExpiry(now)
+		switch {
+		case currentExpiry == nil:
+			expiry := reservation.TemporaryRewardExpiresAt.UTC()
+			access.TemporaryRewardExpiresAt = &expiry
+			access.TemporaryRewardCount = reservation.ConsumedTemporaryRewardCount
+		case currentExpiry.Equal(reservation.TemporaryRewardExpiresAt.UTC()):
+			access.TemporaryRewardCount += reservation.ConsumedTemporaryRewardCount
+		default:
+			return fmt.Errorf("temporary reward expiry mismatch during queue refund")
+		}
+	}
+	if reservation.ConsumedPermanentCount > 0 || shouldRestoreTemporaryReward {
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, reservation.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
 			return err
 		}
 	}

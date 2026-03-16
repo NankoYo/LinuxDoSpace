@@ -18,6 +18,7 @@ import (
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/security"
 	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 const (
@@ -133,14 +134,17 @@ type POWChallengeView struct {
 // POWStatusView returns the current PoW dashboard state rendered under the LDC
 // section on the frontend.
 type POWStatusView struct {
-	FeatureEnabled        bool                      `json:"feature_enabled"`
-	Benefits              []POWBenefitOptionView    `json:"benefits"`
-	DifficultyOptions     []POWDifficultyOptionView `json:"difficulty_options"`
-	MaxDailyCompletions   int                       `json:"max_daily_completions"`
-	CompletedToday        int                       `json:"completed_today"`
-	RemainingToday        int                       `json:"remaining_today"`
-	CurrentRemainingCount int64                     `json:"current_remaining_count"`
-	CurrentChallenge      *POWChallengeView         `json:"current_challenge,omitempty"`
+	FeatureEnabled                  bool                      `json:"feature_enabled"`
+	Benefits                        []POWBenefitOptionView    `json:"benefits"`
+	DifficultyOptions               []POWDifficultyOptionView `json:"difficulty_options"`
+	MaxDailyCompletions             int                       `json:"max_daily_completions"`
+	CompletedToday                  int                       `json:"completed_today"`
+	RemainingToday                  int                       `json:"remaining_today"`
+	CurrentRemainingCount           int64                     `json:"current_remaining_count"`
+	CurrentPermanentRemainingCount  int64                     `json:"current_permanent_remaining_count"`
+	CurrentTemporaryRewardCount     int64                     `json:"current_temporary_reward_count"`
+	CurrentTemporaryRewardExpiresAt *time.Time                `json:"current_temporary_reward_expires_at,omitempty"`
+	CurrentChallenge                *POWChallengeView         `json:"current_challenge,omitempty"`
 }
 
 // GeneratePOWChallengeRequest describes one authenticated request to replace
@@ -160,12 +164,15 @@ type SubmitPOWChallengeRequest struct {
 // SubmitPOWChallengeResult describes the final reward grant after a valid
 // nonce is verified and the claim transaction commits.
 type SubmitPOWChallengeResult struct {
-	Challenge             POWChallengeView `json:"challenge"`
-	GrantedQuantity       int              `json:"granted_quantity"`
-	RewardUnit            string           `json:"reward_unit"`
-	CurrentRemainingCount int64            `json:"current_remaining_count"`
-	CompletedToday        int              `json:"completed_today"`
-	RemainingToday        int              `json:"remaining_today"`
+	Challenge                       POWChallengeView `json:"challenge"`
+	GrantedQuantity                 int              `json:"granted_quantity"`
+	RewardUnit                      string           `json:"reward_unit"`
+	CurrentRemainingCount           int64            `json:"current_remaining_count"`
+	CurrentPermanentRemainingCount  int64            `json:"current_permanent_remaining_count"`
+	CurrentTemporaryRewardCount     int64            `json:"current_temporary_reward_count"`
+	CurrentTemporaryRewardExpiresAt *time.Time       `json:"current_temporary_reward_expires_at,omitempty"`
+	CompletedToday                  int              `json:"completed_today"`
+	RemainingToday                  int              `json:"remaining_today"`
 }
 
 // NewPOWService constructs the proof-of-work reward service.
@@ -176,6 +183,7 @@ func NewPOWService(cfg config.Config, db Store) *POWService {
 // GetMyStatus returns the current active challenge, daily claim counters, and
 // selectable reward metadata for the authenticated user.
 func (s *POWService) GetMyStatus(ctx context.Context, user model.User) (POWStatusView, error) {
+	now := time.Now().UTC()
 	runtimeSettings, err := s.loadRuntimeSettings(ctx)
 	if err != nil {
 		return POWStatusView{}, err
@@ -184,7 +192,7 @@ func (s *POWService) GetMyStatus(ctx context.Context, user model.User) (POWStatu
 	if err != nil {
 		return POWStatusView{}, err
 	}
-	completedToday, err := s.countCompletedToday(ctx, user.ID, time.Now().UTC())
+	completedToday, err := s.countCompletedToday(ctx, user.ID, now)
 	if err != nil {
 		return POWStatusView{}, err
 	}
@@ -201,7 +209,7 @@ func (s *POWService) GetMyStatus(ctx context.Context, user model.User) (POWStatu
 		return POWStatusView{}, InternalError("failed to load current proof-of-work challenge", err)
 	}
 
-	currentRemainingCount, err := s.loadCatchAllRemainingCount(ctx, user.ID)
+	currentPermanentRemainingCount, currentTemporaryRewardCount, currentTemporaryRewardExpiresAt, currentRemainingCount, err := s.loadCatchAllRemainingCount(ctx, user.ID, now)
 	if err != nil {
 		return POWStatusView{}, err
 	}
@@ -212,14 +220,17 @@ func (s *POWService) GetMyStatus(ctx context.Context, user model.User) (POWStatu
 	}
 
 	return POWStatusView{
-		FeatureEnabled:        runtimeSettings.Global.Enabled,
-		Benefits:              s.benefitOptions(runtimeSettings),
-		DifficultyOptions:     s.difficultyOptions(runtimeSettings),
-		MaxDailyCompletions:   effectiveDailyLimit,
-		CompletedToday:        completedToday,
-		RemainingToday:        remainingToday,
-		CurrentRemainingCount: currentRemainingCount,
-		CurrentChallenge:      currentChallenge,
+		FeatureEnabled:                  runtimeSettings.Global.Enabled,
+		Benefits:                        s.benefitOptions(runtimeSettings),
+		DifficultyOptions:               s.difficultyOptions(runtimeSettings),
+		MaxDailyCompletions:             effectiveDailyLimit,
+		CompletedToday:                  completedToday,
+		RemainingToday:                  remainingToday,
+		CurrentRemainingCount:           currentRemainingCount,
+		CurrentPermanentRemainingCount:  currentPermanentRemainingCount,
+		CurrentTemporaryRewardCount:     currentTemporaryRewardCount,
+		CurrentTemporaryRewardExpiresAt: currentTemporaryRewardExpiresAt,
+		CurrentChallenge:                currentChallenge,
 	}, nil
 }
 
@@ -359,14 +370,15 @@ func (s *POWService) SubmitChallenge(ctx context.Context, user model.User, reque
 	}
 
 	now := time.Now().UTC()
-	startOfDay := utcStartOfDay(now)
-	endOfDay := startOfDay.Add(24 * time.Hour)
+	startOfDay, endOfDay := timeutil.ShanghaiDayBoundsUTC(now)
+	rewardExpiresAt := timeutil.NextShanghaiMidnightUTC(now)
 
 	claimedChallenge, access, claimErr := s.db.ClaimPOWChallengeReward(ctx, storage.ClaimPOWChallengeRewardInput{
 		UserID:               user.ID,
 		ChallengeID:          challenge.ID,
 		BaseReward:           baseReward,
 		RewardQuantity:       rewardQuantity,
+		RewardExpiresAt:      rewardExpiresAt,
 		SolutionNonce:        nonce,
 		SolutionHashHex:      hashHex,
 		ClaimedAt:            now,
@@ -400,7 +412,7 @@ func (s *POWService) SubmitChallenge(ctx context.Context, user model.User, reque
 		"benefit_key":             claimedChallenge.BenefitKey,
 		"difficulty":              claimedChallenge.Difficulty,
 		"granted_quantity":        claimedChallenge.RewardQuantity,
-		"current_remaining_count": access.RemainingCount,
+		"current_remaining_count": access.TotalRemainingCount(now),
 	})
 	logAuditWriteFailure("pow.challenge.claim", s.db.WriteAuditLog(ctx, storage.AuditLogInput{
 		ActorUserID:  &user.ID,
@@ -411,12 +423,15 @@ func (s *POWService) SubmitChallenge(ctx context.Context, user model.User, reque
 	}))
 
 	return SubmitPOWChallengeResult{
-		Challenge:             s.challengeView(claimedChallenge),
-		GrantedQuantity:       claimedChallenge.RewardQuantity,
-		RewardUnit:            claimedChallenge.RewardUnit,
-		CurrentRemainingCount: access.RemainingCount,
-		CompletedToday:        completedToday,
-		RemainingToday:        remainingToday,
+		Challenge:                       s.challengeView(claimedChallenge),
+		GrantedQuantity:                 claimedChallenge.RewardQuantity,
+		RewardUnit:                      claimedChallenge.RewardUnit,
+		CurrentRemainingCount:           access.TotalRemainingCount(now),
+		CurrentPermanentRemainingCount:  access.RemainingCount,
+		CurrentTemporaryRewardCount:     access.ActiveTemporaryRewardCount(now),
+		CurrentTemporaryRewardExpiresAt: access.ActiveTemporaryRewardExpiry(now),
+		CompletedToday:                  completedToday,
+		RemainingToday:                  remainingToday,
 	}, nil
 }
 
@@ -450,10 +465,9 @@ func (s *POWService) challengeView(item model.POWChallenge) POWChallengeView {
 }
 
 // countCompletedToday returns how many PoW rewards the current user already
-// claimed during the UTC day.
+// claimed during the current Shanghai-local day.
 func (s *POWService) countCompletedToday(ctx context.Context, userID int64, now time.Time) (int, error) {
-	start := utcStartOfDay(now.UTC())
-	end := start.Add(24 * time.Hour)
+	start, end := timeutil.ShanghaiDayBoundsUTC(now.UTC())
 	count, err := s.db.CountClaimedPOWChallengesByUser(ctx, userID, start, end)
 	if err != nil {
 		return 0, InternalError("failed to count today's proof-of-work rewards", err)
@@ -461,17 +475,18 @@ func (s *POWService) countCompletedToday(ctx context.Context, userID int64, now 
 	return count, nil
 }
 
-// loadCatchAllRemainingCount reads the current mutable remaining count so the
-// PoW dashboard can immediately show the reward effect.
-func (s *POWService) loadCatchAllRemainingCount(ctx context.Context, userID int64) (int64, error) {
+// loadCatchAllRemainingCount reads both the permanent purchased balance and the
+// still-active temporary PoW reward balance so the dashboard can explain the
+// combined total precisely.
+func (s *POWService) loadCatchAllRemainingCount(ctx context.Context, userID int64, now time.Time) (int64, int64, *time.Time, int64, error) {
 	access, err := s.db.GetEmailCatchAllAccessByUser(ctx, userID)
 	if err != nil {
 		if storage.IsNotFound(err) {
-			return 0, nil
+			return 0, 0, nil, 0, nil
 		}
-		return 0, InternalError("failed to load catch-all access state", err)
+		return 0, 0, nil, 0, InternalError("failed to load catch-all access state", err)
 	}
-	return access.RemainingCount, nil
+	return access.RemainingCount, access.ActiveTemporaryRewardCount(now), access.ActiveTemporaryRewardExpiry(now), access.TotalRemainingCount(now), nil
 }
 
 // verifyPOWChallenge recomputes the Argon2 hash for one submitted nonce and
@@ -554,10 +569,4 @@ func randomHex(size int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buffer), nil
-}
-
-// utcStartOfDay returns the canonical start of the UTC day containing `value`.
-func utcStartOfDay(value time.Time) time.Time {
-	utcValue := value.UTC()
-	return time.Date(utcValue.Year(), utcValue.Month(), utcValue.Day(), 0, 0, 0, 0, time.UTC)
 }

@@ -8,6 +8,7 @@ import (
 
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 type UpsertEmailCatchAllAccessInput = storage.UpsertEmailCatchAllAccessInput
@@ -22,6 +23,8 @@ SELECT
     user_id,
     subscription_expires_at,
     remaining_count,
+    temporary_reward_count,
+    temporary_reward_expires_at,
     daily_limit_override,
     created_at,
     updated_at
@@ -40,19 +43,25 @@ INSERT INTO email_catch_all_access (
     user_id,
     subscription_expires_at,
     remaining_count,
+    temporary_reward_count,
+    temporary_reward_expires_at,
     daily_limit_override,
     created_at,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(user_id) DO UPDATE SET
     subscription_expires_at = excluded.subscription_expires_at,
     remaining_count = excluded.remaining_count,
+    temporary_reward_count = excluded.temporary_reward_count,
+    temporary_reward_expires_at = excluded.temporary_reward_expires_at,
     daily_limit_override = excluded.daily_limit_override,
     updated_at = excluded.updated_at
 RETURNING
     user_id,
     subscription_expires_at,
     remaining_count,
+    temporary_reward_count,
+    temporary_reward_expires_at,
     daily_limit_override,
     created_at,
     updated_at
@@ -60,6 +69,8 @@ RETURNING
 		input.UserID,
 		formatNullableTime(input.SubscriptionExpiresAt),
 		input.RemainingCount,
+		input.TemporaryRewardCount,
+		formatNullableTime(input.TemporaryRewardExpiresAt),
 		input.DailyLimitOverride,
 		formatTime(now),
 		formatTime(now),
@@ -67,7 +78,7 @@ RETURNING
 	return scanEmailCatchAllAccess(row)
 }
 
-// GetEmailCatchAllDailyUsage loads the UTC-day catch-all consumption row for
+// GetEmailCatchAllDailyUsage loads the Shanghai-day catch-all consumption row for
 // one user.
 func (s *Store) GetEmailCatchAllDailyUsage(ctx context.Context, userID int64, usageDate string) (model.EmailCatchAllDailyUsage, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -91,7 +102,7 @@ func (s *Store) ConsumeEmailCatchAll(ctx context.Context, input ConsumeEmailCatc
 	}
 
 	now := input.Now.UTC()
-	usageDate := now.Format("2006-01-02")
+	usageDate := timeutil.ShanghaiDayKey(now)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.EmailCatchAllConsumeResult{}, err
@@ -106,6 +117,14 @@ func (s *Store) ConsumeEmailCatchAll(ctx context.Context, input ConsumeEmailCatc
 		access = model.EmailCatchAllAccess{
 			UserID:         input.UserID,
 			RemainingCount: 0,
+		}
+	}
+	if normalizedAccess, changed := normalizeTemporaryRewardAccess(access, now); changed {
+		access = normalizedAccess
+		if accessExists {
+			if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
+				return model.EmailCatchAllConsumeResult{}, err
+			}
 		}
 	}
 
@@ -133,18 +152,36 @@ func (s *Store) ConsumeEmailCatchAll(ctx context.Context, input ConsumeEmailCatc
 	}
 
 	consumedMode := "subscription"
+	consumedPermanentCount := int64(0)
+	consumedTemporaryRewardCount := int64(0)
+	consumedTemporaryRewardExpiresAt := access.ActiveTemporaryRewardExpiry(now)
 	subscriptionActive := access.SubscriptionExpiresAt != nil && access.SubscriptionExpiresAt.After(now)
 	if !subscriptionActive {
-		if access.RemainingCount < input.Count {
+		remainingCountToConsume := input.Count
+		activeTemporaryRewardCount := access.ActiveTemporaryRewardCount(now)
+		if activeTemporaryRewardCount > 0 {
+			consumedTemporaryRewardCount = minInt64(activeTemporaryRewardCount, remainingCountToConsume)
+			remainingCountToConsume -= consumedTemporaryRewardCount
+		}
+		if access.RemainingCount < remainingCountToConsume {
 			return model.EmailCatchAllConsumeResult{}, storage.ErrEmailCatchAllInsufficientRemainingCount
 		}
-		access.RemainingCount -= input.Count
-		consumedMode = "quantity"
-		if _, err := tx.ExecContext(ctx, `
-UPDATE email_catch_all_access
-SET remaining_count = ?, updated_at = ?
-WHERE user_id = ?
-`, access.RemainingCount, formatTime(now), input.UserID); err != nil {
+		consumedPermanentCount = remainingCountToConsume
+		access.RemainingCount -= consumedPermanentCount
+		access.TemporaryRewardCount = activeTemporaryRewardCount - consumedTemporaryRewardCount
+		if access.TemporaryRewardCount <= 0 {
+			access.TemporaryRewardCount = 0
+			access.TemporaryRewardExpiresAt = nil
+		}
+		switch {
+		case consumedTemporaryRewardCount > 0 && consumedPermanentCount > 0:
+			consumedMode = "mixed"
+		case consumedTemporaryRewardCount > 0:
+			consumedMode = "temporary_reward"
+		default:
+			consumedMode = "quantity"
+		}
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
 			return model.EmailCatchAllConsumeResult{}, err
 		}
 		access.UpdatedAt = now
@@ -193,10 +230,13 @@ RETURNING
 	}
 
 	return model.EmailCatchAllConsumeResult{
-		Access:              access,
-		DailyUsage:          usage,
-		EffectiveDailyLimit: effectiveDailyLimit,
-		ConsumedMode:        consumedMode,
+		Access:                           access,
+		DailyUsage:                       usage,
+		EffectiveDailyLimit:              effectiveDailyLimit,
+		ConsumedMode:                     consumedMode,
+		ConsumedPermanentCount:           consumedPermanentCount,
+		ConsumedTemporaryRewardCount:     consumedTemporaryRewardCount,
+		ConsumedTemporaryRewardExpiresAt: consumedTemporaryRewardExpiresAt,
 	}, nil
 }
 
@@ -224,6 +264,12 @@ func (s *Store) RefundEmailCatchAll(ctx context.Context, input RefundEmailCatchA
 	if !accessExists {
 		return fmt.Errorf("catch-all access state does not exist")
 	}
+	if normalizedAccess, changed := normalizeTemporaryRewardAccess(access, now); changed {
+		access = normalizedAccess
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
+			return err
+		}
+	}
 
 	usage, usageExists, err := getEmailCatchAllDailyUsageTx(ctx, tx, input.UserID, input.UsageDate)
 	if err != nil {
@@ -233,13 +279,27 @@ func (s *Store) RefundEmailCatchAll(ctx context.Context, input RefundEmailCatchA
 		return fmt.Errorf("catch-all daily usage cannot be refunded")
 	}
 
-	if input.ConsumedMode == "quantity" {
-		access.RemainingCount += input.Count
-		if _, err := tx.ExecContext(ctx, `
-UPDATE email_catch_all_access
-SET remaining_count = ?, updated_at = ?
-WHERE user_id = ?
-`, access.RemainingCount, formatTime(now), input.UserID); err != nil {
+	shouldRestoreTemporaryReward := input.ConsumedTemporaryRewardCount > 0 &&
+		input.TemporaryRewardExpiresAt != nil &&
+		input.TemporaryRewardExpiresAt.After(now)
+	if input.ConsumedPermanentCount > 0 {
+		access.RemainingCount += input.ConsumedPermanentCount
+	}
+	if shouldRestoreTemporaryReward {
+		currentExpiry := access.ActiveTemporaryRewardExpiry(now)
+		switch {
+		case currentExpiry == nil:
+			expiry := input.TemporaryRewardExpiresAt.UTC()
+			access.TemporaryRewardExpiresAt = &expiry
+			access.TemporaryRewardCount = input.ConsumedTemporaryRewardCount
+		case currentExpiry.Equal(input.TemporaryRewardExpiresAt.UTC()):
+			access.TemporaryRewardCount += input.ConsumedTemporaryRewardCount
+		default:
+			return fmt.Errorf("temporary reward expiry mismatch during refund")
+		}
+	}
+	if input.ConsumedPermanentCount > 0 || shouldRestoreTemporaryReward {
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, access.RemainingCount, access.TemporaryRewardCount, access.TemporaryRewardExpiresAt, access.DailyLimitOverride, now); err != nil {
 			return err
 		}
 	}
@@ -262,6 +322,8 @@ SELECT
     user_id,
     subscription_expires_at,
     remaining_count,
+    temporary_reward_count,
+    temporary_reward_expires_at,
     daily_limit_override,
     created_at,
     updated_at
@@ -307,6 +369,7 @@ WHERE user_id = ? AND usage_date = ?
 func scanEmailCatchAllAccess(scanner interface{ Scan(dest ...any) error }) (model.EmailCatchAllAccess, error) {
 	var item model.EmailCatchAllAccess
 	var subscriptionExpiresAt sql.NullString
+	var temporaryRewardExpiresAt sql.NullString
 	var dailyLimitOverride sql.NullInt64
 	var createdAt string
 	var updatedAt string
@@ -315,6 +378,8 @@ func scanEmailCatchAllAccess(scanner interface{ Scan(dest ...any) error }) (mode
 		&item.UserID,
 		&subscriptionExpiresAt,
 		&item.RemainingCount,
+		&item.TemporaryRewardCount,
+		&temporaryRewardExpiresAt,
 		&dailyLimitOverride,
 		&createdAt,
 		&updatedAt,
@@ -332,6 +397,10 @@ func scanEmailCatchAllAccess(scanner interface{ Scan(dest ...any) error }) (mode
 	if err != nil {
 		return model.EmailCatchAllAccess{}, err
 	}
+	item.TemporaryRewardExpiresAt, err = parseNullableTime(temporaryRewardExpiresAt)
+	if err != nil {
+		return model.EmailCatchAllAccess{}, err
+	}
 	if item.CreatedAt, err = parseTime(createdAt); err != nil {
 		return model.EmailCatchAllAccess{}, err
 	}
@@ -339,6 +408,60 @@ func scanEmailCatchAllAccess(scanner interface{ Scan(dest ...any) error }) (mode
 		return model.EmailCatchAllAccess{}, err
 	}
 	return item, nil
+}
+
+// upsertEmailCatchAllAccessTx persists one fully normalized mutable catch-all
+// access snapshot inside the current transaction so storage paths can share one
+// consistent write contract.
+func upsertEmailCatchAllAccessTx(ctx context.Context, tx *sql.Tx, userID int64, subscriptionExpiresAt *time.Time, remainingCount int64, temporaryRewardCount int64, temporaryRewardExpiresAt *time.Time, dailyLimitOverride *int64, now time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO email_catch_all_access (
+    user_id,
+    subscription_expires_at,
+    remaining_count,
+    temporary_reward_count,
+    temporary_reward_expires_at,
+    daily_limit_override,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(user_id) DO UPDATE SET
+    subscription_expires_at = excluded.subscription_expires_at,
+    remaining_count = excluded.remaining_count,
+    temporary_reward_count = excluded.temporary_reward_count,
+    temporary_reward_expires_at = excluded.temporary_reward_expires_at,
+    daily_limit_override = excluded.daily_limit_override,
+    updated_at = excluded.updated_at
+`,
+		userID,
+		formatNullableTime(subscriptionExpiresAt),
+		remainingCount,
+		temporaryRewardCount,
+		formatNullableTime(temporaryRewardExpiresAt),
+		normalizeNullableInt64(dailyLimitOverride),
+		formatTime(now),
+		formatTime(now),
+	)
+	return err
+}
+
+// normalizeTemporaryRewardAccess clears expired temporary-reward state from the
+// mutable access snapshot and reports whether a persistence write is needed.
+func normalizeTemporaryRewardAccess(access model.EmailCatchAllAccess, now time.Time) (model.EmailCatchAllAccess, bool) {
+	normalized := access.NormalizeTemporaryReward(now)
+	changed := normalized.TemporaryRewardCount != access.TemporaryRewardCount
+	if !changed && ((normalized.TemporaryRewardExpiresAt == nil) != (access.TemporaryRewardExpiresAt == nil)) {
+		changed = true
+	}
+	return normalized, changed
+}
+
+// minInt64 keeps the mixed temporary/permanent balance deduction logic readable.
+func minInt64(left int64, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 // scanEmailCatchAllDailyUsage maps one per-day usage row into the model

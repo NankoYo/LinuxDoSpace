@@ -112,16 +112,19 @@ type UserPermissionView struct {
 // EmailCatchAllAccessView describes the currently effective runtime allowance
 // for one catch-all mailbox, independent of the immutable quantity ledger.
 type EmailCatchAllAccessView struct {
-	AccessMode            string     `json:"access_mode"`
-	SubscriptionActive    bool       `json:"subscription_active"`
-	SubscriptionExpiresAt *time.Time `json:"subscription_expires_at,omitempty"`
-	RemainingCount        int64      `json:"remaining_count"`
-	DailyUsageDate        string     `json:"daily_usage_date"`
-	DailyUsedCount        int64      `json:"daily_used_count"`
-	DailyRemainingCount   int64      `json:"daily_remaining_count"`
-	EffectiveDailyLimit   int64      `json:"effective_daily_limit"`
-	HasAccess             bool       `json:"has_access"`
-	DeliveryAvailable     bool       `json:"delivery_available"`
+	AccessMode               string     `json:"access_mode"`
+	SubscriptionActive       bool       `json:"subscription_active"`
+	SubscriptionExpiresAt    *time.Time `json:"subscription_expires_at,omitempty"`
+	RemainingCount           int64      `json:"remaining_count"`
+	PermanentRemainingCount  int64      `json:"permanent_remaining_count"`
+	TemporaryRewardCount     int64      `json:"temporary_reward_count"`
+	TemporaryRewardExpiresAt *time.Time `json:"temporary_reward_expires_at,omitempty"`
+	DailyUsageDate           string     `json:"daily_usage_date"`
+	DailyUsedCount           int64      `json:"daily_used_count"`
+	DailyRemainingCount      int64      `json:"daily_remaining_count"`
+	EffectiveDailyLimit      int64      `json:"effective_daily_limit"`
+	HasAccess                bool       `json:"has_access"`
+	DeliveryAvailable        bool       `json:"delivery_available"`
 }
 
 // UserEmailRouteView describes one user-visible email forwarding row shown on

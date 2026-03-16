@@ -225,11 +225,13 @@ func (s *Store) ClaimPOWChallengeReward(ctx context.Context, input ClaimPOWChall
 	if !found {
 		access = model.EmailCatchAllAccess{UserID: input.UserID}
 	}
+	access = access.NormalizeTemporaryReward(now)
 
 	switch challenge.ResourceKey {
 	case model.POWBenefitEmailCatchAllRemainingCount:
-		nextRemainingCount := access.RemainingCount + int64(input.RewardQuantity)
-		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, nextRemainingCount, access.DailyLimitOverride, now); err != nil {
+		nextTemporaryRewardCount := access.ActiveTemporaryRewardCount(now) + int64(input.RewardQuantity)
+		rewardExpiresAt := input.RewardExpiresAt.UTC()
+		if err := upsertEmailCatchAllAccessTx(ctx, tx, input.UserID, access.SubscriptionExpiresAt, access.RemainingCount, nextTemporaryRewardCount, &rewardExpiresAt, access.DailyLimitOverride, now); err != nil {
 			return model.POWChallenge{}, model.EmailCatchAllAccess{}, err
 		}
 		access, _, err = getEmailCatchAllAccessTx(ctx, tx, input.UserID)
@@ -253,7 +255,7 @@ INSERT INTO quantity_records (
     expires_at,
     created_by_user_id,
     created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
 	`,
 		input.UserID,
 		challenge.ResourceKey,
@@ -263,6 +265,7 @@ INSERT INTO quantity_records (
 		strings.TrimSpace(input.QuantityRecordReason),
 		powQuantityReferenceType,
 		strconv.FormatInt(challenge.ID, 10),
+		formatTime(input.RewardExpiresAt.UTC()),
 		formatTime(now),
 	)
 	if err != nil {

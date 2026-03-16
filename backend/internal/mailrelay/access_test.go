@@ -41,7 +41,9 @@ func TestDBCatchAllAccessManagerMapsStorageState(t *testing.T) {
 	}
 
 	manager := NewDBCatchAllAccessManager(store)
-	fixedNow := time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC)
+	// 15:59 UTC equals 23:59 in Asia/Shanghai, so adding two minutes crosses
+	// the service's real daily-reset boundary instead of merely adding 24 hours.
+	fixedNow := time.Date(2026, 3, 12, 15, 59, 0, 0, time.UTC)
 	manager.now = func() time.Time { return fixedNow }
 
 	reservation, err := manager.Reserve(ctx, user.ID, 1)
@@ -65,7 +67,7 @@ func TestDBCatchAllAccessManagerMapsStorageState(t *testing.T) {
 		t.Fatalf("expected daily limit exceeded error, got %v", err)
 	}
 
-	manager.now = func() time.Time { return fixedNow.Add(24 * time.Hour) }
+	manager.now = func() time.Time { return fixedNow.Add(2 * time.Minute) }
 	if _, err := manager.Reserve(ctx, user.ID, 1); !errors.Is(err, ErrCatchAllAccessUnavailable) {
 		t.Fatalf("expected access unavailable after remaining count exhaustion, got %v", err)
 	}

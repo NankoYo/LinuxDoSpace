@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
+
+	"linuxdospace/backend/internal/storage"
 )
 
 // TestUpdateEmailCatchAllAccessForUser verifies that administrators can grant
@@ -20,6 +23,15 @@ func TestUpdateEmailCatchAllAccessForUser(t *testing.T) {
 	service := NewPermissionService(newPermissionEmailTestConfig(), store, nil)
 	if _, err := service.SubmitPermissionApplication(ctx, user, SubmitPermissionApplicationRequest{Key: PermissionKeyEmailCatchAll}); err != nil {
 		t.Fatalf("submit catch-all permission application: %v", err)
+	}
+
+	temporaryRewardExpiresAt := time.Now().UTC().Add(6 * time.Hour)
+	if _, err := store.UpsertEmailCatchAllAccess(ctx, storage.UpsertEmailCatchAllAccessInput{
+		UserID:                   user.ID,
+		TemporaryRewardCount:     7,
+		TemporaryRewardExpiresAt: &temporaryRewardExpiresAt,
+	}); err != nil {
+		t.Fatalf("seed temporary reward balance before admin update: %v", err)
 	}
 
 	customDailyLimit := int64(321)
@@ -45,8 +57,20 @@ func TestUpdateEmailCatchAllAccessForUser(t *testing.T) {
 	if !view.CatchAllAccess.SubscriptionActive {
 		t.Fatalf("expected subscription to be active")
 	}
-	if view.CatchAllAccess.RemainingCount != 50 {
-		t.Fatalf("expected remaining count 50, got %d", view.CatchAllAccess.RemainingCount)
+	if view.CatchAllAccess.RemainingCount != 57 {
+		t.Fatalf("expected total remaining count 57, got %d", view.CatchAllAccess.RemainingCount)
+	}
+	if view.CatchAllAccess.PermanentRemainingCount != 50 {
+		t.Fatalf("expected permanent remaining count 50, got %d", view.CatchAllAccess.PermanentRemainingCount)
+	}
+	if view.CatchAllAccess.TemporaryRewardCount != 7 {
+		t.Fatalf("expected temporary reward count 7, got %d", view.CatchAllAccess.TemporaryRewardCount)
+	}
+	if view.CatchAllAccess.TemporaryRewardExpiresAt == nil {
+		t.Fatalf("expected temporary reward expiry to be preserved")
+	}
+	if !view.CatchAllAccess.TemporaryRewardExpiresAt.Equal(temporaryRewardExpiresAt) {
+		t.Fatalf("expected temporary reward expiry %s, got %s", temporaryRewardExpiresAt.Format(time.RFC3339), view.CatchAllAccess.TemporaryRewardExpiresAt.Format(time.RFC3339))
 	}
 	if view.CatchAllAccess.EffectiveDailyLimit != customDailyLimit {
 		t.Fatalf("expected effective daily limit %d, got %d", customDailyLimit, view.CatchAllAccess.EffectiveDailyLimit)

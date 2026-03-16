@@ -18,7 +18,7 @@ var (
 
 	// ErrCatchAllDailyLimitExceeded means the owner already reached today's
 	// effective per-user cap and new catch-all deliveries must wait for the next
-	// UTC day.
+	// Shanghai-local day.
 	ErrCatchAllDailyLimitExceeded = errors.New("catch-all daily limit exceeded")
 )
 
@@ -33,10 +33,13 @@ type CatchAllAccessStore interface {
 // CatchAllUsageReservation records one successfully reserved catch-all usage
 // unit so SMTP forwarding can roll it back when the upstream delivery fails.
 type CatchAllUsageReservation struct {
-	UserID       int64
-	Count        int64
-	ConsumedMode string
-	UsageDate    string
+	UserID                       int64
+	Count                        int64
+	ConsumedMode                 string
+	ConsumedPermanentCount       int64
+	ConsumedTemporaryRewardCount int64
+	TemporaryRewardExpiresAt     *time.Time
+	UsageDate                    string
 }
 
 // CatchAllAccessManager reserves catch-all delivery allowance for accepted SMTP
@@ -89,10 +92,13 @@ func (m *DBCatchAllAccessManager) Reserve(ctx context.Context, userID int64, cou
 	})
 	if err == nil {
 		return CatchAllUsageReservation{
-			UserID:       userID,
-			Count:        count,
-			ConsumedMode: result.ConsumedMode,
-			UsageDate:    result.DailyUsage.UsageDate,
+			UserID:                       userID,
+			Count:                        count,
+			ConsumedMode:                 result.ConsumedMode,
+			ConsumedPermanentCount:       result.ConsumedPermanentCount,
+			ConsumedTemporaryRewardCount: result.ConsumedTemporaryRewardCount,
+			TemporaryRewardExpiresAt:     result.ConsumedTemporaryRewardExpiresAt,
+			UsageDate:                    result.DailyUsage.UsageDate,
 		}, nil
 	}
 	switch {
@@ -112,10 +118,13 @@ func (m *DBCatchAllAccessManager) Release(ctx context.Context, reservation Catch
 		return nil
 	}
 	return m.store.RefundEmailCatchAll(ctx, storage.RefundEmailCatchAllInput{
-		UserID:       reservation.UserID,
-		Count:        reservation.Count,
-		ConsumedMode: reservation.ConsumedMode,
-		UsageDate:    reservation.UsageDate,
-		Now:          m.now(),
+		UserID:                       reservation.UserID,
+		Count:                        reservation.Count,
+		ConsumedMode:                 reservation.ConsumedMode,
+		ConsumedPermanentCount:       reservation.ConsumedPermanentCount,
+		ConsumedTemporaryRewardCount: reservation.ConsumedTemporaryRewardCount,
+		TemporaryRewardExpiresAt:     reservation.TemporaryRewardExpiresAt,
+		UsageDate:                    reservation.UsageDate,
+		Now:                          m.now(),
 	})
 }

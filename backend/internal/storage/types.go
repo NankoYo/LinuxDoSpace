@@ -187,10 +187,12 @@ type CreateQuantityRecordInput struct {
 // UpsertEmailCatchAllAccessInput describes the mutable runtime access state
 // for one user's catch-all mailbox delivery allowance.
 type UpsertEmailCatchAllAccessInput struct {
-	UserID                int64
-	SubscriptionExpiresAt *time.Time
-	RemainingCount        int64
-	DailyLimitOverride    *int64
+	UserID                   int64
+	SubscriptionExpiresAt    *time.Time
+	RemainingCount           int64
+	TemporaryRewardCount     int64
+	TemporaryRewardExpiresAt *time.Time
+	DailyLimitOverride       *int64
 }
 
 // ConsumeEmailCatchAllInput describes one atomic usage-reservation request
@@ -205,11 +207,14 @@ type ConsumeEmailCatchAllInput struct {
 // RefundEmailCatchAllInput describes one compensating rollback of a previous
 // catch-all usage reservation after SMTP forwarding fails.
 type RefundEmailCatchAllInput struct {
-	UserID       int64
-	Count        int64
-	ConsumedMode string
-	UsageDate    string
-	Now          time.Time
+	UserID                       int64
+	Count                        int64
+	ConsumedMode                 string
+	ConsumedPermanentCount       int64
+	ConsumedTemporaryRewardCount int64
+	TemporaryRewardExpiresAt     *time.Time
+	UsageDate                    string
+	Now                          time.Time
 }
 
 // EnqueueMailDeliveryGroupInput describes one final outbound delivery action
@@ -355,6 +360,7 @@ type ClaimPOWChallengeRewardInput struct {
 	ChallengeID          int64
 	BaseReward           int
 	RewardQuantity       int
+	RewardExpiresAt      time.Time
 	SolutionNonce        string
 	SolutionHashHex      string
 	ClaimedAt            time.Time

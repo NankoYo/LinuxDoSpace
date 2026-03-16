@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"strconv"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 
 	"linuxdospace/backend/internal/model"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 // TestPOWServiceCreateAndClaimChallenge verifies the full happy path from
@@ -49,6 +51,19 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if result.CurrentRemainingCount != int64(result.GrantedQuantity) {
 		t.Fatalf("expected remaining count %d, got %d", result.GrantedQuantity, result.CurrentRemainingCount)
 	}
+	if result.CurrentPermanentRemainingCount != 0 {
+		t.Fatalf("expected permanent remaining count 0 after PoW reward, got %d", result.CurrentPermanentRemainingCount)
+	}
+	if result.CurrentTemporaryRewardCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected temporary reward count %d, got %d", result.GrantedQuantity, result.CurrentTemporaryRewardCount)
+	}
+	expectedExpiry := timeutil.NextShanghaiMidnightUTC(time.Now().UTC())
+	if result.CurrentTemporaryRewardExpiresAt == nil {
+		t.Fatalf("expected temporary reward expiry to be set")
+	}
+	if !result.CurrentTemporaryRewardExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected temporary reward expiry %s, got %s", expectedExpiry.Format(time.RFC3339), result.CurrentTemporaryRewardExpiresAt.Format(time.RFC3339))
+	}
 	if result.CompletedToday != 1 || result.RemainingToday != 4 {
 		t.Fatalf("unexpected day counters after claim: %+v", result)
 	}
@@ -57,8 +72,17 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load catch-all access after pow claim: %v", err)
 	}
-	if access.RemainingCount != int64(result.GrantedQuantity) {
-		t.Fatalf("expected persisted remaining count %d, got %d", result.GrantedQuantity, access.RemainingCount)
+	if access.RemainingCount != 0 {
+		t.Fatalf("expected persisted permanent remaining count 0, got %d", access.RemainingCount)
+	}
+	if access.TemporaryRewardCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected persisted temporary reward count %d, got %d", result.GrantedQuantity, access.TemporaryRewardCount)
+	}
+	if access.TemporaryRewardExpiresAt == nil {
+		t.Fatalf("expected persisted temporary reward expiry to be set")
+	}
+	if !access.TemporaryRewardExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected persisted temporary reward expiry %s, got %s", expectedExpiry.Format(time.RFC3339), access.TemporaryRewardExpiresAt.Format(time.RFC3339))
 	}
 
 	records, err := store.ListQuantityRecordsByUser(ctx, user.ID)
@@ -74,6 +98,12 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	if records[0].Delta != result.GrantedQuantity {
 		t.Fatalf("expected quantity delta %d, got %d", result.GrantedQuantity, records[0].Delta)
 	}
+	if records[0].ExpiresAt == nil {
+		t.Fatalf("expected quantity record to carry temporary reward expiry")
+	}
+	if !records[0].ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected quantity record expiry %s, got %s", expectedExpiry.Format(time.RFC3339), records[0].ExpiresAt.Format(time.RFC3339))
+	}
 
 	status, err := service.GetMyStatus(ctx, user)
 	if err != nil {
@@ -84,6 +114,15 @@ func TestPOWServiceCreateAndClaimChallenge(t *testing.T) {
 	}
 	if status.CurrentRemainingCount != int64(result.GrantedQuantity) {
 		t.Fatalf("expected status remaining count %d, got %d", result.GrantedQuantity, status.CurrentRemainingCount)
+	}
+	if status.CurrentPermanentRemainingCount != 0 {
+		t.Fatalf("expected status permanent remaining count 0, got %d", status.CurrentPermanentRemainingCount)
+	}
+	if status.CurrentTemporaryRewardCount != int64(result.GrantedQuantity) {
+		t.Fatalf("expected status temporary reward count %d, got %d", result.GrantedQuantity, status.CurrentTemporaryRewardCount)
+	}
+	if status.CurrentTemporaryRewardExpiresAt == nil || !status.CurrentTemporaryRewardExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected status temporary reward expiry %s, got %+v", expectedExpiry.Format(time.RFC3339), status.CurrentTemporaryRewardExpiresAt)
 	}
 	if status.CompletedToday != 1 || status.RemainingToday != 4 {
 		t.Fatalf("unexpected status counters after claim: %+v", status)
@@ -130,7 +169,7 @@ func TestPOWServiceNewChallengeSupersedesOldOne(t *testing.T) {
 }
 
 // TestPOWServiceStopsAfterFiveDailyClaims verifies that one user cannot keep
-// farming the PoW reward beyond the configured UTC-day cap.
+// farming the PoW reward beyond the configured Shanghai-local day cap.
 func TestPOWServiceStopsAfterFiveDailyClaims(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)

@@ -9,13 +9,14 @@ import (
 
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/storage"
+	"linuxdospace/backend/internal/timeutil"
 )
 
 // loadEmailCatchAllAccessView resolves the effective catch-all runtime
-// allowance for one user using only server-side UTC time.
+// allowance for one user using only server-side Shanghai day boundaries.
 func (s *PermissionService) loadEmailCatchAllAccessView(ctx context.Context, userID int64, policy model.PermissionPolicy, permissionApproved bool) (*EmailCatchAllAccessView, error) {
 	now := time.Now().UTC()
-	usageDate := now.Format("2006-01-02")
+	usageDate := timeutil.ShanghaiDayKey(now)
 
 	access, err := s.db.GetEmailCatchAllAccessByUser(ctx, userID)
 	if err != nil {
@@ -24,6 +25,7 @@ func (s *PermissionService) loadEmailCatchAllAccessView(ctx context.Context, use
 		}
 		access = model.EmailCatchAllAccess{UserID: userID}
 	}
+	access = access.NormalizeTemporaryReward(now)
 
 	usage, err := s.db.GetEmailCatchAllDailyUsage(ctx, userID, usageDate)
 	if err != nil {
@@ -46,10 +48,18 @@ func (s *PermissionService) loadEmailCatchAllAccessView(ctx context.Context, use
 	}
 
 	subscriptionActive := access.SubscriptionExpiresAt != nil && access.SubscriptionExpiresAt.After(now)
+	activeTemporaryRewardCount := access.ActiveTemporaryRewardCount(now)
+	activeTemporaryRewardExpiresAt := access.ActiveTemporaryRewardExpiry(now)
 	accessMode := "none"
 	hasAccess := false
 	if subscriptionActive {
 		accessMode = "subscription"
+		hasAccess = true
+	} else if activeTemporaryRewardCount > 0 && access.RemainingCount > 0 {
+		accessMode = "reward_then_quantity"
+		hasAccess = true
+	} else if activeTemporaryRewardCount > 0 {
+		accessMode = "temporary_reward"
 		hasAccess = true
 	} else if access.RemainingCount > 0 {
 		accessMode = "quantity"
@@ -62,16 +72,19 @@ func (s *PermissionService) loadEmailCatchAllAccessView(ctx context.Context, use
 	}
 
 	return &EmailCatchAllAccessView{
-		AccessMode:            accessMode,
-		SubscriptionActive:    subscriptionActive,
-		SubscriptionExpiresAt: access.SubscriptionExpiresAt,
-		RemainingCount:        access.RemainingCount,
-		DailyUsageDate:        usageDate,
-		DailyUsedCount:        usage.UsedCount,
-		DailyRemainingCount:   dailyRemainingCount,
-		EffectiveDailyLimit:   effectiveDailyLimit,
-		HasAccess:             hasAccess,
-		DeliveryAvailable:     permissionApproved && hasAccess && dailyRemainingCount > 0,
+		AccessMode:               accessMode,
+		SubscriptionActive:       subscriptionActive,
+		SubscriptionExpiresAt:    access.SubscriptionExpiresAt,
+		RemainingCount:           access.TotalRemainingCount(now),
+		PermanentRemainingCount:  access.RemainingCount,
+		TemporaryRewardCount:     activeTemporaryRewardCount,
+		TemporaryRewardExpiresAt: activeTemporaryRewardExpiresAt,
+		DailyUsageDate:           usageDate,
+		DailyUsedCount:           usage.UsedCount,
+		DailyRemainingCount:      dailyRemainingCount,
+		EffectiveDailyLimit:      effectiveDailyLimit,
+		HasAccess:                hasAccess,
+		DeliveryAvailable:        permissionApproved && hasAccess && dailyRemainingCount > 0,
 	}, nil
 }
 
@@ -113,6 +126,7 @@ func (s *PermissionService) UpdateEmailCatchAllAccessForUser(ctx context.Context
 	}
 
 	now := time.Now().UTC()
+	normalizedCurrentAccess := currentAccess.NormalizeTemporaryReward(now)
 	nextSubscriptionExpiresAt := currentAccess.SubscriptionExpiresAt
 	if request.ClearSubscription {
 		nextSubscriptionExpiresAt = nil
@@ -141,10 +155,12 @@ func (s *PermissionService) UpdateEmailCatchAllAccessForUser(ctx context.Context
 	}
 
 	if _, err := s.db.UpsertEmailCatchAllAccess(ctx, storage.UpsertEmailCatchAllAccessInput{
-		UserID:                userID,
-		SubscriptionExpiresAt: nextSubscriptionExpiresAt,
-		RemainingCount:        nextRemainingCount,
-		DailyLimitOverride:    nextDailyLimitOverride,
+		UserID:                   userID,
+		SubscriptionExpiresAt:    nextSubscriptionExpiresAt,
+		RemainingCount:           nextRemainingCount,
+		TemporaryRewardCount:     normalizedCurrentAccess.TemporaryRewardCount,
+		TemporaryRewardExpiresAt: normalizedCurrentAccess.TemporaryRewardExpiresAt,
+		DailyLimitOverride:       nextDailyLimitOverride,
 	}); err != nil {
 		return UserPermissionView{}, InternalError("failed to update catch-all access state", err)
 	}
