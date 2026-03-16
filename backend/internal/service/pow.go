@@ -35,9 +35,12 @@ const (
 	// to solve and verify the puzzle.
 	powArgon2Variant = "argon2id"
 
-	// powArgon2MemoryKiB keeps each trial expensive enough to matter while still
-	// practical inside a browser worker.
-	powArgon2MemoryKiB = 128
+	// powArgon2MemoryKiB follows the HashPass-style memory-hard setting so each
+	// client-side trial allocates 64 MiB instead of the earlier too-light 128 KiB.
+	// Keeping the difficulty target in leading-zero bits while raising memory
+	// cost fixes the "difficulty 12 solves too fast" problem without changing
+	// the public difficulty ladder semantics.
+	powArgon2MemoryKiB = 64 * 1024
 
 	// powArgon2Iterations controls how many Argon2 rounds each nonce trial uses.
 	powArgon2Iterations = 1

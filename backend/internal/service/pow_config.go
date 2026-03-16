@@ -191,7 +191,7 @@ func (s *POWService) difficultyOptions(settings powRuntimeSettings) []POWDifficu
 		items = append(items, POWDifficultyOptionView{
 			Value:            difficulty,
 			Label:            fmt.Sprintf("难度 %d", difficulty),
-			Description:      fmt.Sprintf("要求 Argon2 输出至少有 %d 个前导零 bit，奖励倍数也是 %d。", difficulty, difficulty),
+			Description:      fmt.Sprintf("要求 Argon2 输出至少有 %d 个前导零 bit；每次尝试都会消耗 64 MiB 内存成本，奖励倍数也是 %d。", difficulty, difficulty),
 			RewardMultiplier: difficulty,
 			Enabled:          enabled,
 		})
@@ -266,7 +266,7 @@ func (s *POWService) GetAdminSettings(ctx context.Context) (AdminPOWSettingsView
 		difficultyViews = append(difficultyViews, AdminPOWDifficultySettingsView{
 			Difficulty:       difficulty,
 			Label:            fmt.Sprintf("难度 %d", difficulty),
-			Description:      fmt.Sprintf("启用后，用户可以选择 %d 位难度，奖励倍率固定为 %d。", difficulty, difficulty),
+			Description:      fmt.Sprintf("启用后，用户可以选择 %d 位难度；每次尝试都会消耗 64 MiB 内存成本，奖励倍率固定为 %d。", difficulty, difficulty),
 			RewardMultiplier: difficulty,
 			Enabled:          enabled,
 			CreatedAt:        itemSettings.CreatedAt,
@@ -427,7 +427,7 @@ func (s *POWService) UpdateAdminDifficultySettings(ctx context.Context, actor mo
 	return AdminPOWDifficultySettingsView{
 		Difficulty:       updated.Difficulty,
 		Label:            fmt.Sprintf("难度 %d", updated.Difficulty),
-		Description:      fmt.Sprintf("启用后，用户可以选择 %d 位难度，奖励倍率固定为 %d。", updated.Difficulty, updated.Difficulty),
+		Description:      fmt.Sprintf("启用后，用户可以选择 %d 位难度；每次尝试都会消耗 64 MiB 内存成本，奖励倍率固定为 %d。", updated.Difficulty, updated.Difficulty),
 		RewardMultiplier: updated.Difficulty,
 		Enabled:          updated.Enabled,
 		CreatedAt:        updated.CreatedAt,

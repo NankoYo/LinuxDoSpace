@@ -5,6 +5,7 @@ import { claimMyPOWChallenge, createMyPOWChallenge, getMyPOWStatus, APIError } f
 import type { POWChallenge, POWStatus, UserPermission } from '../types/api';
 import { GlassCard } from './GlassCard';
 import { GlassSelect, type GlassSelectOption } from './GlassSelect';
+import { GlassTooltip } from './GlassTooltip';
 
 interface POWBenefitSectionProps {
   authenticated: boolean;
@@ -441,7 +442,7 @@ export function POWBenefitSection({
                   disabled={creating || solving || claiming || difficultyOptions.length === 0}
                 />
                 <div className="mt-2 text-xs leading-6 text-gray-500 dark:text-gray-400">
-                  当前难度按前导零 bit 数计算。难度越高，浏览器本地解题越慢，但奖励倍数也越高。
+                  当前难度按前导零 bit 数计算。每次尝试都会使用 64 MiB 的 Argon2 内存成本；难度越高，浏览器本地解题越慢，但奖励倍数也越高。
                 </div>
               </div>
 
@@ -519,7 +520,7 @@ export function POWBenefitSection({
               <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <MiniStat title="预计奖励" value={estimateRewardRange(currentChallenge.difficulty)} />
                 <MiniStat title="难度倍率" value={`${currentChallenge.difficulty}x`} />
-                <MiniStat title="Argon2 参数" value={`m=${currentChallenge.argon2_memory_kib}KiB t=${currentChallenge.argon2_iterations}`} />
+                <MiniStat title="Argon2 参数" value={`m=${formatArgon2Memory(currentChallenge.argon2_memory_kib)} t=${currentChallenge.argon2_iterations}`} />
                 <MiniStat title="创建时间" value={formatDate(currentChallenge.created_at)} />
                 <MiniStat title="当前尝试次数" value={solveProgress ? solveProgress.attempts.toLocaleString('zh-CN') : '尚未开始'} />
                 <MiniStat title="当前最好进度" value={solveProgress ? `${solveProgress.bestLeadingZeroBits} bit` : '尚未开始'} />
@@ -545,11 +546,15 @@ function InlineNotice({ tone, message }: SectionNotice) {
 
 function StatCard({ title, value, tooltip }: { title: string; value: string; tooltip?: string }) {
   return (
-    <div title={tooltip} className="rounded-2xl border border-white/15 bg-white/35 p-4 dark:border-white/10 dark:bg-black/20">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{title}</div>
-      <div className="mt-2 text-base font-semibold text-gray-900 dark:text-white">{value}</div>
-      {tooltip ? <div className="mt-2 text-xs leading-6 text-gray-500 dark:text-gray-400">悬浮查看详情</div> : null}
-    </div>
+    <GlassTooltip content={tooltip}>
+      <div
+        tabIndex={tooltip ? 0 : undefined}
+        className={`rounded-2xl border border-white/15 bg-white/35 p-4 outline-none dark:border-white/10 dark:bg-black/20 ${tooltip ? 'cursor-help' : ''}`}
+      >
+        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">{title}</div>
+        <div className="mt-2 text-base font-semibold text-gray-900 dark:text-white">{value}</div>
+      </div>
+    </GlassTooltip>
   );
 }
 
@@ -577,6 +582,13 @@ function formatDate(value?: string): string {
 
 function formatElapsedMs(value: number): string {
   return `${(value / 1000).toFixed(1)}s`;
+}
+
+function formatArgon2Memory(valueInKiB: number): string {
+  if (valueInKiB >= 1024 && valueInKiB % 1024 === 0) {
+    return `${valueInKiB / 1024}MiB`;
+  }
+  return `${valueInKiB}KiB`;
 }
 
 function estimateRewardRange(difficulty: number): string {

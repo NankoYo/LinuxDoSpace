@@ -113,6 +113,7 @@ The payload includes:
 
 Important behavior:
 - difficulty is measured in leading zero **bits**, not hexadecimal digits
+- each browser-side trial currently uses **64 MiB** of Argon2 memory cost
 - each user can keep only one active challenge at a time
 - generating a new challenge always supersedes the previous active one
 - the backend does **not** pre-generate the random reward amount when the challenge is created
