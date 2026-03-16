@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
+import { GlassSelect, type GlassSelectOption } from '../components/GlassSelect';
 import {
   Plus,
   Trash2,
@@ -55,6 +56,15 @@ const emptyForm: RecordFormState = {
   comment: '',
   priority: '',
 };
+
+// dnsTypeOptions 统一定义 DNS 类型下拉选项，供自定义玻璃态选择器复用。
+const dnsTypeOptions: GlassSelectOption[] = [
+  { value: 'A', label: 'A' },
+  { value: 'AAAA', label: 'AAAA' },
+  { value: 'CNAME', label: 'CNAME' },
+  { value: 'TXT', label: 'TXT' },
+  { value: 'MX', label: 'MX' },
+];
 
 // Settings 负责接入用户自己的 allocation 和 DNS 记录管理能力。
 export function Settings({
@@ -583,23 +593,17 @@ export function Settings({
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">记录类型</label>
-                  <select
+                  <GlassSelect
                     value={formData.type}
-                    onChange={(event) =>
+                    options={dnsTypeOptions}
+                    onChange={(value) =>
                       setFormData({
                         ...formData,
-                        type: event.target.value,
-                        proxied: supportsProxy(event.target.value) ? formData.proxied : false,
+                        type: value,
+                        proxied: supportsProxy(value) ? formData.proxied : false,
                       })
                     }
-                    className="w-full px-4 py-2 rounded-xl bg-white/50 dark:bg-black/50 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white"
-                  >
-                    <option value="A">A</option>
-                    <option value="AAAA">AAAA</option>
-                    <option value="CNAME">CNAME</option>
-                    <option value="TXT">TXT</option>
-                    <option value="MX">MX</option>
-                  </select>
+                  />
                 </div>
 
                 <div>
