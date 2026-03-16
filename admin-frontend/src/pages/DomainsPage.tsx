@@ -52,6 +52,8 @@ const blankManagedDomainDraft: UpsertManagedDomainInput = {
   auto_provision: true,
   is_default: false,
   enabled: true,
+  sale_enabled: false,
+  sale_base_price_cents: 0,
 };
 
 interface AllocationDraft {
@@ -357,6 +359,8 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                         auto_provision: domain.auto_provision,
                         is_default: domain.is_default,
                         enabled: domain.enabled,
+                        sale_enabled: domain.sale_enabled,
+                        sale_base_price_cents: domain.sale_base_price_cents,
                       })
                     }
                     className="rounded-xl p-2 text-blue-500 transition hover:bg-blue-100 dark:hover:bg-blue-900/25"
@@ -369,6 +373,8 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   <div>自动分配：{domain.auto_provision ? '开启' : '关闭'}</div>
                   <div>默认域名：{domain.is_default ? '是' : '否'}</div>
                   <div>状态：{domain.enabled ? '启用中' : '已停用'}</div>
+                  <div>销售状态：{domain.sale_enabled ? '开放购买' : '未开放购买'}</div>
+                  <div>销售基础价：{domain.sale_base_price_cents > 0 ? `${(domain.sale_base_price_cents / 100).toFixed(2)} LDC` : '未定价'}</div>
                 </div>
               </div>
             ))}
@@ -799,11 +805,28 @@ export function DomainsPage({ csrfToken, managedDomains, onManagedDomainsChange 
                   className="w-full rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-black/35 dark:text-white"
                 />
               </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-200">销售基础价（分）</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={managedDomainDraft.sale_base_price_cents}
+                  onChange={(event) => setManagedDomainDraft({ ...managedDomainDraft, sale_base_price_cents: Math.max(0, Number(event.target.value) || 0) })}
+                  className="w-full rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 dark:border-slate-700 dark:bg-black/35 dark:text-white"
+                />
+              </div>
               <AdminSwitch
                 checked={managedDomainDraft.auto_provision}
                 onCheckedChange={(checked) => setManagedDomainDraft({ ...managedDomainDraft, auto_provision: checked })}
                 label="登录后自动分配同名子域名"
                 description="开启后，首次登录且符合条件的用户会自动获得与用户名同名的默认子域名。"
+                accent="blue"
+              />
+              <AdminSwitch
+                checked={managedDomainDraft.sale_enabled}
+                onCheckedChange={(checked) => setManagedDomainDraft({ ...managedDomainDraft, sale_enabled: checked })}
+                label="开放域名购买"
+                description="开启后，此根域名会在公共搜索页显示购买入口，并按下方基础价叠加固定长度倍率。"
                 accent="blue"
               />
               <AdminSwitch

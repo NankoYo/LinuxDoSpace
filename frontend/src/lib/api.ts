@@ -3,6 +3,7 @@ import type {
   APIEnvelope,
   APIErrorBody,
   AvailabilityResult,
+  CreateDomainPurchaseOrderInput,
   CreatePaymentOrderInput,
   CreatePOWChallengeInput,
   CreateAllocationInput,
@@ -320,6 +321,18 @@ export function listMyEmailTargets(): Promise<UserEmailTarget[]> {
 // triggers Cloudflare's verification email when needed.
 export function createMyEmailTarget(input: CreateMyEmailTargetInput, csrfToken: string): Promise<UserEmailTarget> {
   return request<UserEmailTarget>('/v1/my/email-targets', {
+    method: 'POST',
+    headers: {
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+// createMyDomainPurchaseOrder reserves one dynamic paid namespace order from
+// the public domain search page and returns the payment URL.
+export function createMyDomainPurchaseOrder(input: CreateDomainPurchaseOrderInput, csrfToken: string): Promise<PaymentOrder> {
+  return request<PaymentOrder>('/v1/my/ldc/domain-orders', {
     method: 'POST',
     headers: {
       'X-CSRF-Token': csrfToken,

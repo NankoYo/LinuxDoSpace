@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
-import { Search, CheckCircle, XCircle, LoaderCircle, Sparkles, ArrowRight } from 'lucide-react';
-import { APIError, checkAllocationAvailability, createAllocation } from '../lib/api';
+import { Search, CheckCircle, XCircle, LoaderCircle, Sparkles, ArrowRight, Shuffle, CreditCard } from 'lucide-react';
+import { APIError, checkAllocationAvailability, createAllocation, createMyDomainPurchaseOrder } from '../lib/api';
+import { rememberLatestPaymentOrder } from '../lib/payment-tracking';
 import type { Allocation, AvailabilityResult, ManagedDomain, User } from '../types/api';
 
 // DomainsProps 描述域名分发页所需的后端状态与交互函数。
@@ -20,6 +21,9 @@ interface DomainsProps {
 
 // SearchStatus 用于描述域名查询和申请流程当前处于哪个阶段。
 type SearchStatus = 'idle' | 'checking' | 'available' | 'taken' | 'creating' | 'error';
+
+// DomainPurchaseMode 描述用户在搜索页中选择的购买模式。
+type DomainPurchaseMode = 'exact' | 'random';
 
 // Domains 负责承接“查询前缀是否可用”和“为当前用户申请命名空间”两项核心操作。
 export function Domains({
@@ -47,6 +51,18 @@ export function Domains({
 
   // message 用于在界面中展示成功或失败原因。
   const [message, setMessage] = useState('');
+
+  // purchaseMode 记录当前购买面板使用的是精确前缀还是随机 12+ 字符模式。
+  const [purchaseMode, setPurchaseMode] = useState<DomainPurchaseMode>('exact');
+
+  // randomLength 保存随机字符购买时用户想要的长度，最低 12。
+  const [randomLength, setRandomLength] = useState(12);
+
+  // purchasePending 避免用户连续多次提交同一笔动态域名购买订单。
+  const [purchasePending, setPurchasePending] = useState(false);
+
+  // purchaseMessage 用于展示购买面板内的即时反馈。
+  const [purchaseMessage, setPurchaseMessage] = useState('');
 
   // 当根域名列表首次加载完成时，优先选中默认根域名。
   useEffect(() => {
@@ -124,13 +140,87 @@ export function Domains({
     }
   }
 
+  // handlePurchase creates one dynamic LDC order for the current domain search context.
+  async function handlePurchase(nextMode: DomainPurchaseMode): Promise<void> {
+    if (!selectedDomainConfig?.sale_enabled) {
+      setPurchaseMessage('当前后缀暂未开放购买。');
+      return;
+    }
+
+    if (!authenticated) {
+      onLogin();
+      return;
+    }
+
+    if (!csrfToken) {
+      setPurchaseMessage('当前会话缺少 CSRF Token，请刷新后重试。');
+      return;
+    }
+
+    if (nextMode === 'exact') {
+      if (!availability?.available) {
+        setPurchaseMessage('请先查询一个当前可购买的精确前缀。');
+        return;
+      }
+
+      const exactPriceCents = calculateExactPurchasePriceCents(selectedDomainConfig.sale_base_price_cents, availability.normalized_prefix.length);
+      if (exactPriceCents === null) {
+        setPurchaseMessage('1 字符前缀暂不出售，请更换更长的前缀。');
+        return;
+      }
+    }
+
+    if (nextMode === 'random' && (randomLength < 12 || randomLength > 63)) {
+      setPurchaseMessage('随机字符模式仅支持 12 到 63 位长度。');
+      return;
+    }
+
+    setPurchasePending(true);
+    setPurchaseMessage('');
+
+    try {
+      const order = await createMyDomainPurchaseOrder(
+        nextMode === 'exact'
+          ? {
+              root_domain: selectedDomainConfig.root_domain,
+              mode: 'exact',
+              prefix: availability?.normalized_prefix ?? domain,
+            }
+          : {
+              root_domain: selectedDomainConfig.root_domain,
+              mode: 'random',
+              random_length: randomLength,
+            },
+        csrfToken,
+      );
+
+      rememberLatestPaymentOrder(order.out_trade_no);
+      const openedWindow = window.open(order.payment_url, '_blank', 'noopener,noreferrer');
+      if (!openedWindow) {
+        window.location.assign(order.payment_url);
+      }
+      setPurchaseMessage(`订单 ${order.out_trade_no} 已创建，支付页已在新标签打开。支付完成后会自动为你发放新命名空间。`);
+    } catch (error) {
+      setPurchaseMessage(readableErrorMessage(error, '动态域名购买下单失败'));
+    } finally {
+      setPurchasePending(false);
+    }
+  }
+
   // selectedSuffix 用于展示当前输入框右侧动态变化的域名后缀。
   const selectedSuffix = selectedRootDomain || 'linuxdo.space';
+  const selectedDomainConfig = publicDomains.find((item) => item.root_domain === selectedRootDomain) ?? null;
   const reservedPrefix = user?.username?.trim() || '你的用户名';
   const normalizedReservedPrefix = normalizeFrontendPrefix(user?.username ?? '');
   const canRegisterCurrentResult =
     availability?.available === true &&
     (!authenticated || availability.normalized_prefix === normalizedReservedPrefix);
+  const exactPurchasePriceCents =
+    selectedDomainConfig && availability?.available
+      ? calculateExactPurchasePriceCents(selectedDomainConfig.sale_base_price_cents, availability.normalized_prefix.length)
+      : null;
+  const randomPurchasePriceCents =
+    selectedDomainConfig && selectedDomainConfig.sale_enabled ? calculateRandomPurchasePriceCents(selectedDomainConfig.sale_base_price_cents) : null;
 
   return (
     <div className="max-w-4xl mx-auto pt-32 pb-24 px-6">
@@ -154,7 +244,7 @@ export function Domains({
       <GlassCard className="mb-8">
         {!authenticated && (
           <div className="mb-5 rounded-2xl border border-amber-300/40 bg-amber-100/60 dark:bg-amber-950/25 dark:border-amber-700/40 px-4 py-4 text-sm text-amber-900 dark:text-amber-200">
-            搜索功能保持开放。当前临时阶段仅允许登录后注册与你的 Linux Do 用户名完全同名的子域名。
+            搜索功能保持开放。当前免费自助仍只开放部分后缀下、与你的 Linux Do 用户名完全同名的子域名；额外命名空间购买也在本页完成。
           </div>
         )}
 
@@ -171,6 +261,7 @@ export function Domains({
                   setStatus('idle');
                   setAvailability(null);
                   setMessage('');
+                  setPurchaseMessage('');
                 }}
                 className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${
                   selectedRootDomain === item.root_domain
@@ -198,6 +289,7 @@ export function Domains({
                 setStatus('idle');
                 setAvailability(null);
                 setMessage('');
+                setPurchaseMessage('');
               }}
               placeholder="输入你想要的域名前缀"
               className="w-full pl-4 pr-32 py-4 rounded-2xl bg-white/50 dark:bg-black/50 border border-white/40 dark:border-white/20 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 transition-all"
@@ -218,7 +310,14 @@ export function Domains({
 
         {authenticated && (
           <div className="mt-4 text-sm text-gray-600 dark:text-gray-300">
-            当前暂时只开放注册 <span className="font-semibold text-teal-600 dark:text-teal-300">{reservedPrefix}.{selectedSuffix}</span>，其他前缀仅可搜索。
+            当前免费自助仍只开放开启免费流的同名子域。{selectedDomainConfig?.auto_provision ? (
+              <>
+                你可以直接申请 <span className="font-semibold text-teal-600 dark:text-teal-300">{reservedPrefix}.{selectedSuffix}</span>。
+              </>
+            ) : (
+              '当前后缀不开放免费同名直领。'
+            )}{' '}
+            {selectedDomainConfig?.sale_enabled ? '下方已开放 LDC 购买更多命名空间。' : '当前后缀暂未开放付费购买。'}
           </div>
         )}
 
@@ -260,11 +359,141 @@ export function Domains({
             {message && <div className="mt-4 text-sm text-gray-700 dark:text-gray-300">{message}</div>}
             {availability?.available && authenticated && !canRegisterCurrentResult && (
               <div className="mt-4 text-sm text-amber-700 dark:text-amber-300">
-                该前缀当前可以搜索，但暂未开放注册。当前只允许注册与你的用户名同名的子域。
+                该前缀当前无法走免费直领流程，但如果此后缀已开放购买，你可以在下方直接下单。
               </div>
             )}
           </motion.div>
         )}
+
+        <div className="mt-6 rounded-2xl border border-white/20 bg-white/25 p-5 dark:bg-black/25">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-white">
+                <CreditCard size={18} className="text-teal-500" />
+                购买更多命名空间
+              </div>
+              <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                管理员可为每个根域名单独定价。精确购买按前缀长度套用倍率，随机模式只卖 12 位及以上隐藏字符，付款成功后才会分配具体字符。
+              </p>
+            </div>
+            <div className={`rounded-full px-4 py-2 text-sm font-semibold ${selectedDomainConfig?.sale_enabled ? 'bg-emerald-100/80 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-100/80 text-slate-600 dark:bg-slate-900/40 dark:text-slate-300'}`}>
+              {selectedDomainConfig?.sale_enabled ? `基础价 ${formatLDCAmount(selectedDomainConfig.sale_base_price_cents)} LDC / 个` : '当前后缀暂未开放购买'}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 rounded-2xl border border-white/20 bg-white/35 p-4 text-sm text-gray-700 dark:bg-black/30 dark:text-gray-300 md:grid-cols-4">
+            <div>2 字符: 15 倍</div>
+            <div>3 字符: 10 倍</div>
+            <div>4 字符: 5 倍</div>
+            <div>5 字符: 2 倍</div>
+            <div>6 字符及以上: 1 倍</div>
+            <div>1 字符: 不出售</div>
+            <div className="md:col-span-2">随机 12 字符及以上: 0.5 倍，支付后才随机分配具体字符</div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setPurchaseMode('exact');
+                setPurchaseMessage('');
+              }}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${purchaseMode === 'exact' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white/55 text-gray-700 hover:bg-white/70 dark:bg-black/35 dark:text-gray-200 dark:hover:bg-black/50'}`}
+            >
+              精确购买
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPurchaseMode('random');
+                setPurchaseMessage('');
+              }}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-all ${purchaseMode === 'random' ? 'bg-teal-500 text-white shadow-lg' : 'bg-white/55 text-gray-700 hover:bg-white/70 dark:bg-black/35 dark:text-gray-200 dark:hover:bg-black/50'}`}
+            >
+              随机字符购买
+            </button>
+          </div>
+
+          {purchaseMode === 'exact' ? (
+            <div className="mt-5 rounded-2xl border border-white/20 bg-white/35 p-4 dark:bg-black/30">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">当前精确购买目标</div>
+                  <div className="mt-1 font-mono text-base font-semibold text-gray-900 dark:text-white">
+                    {availability?.fqdn ?? `${normalizeFrontendPrefix(domain) || 'your-prefix'}.${selectedSuffix}`}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm text-gray-500 dark:text-gray-400">预估价格</div>
+                  <div className="mt-1 text-lg font-bold text-teal-600 dark:text-teal-300">
+                    {exactPurchasePriceCents === null ? '暂不可购买' : `${formatLDCAmount(exactPurchasePriceCents)} LDC`}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+                {!availability
+                  ? '先查询精确前缀可用性，再在这里发起购买。'
+                  : !availability.available
+                  ? readableAvailabilityMessage(availability.reasons)
+                  : exactPurchasePriceCents === null
+                  ? '1 字符前缀不出售，请更换更长的前缀。'
+                  : `当前长度 ${availability.normalized_prefix.length}，倍率 ${readableExactMultiplier(availability.normalized_prefix.length)}。`}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handlePurchase('exact')}
+                disabled={purchasePending || !selectedDomainConfig?.sale_enabled || !availability?.available || exactPurchasePriceCents === null}
+                className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 px-5 py-3 font-semibold text-white shadow-lg transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {purchasePending ? <LoaderCircle size={18} className="animate-spin" /> : <CreditCard size={18} />}
+                {!authenticated ? '登录后购买' : '创建精确购买订单'}
+              </button>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-2xl border border-white/20 bg-white/35 p-4 dark:bg-black/30">
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <label className="block">
+                  <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">随机字符长度</div>
+                  <input
+                    type="number"
+                    min={12}
+                    max={63}
+                    value={randomLength}
+                    onChange={(event) => {
+                      setRandomLength(Math.min(63, Math.max(12, Number(event.target.value) || 12)));
+                      setPurchaseMessage('');
+                    }}
+                    className="w-full rounded-2xl border border-white/30 bg-white/70 px-4 py-3 text-gray-900 outline-none focus:ring-2 focus:ring-teal-500 dark:bg-black/35 dark:text-white"
+                  />
+                </label>
+                <div className="rounded-2xl border border-white/20 bg-white/40 px-4 py-3 text-sm text-gray-700 dark:bg-black/25 dark:text-gray-200">
+                  <div className="text-gray-500 dark:text-gray-400">随机模式价格</div>
+                  <div className="mt-1 text-lg font-bold text-teal-600 dark:text-teal-300">
+                    {randomPurchasePriceCents === null ? '暂未开放' : `${formatLDCAmount(randomPurchasePriceCents)} LDC`}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+                随机模式不会在付款前展示具体字符，成功后才会把一个 {randomLength} 位随机前缀分配到你的账户名下。
+              </div>
+              <button
+                type="button"
+                onClick={() => void handlePurchase('random')}
+                disabled={purchasePending || !selectedDomainConfig?.sale_enabled || randomPurchasePriceCents === null}
+                className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-teal-500 px-5 py-3 font-semibold text-white shadow-lg transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {purchasePending ? <LoaderCircle size={18} className="animate-spin" /> : <Shuffle size={18} />}
+                {!authenticated ? '登录后购买' : '创建随机购买订单'}
+              </button>
+            </div>
+          )}
+
+          {purchaseMessage ? (
+            <div className="mt-4 rounded-2xl border border-white/20 bg-white/35 px-4 py-3 text-sm text-gray-700 dark:bg-black/30 dark:text-gray-200">
+              {purchaseMessage}
+            </div>
+          ) : null}
+        </div>
       </GlassCard>
 
       {!authenticated && (
@@ -314,6 +543,67 @@ function readableAvailabilityMessage(reasons: string[]): string {
     return 'Cloudflare 中已存在同命名空间记录，当前无法继续分配。';
   }
   return '该前缀当前不可申请。';
+}
+
+// calculateExactPurchasePriceCents mirrors the backend's fixed multiplier table.
+function calculateExactPurchasePriceCents(basePriceCents: number, normalizedLength: number): number | null {
+  if (basePriceCents <= 0) {
+    return null;
+  }
+  if (normalizedLength <= 1) {
+    return null;
+  }
+  if (normalizedLength === 2) {
+    return basePriceCents * 15;
+  }
+  if (normalizedLength === 3) {
+    return basePriceCents * 10;
+  }
+  if (normalizedLength === 4) {
+    return basePriceCents * 5;
+  }
+  if (normalizedLength === 5) {
+    return basePriceCents * 2;
+  }
+  return basePriceCents;
+}
+
+// calculateRandomPurchasePriceCents mirrors the backend's 0.5x random-mode rule.
+function calculateRandomPurchasePriceCents(basePriceCents: number): number | null {
+  if (basePriceCents <= 0) {
+    return null;
+  }
+  return Math.ceil(basePriceCents / 2);
+}
+
+// readableExactMultiplier converts the fixed pricing table into UI copy.
+function readableExactMultiplier(normalizedLength: number): string {
+  if (normalizedLength <= 1) {
+    return '不出售';
+  }
+  if (normalizedLength === 2) {
+    return '15 倍';
+  }
+  if (normalizedLength === 3) {
+    return '10 倍';
+  }
+  if (normalizedLength === 4) {
+    return '5 倍';
+  }
+  if (normalizedLength === 5) {
+    return '2 倍';
+  }
+  return '1 倍';
+}
+
+// formatLDCAmount converts cents into the Linux Do Credit decimal display string.
+function formatLDCAmount(cents: number): string {
+  const whole = Math.floor(cents / 100);
+  const fraction = cents % 100;
+  if (fraction === 0) {
+    return String(whole);
+  }
+  return `${whole}.${String(fraction).padStart(2, '0')}`;
 }
 
 // readableErrorMessage 用于统一提取接口错误文本。

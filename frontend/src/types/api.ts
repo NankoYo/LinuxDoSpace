@@ -25,6 +25,8 @@ export interface ManagedDomain {
   auto_provision: boolean;
   is_default: boolean;
   enabled: boolean;
+  sale_enabled: boolean;
+  sale_base_price_cents: number;
   created_at: string;
   updated_at: string;
 }
@@ -173,6 +175,13 @@ export interface PaymentOrder {
   unit_price_cents: number;
   total_price_cents: number;
   effect_type: string;
+  purchase_root_domain?: string;
+  purchase_mode?: string;
+  purchase_prefix?: string;
+  purchase_normalized_prefix?: string;
+  purchase_requested_length?: number;
+  purchase_assigned_prefix?: string;
+  purchase_assigned_fqdn?: string;
   payment_url: string;
   paid_at?: string;
   applied_at?: string;
@@ -366,6 +375,15 @@ export interface CreateMyEmailTargetInput {
 export interface CreatePaymentOrderInput {
   product_key: string;
   units: number;
+}
+
+// CreateDomainPurchaseOrderInput mirrors one paid namespace checkout request
+// created directly from the public domain search page.
+export interface CreateDomainPurchaseOrderInput {
+  root_domain: string;
+  mode: 'exact' | 'random';
+  prefix?: string;
+  random_length?: number;
 }
 
 // CreatePOWChallengeInput mirrors one authenticated request to replace the

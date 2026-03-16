@@ -38,6 +38,8 @@ export interface ManagedDomain {
   auto_provision: boolean;
   is_default: boolean;
   enabled: boolean;
+  sale_enabled: boolean;
+  sale_base_price_cents: number;
   created_at: string;
   updated_at: string;
 }
@@ -234,6 +236,8 @@ export interface UpsertManagedDomainInput {
   auto_provision: boolean;
   is_default: boolean;
   enabled: boolean;
+  sale_enabled: boolean;
+  sale_base_price_cents: number;
 }
 
 // SetUserQuotaInput mirrors the quota override payload.
@@ -438,6 +442,13 @@ export interface AdminPaymentOrder {
   unit_price_cents: number;
   total_price_cents: number;
   effect_type: string;
+  purchase_root_domain?: string;
+  purchase_mode?: string;
+  purchase_prefix?: string;
+  purchase_normalized_prefix?: string;
+  purchase_requested_length?: number;
+  purchase_assigned_prefix?: string;
+  purchase_assigned_fqdn?: string;
   payment_url: string;
   paid_at?: string;
   applied_at?: string;
