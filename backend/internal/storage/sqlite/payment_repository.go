@@ -27,6 +27,7 @@ const (
 	paymentQuantityScopeGateway             = "linuxdo_credit"
 	paymentQuantitySourceGateway            = "linuxdo_credit"
 	paymentQuantityReferenceTypeOrder       = "payment_order"
+	domainPurchaseReservationTTL            = 30 * time.Minute
 )
 
 // ListPaymentProducts returns Linux Do Credit products in stable display order.
@@ -152,7 +153,21 @@ RETURNING
 // the external Linux Do Credit gateway.
 func (s *Store) CreatePaymentOrder(ctx context.Context, input CreatePaymentOrderInput) (model.PaymentOrder, error) {
 	now := time.Now().UTC()
-	row := s.db.QueryRowContext(ctx, `
+	reservationKey, reservationExpiresAt := buildDomainPurchaseReservation(input, now)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.PaymentOrder{}, err
+	}
+	defer tx.Rollback()
+
+	if reservationKey != "" {
+		if err := expireStaleDomainPurchaseReservationsTx(ctx, tx, reservationKey, now); err != nil {
+			return model.PaymentOrder{}, err
+		}
+	}
+
+	row := tx.QueryRowContext(ctx, `
 INSERT INTO payment_orders (
     user_id,
     product_key,
@@ -176,6 +191,8 @@ INSERT INTO payment_orders (
     purchase_requested_length,
     purchase_assigned_prefix,
     purchase_assigned_fqdn,
+    purchase_reservation_key,
+    purchase_reservation_expires_at,
     payment_url,
     notify_payload_raw,
     paid_at,
@@ -183,7 +200,7 @@ INSERT INTO payment_orders (
     last_checked_at,
     created_at,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, NULL, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `,
 		input.UserID,
@@ -208,13 +225,22 @@ RETURNING id
 		input.PurchaseRequestedLength,
 		strings.TrimSpace(input.PurchaseAssignedPrefix),
 		strings.TrimSpace(input.PurchaseAssignedFQDN),
+		reservationKey,
+		formatNullableTime(reservationExpiresAt),
 		strings.TrimSpace(input.PaymentURL),
+		"",
+		nil,
+		nil,
+		nil,
 		formatTime(now),
 		formatTime(now),
 	)
 
 	var id int64
 	if err := row.Scan(&id); err != nil {
+		return model.PaymentOrder{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return model.PaymentOrder{}, err
 	}
 	return s.getPaymentOrderByID(ctx, id)
@@ -442,6 +468,7 @@ RETURNING id
 func (s *Store) ApplyPaymentOrderEntitlement(ctx context.Context, input ApplyPaymentOrderEntitlementInput) (model.PaymentOrder, bool, error) {
 	outTradeNo := strings.TrimSpace(input.OutTradeNo)
 	appliedAt := input.AppliedAt.UTC()
+	blockedPrefixSet := normalizeBlockedPrefixSet(input.BlockedNormalizedPrefixes)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -484,7 +511,7 @@ func (s *Store) ApplyPaymentOrderEntitlement(ctx context.Context, input ApplyPay
 			return model.PaymentOrder{}, false, err
 		}
 	case model.PaymentEffectDomainAllocationPurchase:
-		if err := applyDomainAllocationPurchaseTx(ctx, tx, order, appliedAt); err != nil {
+		if err := applyDomainAllocationPurchaseTx(ctx, tx, order, appliedAt, blockedPrefixSet); err != nil {
 			return model.PaymentOrder{}, false, err
 		}
 	default:
@@ -675,7 +702,7 @@ func applyCatchAllRemainingCountTx(ctx context.Context, tx *sql.Tx, order model.
 
 // applyDomainAllocationPurchaseTx creates the namespace granted by one paid
 // domain-purchase order inside the same database transaction.
-func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order model.PaymentOrder, appliedAt time.Time) error {
+func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order model.PaymentOrder, appliedAt time.Time, blockedPrefixSet map[string]struct{}) error {
 	rootDomain := strings.ToLower(strings.TrimSpace(order.PurchaseRootDomain))
 	if rootDomain == "" {
 		return fmt.Errorf("payment order %s is missing purchase_root_domain", order.OutTradeNo)
@@ -695,8 +722,11 @@ func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order mode
 		if normalizedPrefix == "" {
 			return fmt.Errorf("payment order %s is missing purchase_normalized_prefix", order.OutTradeNo)
 		}
+		if _, blocked := blockedPrefixSet[normalizedPrefix]; blocked {
+			return fmt.Errorf("requested domain %s already has live dns records", normalizedPrefix+"."+managedDomain.RootDomain)
+		}
 	case "random":
-		generatedPrefix, generateErr := generateRandomAllocationPrefixTx(ctx, tx, managedDomain.ID, order.PurchaseRequestedLength)
+		generatedPrefix, generateErr := generateRandomAllocationPrefixTx(ctx, tx, managedDomain.ID, order.PurchaseRequestedLength, blockedPrefixSet)
 		if generateErr != nil {
 			return generateErr
 		}
@@ -730,6 +760,8 @@ UPDATE payment_orders
 SET
     purchase_assigned_prefix = ?,
     purchase_assigned_fqdn = ?,
+    purchase_reservation_key = '',
+    purchase_reservation_expires_at = NULL,
     updated_at = ?
 WHERE out_trade_no = ?
 `,
@@ -910,7 +942,7 @@ RETURNING
 
 // generateRandomAllocationPrefixTx creates a random 12+ character label and
 // retries until the current root domain has no allocation conflict.
-func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDomainID int64, length int) (string, error) {
+func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDomainID int64, length int, blockedPrefixSet map[string]struct{}) (string, error) {
 	if length < 12 || length > 63 {
 		return "", fmt.Errorf("random allocation length must be between 12 and 63")
 	}
@@ -927,6 +959,9 @@ func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDo
 			buffer[index] = alphabet[int(randomBytes[index])%len(alphabet)]
 		}
 		candidate := string(buffer)
+		if _, blocked := blockedPrefixSet[candidate]; blocked {
+			continue
+		}
 		if _, err := findAllocationByNormalizedPrefixTx(ctx, tx, managedDomainID, candidate); errors.Is(err, sql.ErrNoRows) {
 			return candidate, nil
 		} else if err != nil {
@@ -1000,4 +1035,67 @@ func scanPaymentOrder(scanner interface{ Scan(dest ...any) error }) (model.Payme
 		return model.PaymentOrder{}, err
 	}
 	return item, nil
+}
+
+// buildDomainPurchaseReservation derives the exact-prefix reservation metadata
+// that prevents concurrent checkouts from overselling the same namespace.
+func buildDomainPurchaseReservation(input CreatePaymentOrderInput, now time.Time) (string, *time.Time) {
+	if strings.TrimSpace(input.EffectType) != model.PaymentEffectDomainAllocationPurchase {
+		return "", nil
+	}
+	if strings.TrimSpace(input.PurchaseMode) != "exact" {
+		return "", nil
+	}
+
+	normalizedPrefix := strings.ToLower(strings.TrimSpace(input.PurchaseNormalizedPrefix))
+	rootDomain := strings.ToLower(strings.TrimSpace(input.PurchaseRootDomain))
+	if normalizedPrefix == "" || rootDomain == "" {
+		return "", nil
+	}
+
+	expiresAt := now.Add(domainPurchaseReservationTTL)
+	return rootDomain + "|" + normalizedPrefix, &expiresAt
+}
+
+// expireStaleDomainPurchaseReservationsTx releases abandoned exact-prefix
+// reservations before a new checkout tries to claim the same namespace.
+func expireStaleDomainPurchaseReservationsTx(ctx context.Context, tx *sql.Tx, reservationKey string, now time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE payment_orders
+SET
+    status = ?,
+    last_checked_at = ?,
+    updated_at = ?
+WHERE purchase_reservation_key = ?
+  AND status IN ('created', 'pending')
+  AND paid_at IS NULL
+  AND COALESCE(purchase_reservation_expires_at, '') <> ''
+  AND purchase_reservation_expires_at <= ?
+`,
+		model.PaymentOrderStatusFailed,
+		formatTime(now),
+		formatTime(now),
+		strings.TrimSpace(reservationKey),
+		formatTime(now),
+	)
+	return err
+}
+
+// normalizeBlockedPrefixSet converts the service-layer Cloudflare snapshot into
+// one transaction-friendly membership map for exact and random allocation
+// grants.
+func normalizeBlockedPrefixSet(values []string) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+
+	blocked := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		blocked[normalized] = struct{}{}
+	}
+	return blocked
 }

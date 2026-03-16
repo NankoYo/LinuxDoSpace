@@ -74,6 +74,9 @@ func (s *PaymentService) CreateDomainPurchaseOrder(ctx context.Context, user mod
 		PurchaseRequestedLength:  requestedLength,
 	})
 	if err != nil {
+		if isDomainPurchaseReservationConflictError(err) {
+			return model.PaymentOrder{}, ConflictError("the requested namespace is already reserved by another active checkout")
+		}
 		return model.PaymentOrder{}, InternalError("failed to create local domain purchase order", err)
 	}
 
@@ -266,4 +269,70 @@ func slicesContain(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// listLiveDomainPurchaseBlockedPrefixes collapses the current Cloudflare zone
+// snapshot into the set of top-level namespace labels that are already in use
+// under one managed root domain.
+func (s *PaymentService) listLiveDomainPurchaseBlockedPrefixes(ctx context.Context, rootDomain string) ([]string, error) {
+	managedDomain, err := s.db.GetManagedDomainByRoot(ctx, strings.ToLower(strings.TrimSpace(rootDomain)))
+	if err != nil {
+		if storage.IsNotFound(err) {
+			return nil, NotFoundError("managed domain not found")
+		}
+		return nil, InternalError("failed to load managed domain", err)
+	}
+	if s.cf == nil || !s.cfg.CloudflareConfigured() || strings.TrimSpace(managedDomain.CloudflareZoneID) == "" {
+		return nil, nil
+	}
+
+	records, err := s.cf.ListAllDNSRecords(ctx, managedDomain.CloudflareZoneID)
+	if err != nil {
+		return nil, UnavailableError("failed to list cloudflare dns records", err)
+	}
+
+	normalizedRoot := strings.ToLower(strings.TrimSpace(managedDomain.RootDomain))
+	blocked := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		recordName := strings.ToLower(strings.TrimSpace(record.Name))
+		if recordName == normalizedRoot {
+			continue
+		}
+		if !strings.HasSuffix(recordName, "."+normalizedRoot) {
+			continue
+		}
+
+		relativeToRoot := strings.TrimSuffix(recordName, "."+normalizedRoot)
+		relativeToRoot = strings.TrimSuffix(relativeToRoot, ".")
+		if relativeToRoot == "" {
+			continue
+		}
+
+		labels := strings.Split(relativeToRoot, ".")
+		prefixCandidate := strings.TrimSpace(labels[len(labels)-1])
+		if prefixCandidate == "" || prefixCandidate == "*" {
+			continue
+		}
+		if normalizedPrefix, normalizeErr := NormalizePrefix(prefixCandidate); normalizeErr == nil {
+			blocked[normalizedPrefix] = struct{}{}
+		}
+	}
+
+	values := make([]string, 0, len(blocked))
+	for value := range blocked {
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+// isDomainPurchaseReservationConflictError normalizes database-specific unique
+// failures so the public checkout endpoint can return one stable 409 outcome.
+func isDomainPurchaseReservationConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(normalized, "unique") ||
+		strings.Contains(normalized, "constraint failed") ||
+		strings.Contains(normalized, "duplicate key")
 }

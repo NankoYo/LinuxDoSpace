@@ -82,7 +82,14 @@ func (s *PaymentService) ListPublicProducts(ctx context.Context) ([]model.Paymen
 	if err != nil {
 		return nil, InternalError("failed to list payment products", err)
 	}
-	return items, nil
+	filtered := make([]model.PaymentProduct, 0, len(items))
+	for _, item := range items {
+		if item.Key == PaymentProductDomainAllocationPurchase || item.EffectType == model.PaymentEffectDomainAllocationPurchase {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
 }
 
 // ListPaymentProducts returns the full administrator-facing product set,
@@ -378,10 +385,11 @@ func (s *PaymentService) HandleGatewayNotification(ctx context.Context, values u
 		}))
 	}
 
-	appliedOrder, applied, err := s.db.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
-		OutTradeNo: order.OutTradeNo,
-		AppliedAt:  now,
-	})
+	applyInput, err := s.buildApplyPaymentOrderEntitlementInput(ctx, order, now)
+	if err != nil {
+		return model.PaymentOrder{}, false, err
+	}
+	appliedOrder, applied, err := s.db.ApplyPaymentOrderEntitlement(ctx, applyInput)
 	if err != nil {
 		return model.PaymentOrder{}, false, InternalError("failed to apply payment order entitlement", err)
 	}
@@ -410,6 +418,9 @@ func (s *PaymentService) validateOrderCreation(ctx context.Context, user model.U
 	}
 	if !product.Enabled {
 		return model.PaymentProduct{}, 0, ForbiddenError("the selected payment product is currently disabled")
+	}
+	if product.Key == PaymentProductDomainAllocationPurchase || product.EffectType == model.PaymentEffectDomainAllocationPurchase {
+		return model.PaymentProduct{}, 0, ForbiddenError("the selected payment product is reserved for the dedicated domain-purchase checkout flow")
 	}
 	if request.Units < 1 || request.Units > maxPaymentOrderUnits {
 		return model.PaymentProduct{}, 0, ValidationError(fmt.Sprintf("units must be between 1 and %d", maxPaymentOrderUnits))
@@ -482,10 +493,11 @@ func (s *PaymentService) syncAndApplyOrder(ctx context.Context, order model.Paym
 
 	if current.Status == model.PaymentOrderStatusPaid && current.AppliedAt == nil {
 		now := time.Now().UTC()
-		appliedOrder, _, err := s.db.ApplyPaymentOrderEntitlement(ctx, storage.ApplyPaymentOrderEntitlementInput{
-			OutTradeNo: current.OutTradeNo,
-			AppliedAt:  now,
-		})
+		applyInput, buildErr := s.buildApplyPaymentOrderEntitlementInput(ctx, current, now)
+		if buildErr != nil {
+			return model.PaymentOrder{}, buildErr
+		}
+		appliedOrder, _, err := s.db.ApplyPaymentOrderEntitlement(ctx, applyInput)
 		if err != nil {
 			return model.PaymentOrder{}, InternalError("failed to apply payment order entitlement", err)
 		}
@@ -493,6 +505,26 @@ func (s *PaymentService) syncAndApplyOrder(ctx context.Context, order model.Paym
 	}
 
 	return current, nil
+}
+
+// buildApplyPaymentOrderEntitlementInput enriches domain-purchase grants with
+// one real-time Cloudflare occupancy snapshot so the final apply step can stay
+// zero-trust even when DNS changed after checkout creation.
+func (s *PaymentService) buildApplyPaymentOrderEntitlementInput(ctx context.Context, order model.PaymentOrder, appliedAt time.Time) (storage.ApplyPaymentOrderEntitlementInput, error) {
+	input := storage.ApplyPaymentOrderEntitlementInput{
+		OutTradeNo: order.OutTradeNo,
+		AppliedAt:  appliedAt,
+	}
+	if order.EffectType != model.PaymentEffectDomainAllocationPurchase {
+		return input, nil
+	}
+
+	blockedPrefixes, err := s.listLiveDomainPurchaseBlockedPrefixes(ctx, order.PurchaseRootDomain)
+	if err != nil {
+		return storage.ApplyPaymentOrderEntitlementInput{}, err
+	}
+	input.BlockedNormalizedPrefixes = blockedPrefixes
+	return input, nil
 }
 
 // buildPaymentOrderTitle generates the gateway-visible order title.

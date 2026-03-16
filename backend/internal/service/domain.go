@@ -97,7 +97,7 @@ func (s *DomainService) EnsureDefaultManagedDomain(ctx context.Context) error {
 		IsDefault:          true,
 		Enabled:            true,
 		SaleEnabled:        false,
-		SaleBasePriceCents: 0,
+		SaleBasePriceCents: 1000,
 	})
 }
 
@@ -106,15 +106,31 @@ func (s *DomainService) EnsureDefaultManagedDomain(ctx context.Context) error {
 // every fresh deployment.
 func (s *DomainService) EnsureBuiltInManagedDomains(ctx context.Context) error {
 	for _, rootDomain := range builtInSaleManagedDomains {
-		if err := s.ensureManagedDomainBootstrap(ctx, rootDomain, storage.UpsertManagedDomainInput{
-			RootDomain:         rootDomain,
+		normalizedRootDomain := strings.ToLower(strings.TrimSpace(rootDomain))
+		if normalizedRootDomain == "" {
+			continue
+		}
+		if _, err := s.db.GetManagedDomainByRoot(ctx, normalizedRootDomain); err == nil {
+			continue
+		} else if !storage.IsNotFound(err) {
+			return err
+		}
+
+		if err := s.ensureManagedDomainBootstrap(ctx, normalizedRootDomain, storage.UpsertManagedDomainInput{
+			RootDomain:         normalizedRootDomain,
 			DefaultQuota:       1,
 			AutoProvision:      false,
 			IsDefault:          false,
 			Enabled:            true,
 			SaleEnabled:        false,
-			SaleBasePriceCents: 0,
+			SaleBasePriceCents: 1000,
 		}); err != nil {
+			// Built-in sale domains are optional bootstrap conveniences. When one
+			// environment has not delegated the zone to Cloudflare yet, startup
+			// should continue instead of taking the whole API offline.
+			if statusErr, ok := err.(*Error); ok && statusErr.StatusCode == 503 {
+				continue
+			}
 			return err
 		}
 	}

@@ -787,6 +787,96 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("exact domain purchase reservation blocks concurrent checkout creation until release", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "domain-buyer")
+		managedDomain := newTestManagedDomain(t, ctx, store, "linuxdo.space")
+
+		firstOrder, err := store.CreatePaymentOrder(ctx, storage.CreatePaymentOrderInput{
+			UserID:                   user.ID,
+			ProductKey:               "domain_allocation_purchase",
+			ProductName:              "域名购买",
+			Title:                    "购买 hello.linuxdo.space",
+			GatewayType:              model.PaymentGatewayLinuxDOCredit,
+			OutTradeNo:               "DOMAIN-ORDER-1",
+			Status:                   model.PaymentOrderStatusCreated,
+			Units:                    1,
+			GrantQuantity:            1,
+			GrantedTotal:             1,
+			GrantUnit:                "allocation",
+			UnitPriceCents:           1000,
+			TotalPriceCents:          1000,
+			EffectType:               model.PaymentEffectDomainAllocationPurchase,
+			PurchaseRootDomain:       managedDomain.RootDomain,
+			PurchaseMode:             "exact",
+			PurchasePrefix:           "hello",
+			PurchaseNormalizedPrefix: "hello",
+			PurchaseRequestedLength:  5,
+		})
+		if err != nil {
+			t.Fatalf("create first exact domain purchase order: %v", err)
+		}
+
+		if _, err := store.CreatePaymentOrder(ctx, storage.CreatePaymentOrderInput{
+			UserID:                   user.ID,
+			ProductKey:               "domain_allocation_purchase",
+			ProductName:              "域名购买",
+			Title:                    "购买 hello.linuxdo.space again",
+			GatewayType:              model.PaymentGatewayLinuxDOCredit,
+			OutTradeNo:               "DOMAIN-ORDER-2",
+			Status:                   model.PaymentOrderStatusCreated,
+			Units:                    1,
+			GrantQuantity:            1,
+			GrantedTotal:             1,
+			GrantUnit:                "allocation",
+			UnitPriceCents:           1000,
+			TotalPriceCents:          1000,
+			EffectType:               model.PaymentEffectDomainAllocationPurchase,
+			PurchaseRootDomain:       managedDomain.RootDomain,
+			PurchaseMode:             "exact",
+			PurchasePrefix:           "hello",
+			PurchaseNormalizedPrefix: "hello",
+			PurchaseRequestedLength:  5,
+		}); err == nil {
+			t.Fatalf("expected duplicate exact domain purchase reservation to fail")
+		}
+
+		now := time.Now().UTC()
+		if _, err := store.UpdatePaymentOrderGatewayState(ctx, storage.UpdatePaymentOrderGatewayStateInput{
+			OutTradeNo:    firstOrder.OutTradeNo,
+			Status:        model.PaymentOrderStatusFailed,
+			LastCheckedAt: &now,
+		}); err != nil {
+			t.Fatalf("mark first exact domain purchase order failed: %v", err)
+		}
+
+		if _, err := store.CreatePaymentOrder(ctx, storage.CreatePaymentOrderInput{
+			UserID:                   user.ID,
+			ProductKey:               "domain_allocation_purchase",
+			ProductName:              "域名购买",
+			Title:                    "购买 hello.linuxdo.space after release",
+			GatewayType:              model.PaymentGatewayLinuxDOCredit,
+			OutTradeNo:               "DOMAIN-ORDER-3",
+			Status:                   model.PaymentOrderStatusCreated,
+			Units:                    1,
+			GrantQuantity:            1,
+			GrantedTotal:             1,
+			GrantUnit:                "allocation",
+			UnitPriceCents:           1000,
+			TotalPriceCents:          1000,
+			EffectType:               model.PaymentEffectDomainAllocationPurchase,
+			PurchaseRootDomain:       managedDomain.RootDomain,
+			PurchaseMode:             "exact",
+			PurchasePrefix:           "hello",
+			PurchaseNormalizedPrefix: "hello",
+			PurchaseRequestedLength:  5,
+		}); err != nil {
+			t.Fatalf("create exact domain purchase order after release: %v", err)
+		}
+	})
+
 	t.Run("admin payment order list sorts newest first and keeps user identity", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)
