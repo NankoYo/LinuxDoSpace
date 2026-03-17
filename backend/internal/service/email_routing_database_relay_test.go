@@ -35,10 +35,11 @@ func TestSyncForwardingStateDatabaseRelaySkipsCloudflareForSubdomainExactRoute(t
 	}
 }
 
-// TestDatabaseRelayCatchAllPermissionApprovalEnsuresRelayDNS verifies that the
-// relay MX/TXT records are prepared when the catch-all permission becomes
-// approved, instead of waiting until the user later saves a forwarding target.
-func TestDatabaseRelayCatchAllPermissionApprovalEnsuresRelayDNS(t *testing.T) {
+// TestDatabaseRelayCatchAllPermissionApprovalDefersRelayDNSUntilRouteSave
+// verifies that permission approval alone no longer burns Cloudflare DNS quota.
+// The relay MX/TXT records are allocated lazily when the user actually saves a
+// concrete catch-all forwarding target.
+func TestDatabaseRelayCatchAllPermissionApprovalDefersRelayDNSUntilRouteSave(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 702, "alice")
@@ -68,13 +69,9 @@ func TestDatabaseRelayCatchAllPermissionApprovalEnsuresRelayDNS(t *testing.T) {
 	}
 
 	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
-	if !hasDNSRecord(zoneDNSRecords, "MX", "alice.linuxdo.space", "mail.linuxdo.space") {
-		t.Fatalf("expected relay MX record to be created on permission approval, got %+v", zoneDNSRecords)
+	if len(zoneDNSRecords) != 0 {
+		t.Fatalf("expected permission approval to defer relay dns allocation, got %+v", zoneDNSRecords)
 	}
-	if !hasDNSRecord(zoneDNSRecords, "TXT", "alice.linuxdo.space", "v=spf1 -all") {
-		t.Fatalf("expected relay SPF record to be created on permission approval, got %+v", zoneDNSRecords)
-	}
-	initialDNSRecordCount := len(zoneDNSRecords)
 
 	view, err := service.UpsertMyCatchAllEmailRoute(ctx, user, UpsertMyCatchAllEmailRouteRequest{
 		TargetEmail: target.Email,
@@ -88,8 +85,11 @@ func TestDatabaseRelayCatchAllPermissionApprovalEnsuresRelayDNS(t *testing.T) {
 	}
 
 	zoneDNSRecords = cf.dnsRecordsByZone["zone-default"]
-	if len(zoneDNSRecords) != initialDNSRecordCount {
-		t.Fatalf("expected catch-all save to reuse existing relay dns records, got %+v", zoneDNSRecords)
+	if !hasDNSRecord(zoneDNSRecords, "MX", "alice.linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected catch-all save to allocate relay MX record, got %+v", zoneDNSRecords)
+	}
+	if !hasDNSRecord(zoneDNSRecords, "TXT", "alice.linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected catch-all save to allocate relay SPF record, got %+v", zoneDNSRecords)
 	}
 
 	for _, item := range zoneDNSRecords {
@@ -159,10 +159,10 @@ func TestDatabaseRelayDefaultMailboxKeepsCloudflareExactForwarding(t *testing.T)
 	}
 }
 
-// TestDatabaseRelayAdminGrantEnsuresRelayDNS verifies that manual permission
-// approval from the administrator flow bootstraps relay DNS before the user
-// saves any concrete catch-all forwarding target.
-func TestDatabaseRelayAdminGrantEnsuresRelayDNS(t *testing.T) {
+// TestDatabaseRelayAdminGrantDefersRelayDNSUntilRouteSave verifies that manual
+// administrator approval follows the same quota-preserving lazy bootstrap rule
+// as the self-service application flow.
+func TestDatabaseRelayAdminGrantDefersRelayDNSUntilRouteSave(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	admin := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 704, "admin")
@@ -188,11 +188,8 @@ func TestDatabaseRelayAdminGrantEnsuresRelayDNS(t *testing.T) {
 	}
 
 	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
-	if !hasDNSRecord(zoneDNSRecords, "MX", "alice.linuxdo.space", "mail.linuxdo.space") {
-		t.Fatalf("expected admin approval to create relay MX record, got %+v", zoneDNSRecords)
-	}
-	if !hasDNSRecord(zoneDNSRecords, "TXT", "alice.linuxdo.space", "v=spf1 -all") {
-		t.Fatalf("expected admin approval to create relay SPF record, got %+v", zoneDNSRecords)
+	if len(zoneDNSRecords) != 0 {
+		t.Fatalf("expected admin approval to defer relay dns allocation, got %+v", zoneDNSRecords)
 	}
 	if len(cf.rulesByZone["zone-default"]) != 0 {
 		t.Fatalf("expected no cloudflare exact email-routing rule writes, got %+v", cf.rulesByZone["zone-default"])
@@ -260,10 +257,11 @@ func TestDatabaseRelayCatchAllSaveBackfillsMissingIngressDNS(t *testing.T) {
 	}
 }
 
-// TestEnsureDatabaseRelayIngressDNSStateBackfillsApprovedNamespaces verifies
-// that service startup can repair already-approved namespaces and subdomain
-// routes after an operator changes servers or enables database-relay mode.
-func TestEnsureDatabaseRelayIngressDNSStateBackfillsApprovedNamespaces(t *testing.T) {
+// TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes
+// verifies that startup now reconciles relay DNS against actual active routes:
+// stale permission-only records are deleted, while enabled subdomain routes are
+// backfilled if their ingress MX/TXT is missing.
+func TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	alice := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 707, "alice")
@@ -281,15 +279,6 @@ func TestEnsureDatabaseRelayIngressDNSStateBackfillsApprovedNamespaces(t *testin
 	cfg.Mail.MXPriority = 10
 	cfg.Mail.SPFValue = "v=spf1 -all"
 
-	if _, err := store.UpsertAdminApplication(ctx, storage.UpsertAdminApplicationInput{
-		ApplicantUserID: alice.ID,
-		Type:            PermissionKeyEmailCatchAll,
-		Target:          "*@alice.linuxdo.space",
-		Reason:          "approved before relay bootstrap",
-		Status:          "approved",
-	}); err != nil {
-		t.Fatalf("seed approved alice catch-all application: %v", err)
-	}
 	if _, err := store.CreateEmailRoute(ctx, storage.CreateEmailRouteInput{
 		OwnerUserID: bob.ID,
 		RootDomain:  "bob.linuxdo.space",
@@ -299,17 +288,37 @@ func TestEnsureDatabaseRelayIngressDNSStateBackfillsApprovedNamespaces(t *testin
 	}); err != nil {
 		t.Fatalf("seed bob subdomain email route: %v", err)
 	}
+	priorityTen := 10
+	cf.dnsRecordsByZone["zone-default"] = []cloudflare.DNSRecord{
+		{
+			ID:       "stale-mx",
+			Type:     "MX",
+			Name:     "alice.linuxdo.space",
+			Content:  "mail.linuxdo.space",
+			TTL:      1,
+			Comment:  databaseRelayManagedDNSComment,
+			Priority: &priorityTen,
+		},
+		{
+			ID:      "stale-txt",
+			Type:    "TXT",
+			Name:    "alice.linuxdo.space",
+			Content: "v=spf1 -all",
+			TTL:     1,
+			Comment: databaseRelayManagedDNSComment,
+		},
+	}
 
 	if err := EnsureDatabaseRelayIngressDNSState(ctx, cfg, store, cf); err != nil {
 		t.Fatalf("backfill database relay ingress dns on startup: %v", err)
 	}
 
 	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
-	if !hasDNSRecord(zoneDNSRecords, "MX", "alice.linuxdo.space", "mail.linuxdo.space") {
-		t.Fatalf("expected startup bootstrap to create alice relay MX record, got %+v", zoneDNSRecords)
+	if hasDNSRecord(zoneDNSRecords, "MX", "alice.linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected startup reconciliation to delete stale alice relay MX record, got %+v", zoneDNSRecords)
 	}
-	if !hasDNSRecord(zoneDNSRecords, "TXT", "alice.linuxdo.space", "v=spf1 -all") {
-		t.Fatalf("expected startup bootstrap to create alice relay SPF record, got %+v", zoneDNSRecords)
+	if hasDNSRecord(zoneDNSRecords, "TXT", "alice.linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected startup reconciliation to delete stale alice relay SPF record, got %+v", zoneDNSRecords)
 	}
 	if !hasDNSRecord(zoneDNSRecords, "MX", "bob.linuxdo.space", "mail.linuxdo.space") {
 		t.Fatalf("expected startup bootstrap to create bob relay MX record, got %+v", zoneDNSRecords)

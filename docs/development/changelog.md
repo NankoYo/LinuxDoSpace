@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Changed database-relay namespace DNS allocation to be route-driven instead of permission-driven: catch-all approval no longer pre-allocates relay `MX/TXT`, startup now prunes stale LinuxDoSpace-managed relay records that no longer back any active route, and Cloudflare quota-exhaustion errors now return an explicit operator hint.
 - Hardened paid domain purchases with exact-prefix reservation keys, stale checkout release, Cloudflare realtime conflict re-checking during entitlement apply, and public/generic payment-flow isolation for the internal `domain_allocation_purchase` product.
 - Updated managed-domain bootstrap defaults so built-in sale roots start at `10 LDC` base price, skip optional unresolved zones during startup, and no longer overwrite administrator-edited configuration on restart.
 - Added per-root-domain sale settings plus public dynamic namespace purchase flow on the domain search page, with fixed length multipliers, hidden random 12+ character purchases, and built-in bootstrap roots for `cifang.love`, `openapi.best`, and `metapi.cc`.

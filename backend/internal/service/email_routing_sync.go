@@ -674,6 +674,9 @@ func wrapEmailRoutingUnavailable(message string, err error) error {
 	if strings.Contains(normalized, "authentication error") {
 		return UnavailableError(message+"; the Cloudflare API token must include DNS read/write, Email Routing Addresses read/write, Email Routing Rules read/write, and Zone read permissions", err)
 	}
+	if strings.Contains(normalized, "record quota exceeded") {
+		return UnavailableError(message+"; Cloudflare reports that this zone has reached its DNS record quota, so unused records must be removed or the zone plan must be upgraded before new relay DNS can be allocated", err)
+	}
 	return UnavailableError(message, err)
 }
 
