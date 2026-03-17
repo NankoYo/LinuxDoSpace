@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"html"
 	"log"
 	"net/http"
+	"strings"
 
 	"linuxdospace/backend/internal/service"
 )
@@ -77,7 +79,7 @@ func (a *API) handleMyEmailTargets(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateMyEmailTarget binds one external mailbox to the current user and
-// asks Cloudflare to send the verification email when needed.
+// asks LinuxDoSpace itself to send the verification email when needed.
 func (a *API) handleCreateMyEmailTarget(w http.ResponseWriter, r *http.Request) {
 	session, user, ok := a.requireActor(w, r)
 	if !ok {
@@ -105,7 +107,38 @@ func (a *API) handleCreateMyEmailTarget(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, item)
 }
 
-// handleResendMyEmailTargetVerification retriggers the Cloudflare verification
+// handleVerifyEmailTarget consumes the public verification link sent to one
+// claimed target inbox and responds with a tiny standalone success/failure page
+// so the user does not need an active browser session to complete ownership
+// verification.
+func (a *API) handleVerifyEmailTarget(w http.ResponseWriter, r *http.Request) {
+	result, err := a.permissionService.VerifyEmailTarget(r.Context(), r.URL.Query().Get("token"))
+	if err != nil {
+		normalized := service.NormalizeError(err)
+		statusCode := normalized.StatusCode
+		title := "目标邮箱验证失败"
+		description := normalized.Message
+		switch normalized.Code {
+		case "validation_failed":
+			statusCode = http.StatusGone
+		case "not_found":
+			statusCode = http.StatusNotFound
+		}
+		writeEmailTargetVerificationHTML(w, statusCode, title, description, strings.TrimRight(strings.TrimSpace(a.config.App.FrontendURL), "/")+"/emails")
+		return
+	}
+
+	writeEmailTargetVerificationHTML(
+		w,
+		http.StatusOK,
+		"目标邮箱验证成功",
+		"该目标邮箱已经完成验证，现在可以回到邮箱页面把它用于默认邮箱或邮箱泛解析转发。",
+		strings.TrimRight(strings.TrimSpace(a.config.App.FrontendURL), "/")+"/emails",
+	)
+	_ = result
+}
+
+// handleResendMyEmailTargetVerification retriggers the platform verification
 // email for one still-pending target mailbox owned by the current user.
 func (a *API) handleResendMyEmailTargetVerification(w http.ResponseWriter, r *http.Request) {
 	session, user, ok := a.requireActor(w, r)
@@ -125,13 +158,33 @@ func (a *API) handleResendMyEmailTargetVerification(w http.ResponseWriter, r *ht
 	item, err := a.permissionService.ResendMyEmailTargetVerification(r.Context(), *user, targetID)
 	if err != nil {
 		// Resend failures need the same visibility because they are usually
-		// caused by Cloudflare-side constraints that do not otherwise surface in
-		// the application's structured audit table.
+		// caused by outbound SMTP reachability problems that do not otherwise
+		// surface in the application's structured audit table.
 		log.Printf("resend my email target verification failed for user %d target %d: %v", user.ID, targetID, err)
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+// writeEmailTargetVerificationHTML renders the small standalone page shown when
+// the user opens the verification link directly from their mailbox.
+func writeEmailTargetVerificationHTML(w http.ResponseWriter, statusCode int, title string, description string, backURL string) {
+	escapedTitle := html.EscapeString(strings.TrimSpace(title))
+	escapedDescription := html.EscapeString(strings.TrimSpace(description))
+	escapedBackURL := html.EscapeString(strings.TrimSpace(backURL))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(statusCode)
+	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` +
+		escapedTitle +
+		`</title><style>body{margin:0;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}.card{max-width:640px;width:100%;background:rgba(15,23,42,.82);border:1px solid rgba(148,163,184,.22);border-radius:24px;padding:32px;box-shadow:0 24px 80px rgba(0,0,0,.35)}h1{margin:0 0 16px;font-size:30px;line-height:1.2}p{margin:0 0 20px;font-size:16px;line-height:1.85;color:#cbd5e1}a{display:inline-block;border-radius:14px;background:linear-gradient(135deg,#38bdf8,#22d3ee);padding:12px 18px;color:#082f49;text-decoration:none;font-weight:700}</style></head><body><main class="card"><h1>` +
+		escapedTitle +
+		`</h1><p>` +
+		escapedDescription +
+		`</p><a href="` +
+		escapedBackURL +
+		`">返回邮箱页面</a></main></body></html>`))
 }
 
 // handleUpsertDefaultEmailRoute writes the authenticated user's forwarding

@@ -56,6 +56,7 @@ type Store interface {
 	DeleteEmailRoute(ctx context.Context, id int64) error
 	ListEmailTargetsByOwner(ctx context.Context, ownerUserID int64) ([]model.EmailTarget, error)
 	GetEmailTargetByEmail(ctx context.Context, email string) (model.EmailTarget, error)
+	GetEmailTargetByVerificationTokenHash(ctx context.Context, tokenHash string) (model.EmailTarget, error)
 	CreateEmailTarget(ctx context.Context, input CreateEmailTargetInput) (model.EmailTarget, error)
 	UpdateEmailTarget(ctx context.Context, input UpdateEmailTargetInput) (model.EmailTarget, error)
 	ListAdminApplications(ctx context.Context) ([]model.AdminApplication, error)

@@ -251,10 +251,10 @@ func TestLoadAcceptsDatabaseURLFallback(t *testing.T) {
 	}
 }
 
-// TestLoadDefaultsToCloudflareEmailForwarding ensures existing deployments keep
-// the current Email Routing execution mode unless they explicitly opt into the
-// database-driven SMTP relay.
-func TestLoadDefaultsToCloudflareEmailForwarding(t *testing.T) {
+// TestLoadDefaultsToDatabaseRelayEmailForwarding ensures fresh deployments now
+// default to the built-in relay so mailbox forwarding no longer depends on
+// Cloudflare Email Routing destination-address quotas.
+func TestLoadDefaultsToDatabaseRelayEmailForwarding(t *testing.T) {
 	t.Setenv("APP_SESSION_SECRET", "test-session-secret")
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("APP_ADMIN_USERNAMES", "")
@@ -264,11 +264,11 @@ func TestLoadDefaultsToCloudflareEmailForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config with default email forwarding backend: %v", err)
 	}
-	if cfg.Mail.ForwardingBackend != EmailForwardingBackendCloudflare {
-		t.Fatalf("expected default email forwarding backend %q, got %q", EmailForwardingBackendCloudflare, cfg.Mail.ForwardingBackend)
+	if cfg.Mail.ForwardingBackend != EmailForwardingBackendDatabaseRelay {
+		t.Fatalf("expected default email forwarding backend %q, got %q", EmailForwardingBackendDatabaseRelay, cfg.Mail.ForwardingBackend)
 	}
-	if cfg.UsesDatabaseMailRelay() {
-		t.Fatalf("expected database mail relay to be disabled by default")
+	if !cfg.UsesDatabaseMailRelay() {
+		t.Fatalf("expected database mail relay to be enabled by default")
 	}
 }
 

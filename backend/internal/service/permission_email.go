@@ -39,9 +39,9 @@ type defaultEmailRouteSpec struct {
 	Address    string
 }
 
-// forwardingRuleSnapshot is the small Cloudflare-facing view used to reconcile
-// the public mailbox UI with the actual Email Routing rule when the local
-// database is missing or stale.
+// forwardingRuleSnapshot is the small provider-facing view retained for the
+// legacy Cloudflare backend. In the default database-relay mode, this stays
+// empty because the database is the only authority for mailbox routing.
 type forwardingRuleSnapshot struct {
 	Found       bool
 	TargetEmail string
@@ -91,11 +91,10 @@ func (s *PermissionService) CheckPublicEmailAvailability(ctx context.Context, ro
 		return EmailRouteAvailabilityResult{}, InternalError("failed to check existing email route conflicts", err)
 	}
 
-	// When the local database is missing or stale, Cloudflare remains the source
-	// of truth for whether the mailbox is already forwarding somewhere. This
-	// second check prevents the public search UI from advertising an address that
-	// still exists remotely after a partial failure.
-	if result.Available {
+	// In legacy Cloudflare-routing mode, the provider may still hold a route
+	// that the local database does not know about yet. Database-relay mode uses
+	// only local state, so the extra remote lookup must be skipped.
+	if result.Available && !s.cfg.UsesDatabaseMailRelay() {
 		snapshot, snapshotErr := s.lookupCloudflareForwardingSnapshot(ctx, managedDomain.RootDomain, normalizedPrefix)
 		if snapshotErr != nil {
 			return EmailRouteAvailabilityResult{}, snapshotErr
@@ -210,11 +209,10 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 	), nil
 }
 
-// resolveDefaultEmailRouteBeforeState loads the exact Cloudflare-facing state
-// that should be considered the "before" snapshot for one user's implicit
-// default mailbox. The database remains authoritative for ownership checks, but
-// Cloudflare becomes the fallback truth when the local row is missing after a
-// partial failure.
+// resolveDefaultEmailRouteBeforeState loads the provider-facing "before"
+// snapshot for one user's implicit default mailbox. In the default
+// database-relay mode this usually resolves to local state only; the
+// Cloudflare fallback is retained solely for the legacy provider-managed mode.
 func (s *PermissionService) resolveDefaultEmailRouteBeforeState(ctx context.Context, user model.User, spec defaultEmailRouteSpec) (emailRouteSyncState, *model.EmailRoute, error) {
 	beforeState := newDeletedEmailRouteSyncState(spec.RootDomain, spec.Prefix)
 
@@ -310,6 +308,7 @@ func (s *PermissionService) resolveDefaultEmailRouteSpec(ctx context.Context, us
 
 // buildDefaultEmailRouteView returns either the persisted default forwarding
 // rule or the placeholder row shown before the user saves a target inbox.
+// Legacy Cloudflare snapshot overlay still exists for rollback compatibility.
 func (s *PermissionService) buildDefaultEmailRouteView(ctx context.Context, user model.User) (UserEmailRouteView, error) {
 	spec, err := s.resolveDefaultEmailRouteSpec(ctx, user)
 	if err != nil {
@@ -383,7 +382,7 @@ func buildCustomEmailRouteView(route model.EmailRoute) UserEmailRouteView {
 // rule for one visible mailbox address when Email Routing integration is
 // configured. The public page uses this to avoid showing stale local state.
 func (s *PermissionService) lookupCloudflareForwardingSnapshot(ctx context.Context, rootDomain string, prefix string) (forwardingRuleSnapshot, error) {
-	if usesDatabaseRelayNamespaceRoot(s.cfg, rootDomain) {
+	if s.cfg.UsesDatabaseMailRelay() {
 		return forwardingRuleSnapshot{}, nil
 	}
 	if s.cf == nil || !s.cfg.CloudflareConfigured() {

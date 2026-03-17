@@ -41,6 +41,10 @@ var (
 	// ErrTargetOwnershipMismatch means the target inbox is bound to another user
 	// and should never be used by the current route owner.
 	ErrTargetOwnershipMismatch = errors.New("target email belongs to another user")
+
+	// ErrForwardingDailyLimitExceeded means one route owner already consumed the
+	// hidden per-day forwarding cap enforced by the local SMTP relay.
+	ErrForwardingDailyLimitExceeded = errors.New("mail forwarding daily limit exceeded")
 )
 
 // ResolverStore is the minimum storage contract required by the database-backed

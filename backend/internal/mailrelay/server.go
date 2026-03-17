@@ -185,6 +185,7 @@ func (s *smtpSession) Logout() error {
 type groupedRecipients struct {
 	TargetEmail          string
 	OriginalRecipients   []string
+	OwnerUserIDs         []int64
 	CatchAllOwnerUserIDs []int64
 }
 
@@ -207,18 +208,31 @@ func groupRecipientsByTarget(recipients []ResolvedRecipient) []groupedRecipients
 			groups = append(groups, groupedRecipients{
 				TargetEmail:          targetEmail,
 				OriginalRecipients:   []string{item.OriginalRecipient},
+				OwnerUserIDs:         uniqueOwnerIDs(item),
 				CatchAllOwnerUserIDs: uniqueCatchAllOwners(item),
 			})
 			continue
 		}
 
 		groups[index].OriginalRecipients = append(groups[index].OriginalRecipients, item.OriginalRecipient)
+		if item.RouteOwnerUserID > 0 && !containsInt64(groups[index].OwnerUserIDs, item.RouteOwnerUserID) {
+			groups[index].OwnerUserIDs = append(groups[index].OwnerUserIDs, item.RouteOwnerUserID)
+		}
 		if item.UsedCatchAll && item.RouteOwnerUserID > 0 && !containsInt64(groups[index].CatchAllOwnerUserIDs, item.RouteOwnerUserID) {
 			groups[index].CatchAllOwnerUserIDs = append(groups[index].CatchAllOwnerUserIDs, item.RouteOwnerUserID)
 		}
 	}
 
 	return groups
+}
+
+// uniqueOwnerIDs starts one group with the single owner that should be charged
+// against the generic per-user daily forwarding cap.
+func uniqueOwnerIDs(item ResolvedRecipient) []int64 {
+	if item.RouteOwnerUserID <= 0 {
+		return nil
+	}
+	return []int64{item.RouteOwnerUserID}
 }
 
 // uniqueCatchAllOwners starts one group with the single owner that should be
@@ -321,6 +335,12 @@ func queueSMTPError(err error) error {
 	switch {
 	case errors.Is(err, ErrCatchAllAccessUnavailable), errors.Is(err, ErrCatchAllDailyLimitExceeded):
 		return catchAllAccessSMTPError(err)
+	case errors.Is(err, ErrForwardingDailyLimitExceeded):
+		return &smtp.SMTPError{
+			Code:         452,
+			EnhancedCode: smtp.EnhancedCode{4, 2, 2},
+			Message:      "recipient daily forwarding limit has been reached",
+		}
 	case errors.Is(err, context.DeadlineExceeded):
 		return &smtp.SMTPError{
 			Code:         451,

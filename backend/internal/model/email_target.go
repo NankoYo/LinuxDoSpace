@@ -10,6 +10,8 @@ type EmailTarget struct {
 	OwnerUserID                 int64      `json:"owner_user_id"`
 	Email                       string     `json:"email"`
 	CloudflareAddressID         string     `json:"cloudflare_address_id"`
+	VerificationTokenHash       string     `json:"-"`
+	VerificationExpiresAt       *time.Time `json:"verification_expires_at,omitempty"`
 	VerifiedAt                  *time.Time `json:"verified_at,omitempty"`
 	LastVerificationSentAt      *time.Time `json:"last_verification_sent_at,omitempty"`
 	CreatedAt                   time.Time  `json:"created_at"`

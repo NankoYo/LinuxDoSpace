@@ -21,6 +21,8 @@ SELECT
     owner_user_id,
     email,
     cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
     verified_at,
     last_verification_sent_at,
     created_at,
@@ -60,6 +62,8 @@ SELECT
     owner_user_id,
     email,
     cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
     verified_at,
     last_verification_sent_at,
     created_at,
@@ -67,6 +71,27 @@ SELECT
 FROM email_targets
 WHERE email = ?
 `, email)
+	return scanEmailTarget(row)
+}
+
+// GetEmailTargetByVerificationTokenHash loads one pending forwarding target by
+// the hashed verification token sent inside the platform-owned email message.
+func (s *Store) GetEmailTargetByVerificationTokenHash(ctx context.Context, tokenHash string) (model.EmailTarget, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT
+    id,
+    owner_user_id,
+    email,
+    cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
+    verified_at,
+    last_verification_sent_at,
+    created_at,
+    updated_at
+FROM email_targets
+WHERE verification_token_hash = ?
+`, tokenHash)
 	return scanEmailTarget(row)
 }
 
@@ -78,16 +103,20 @@ INSERT INTO email_targets (
     owner_user_id,
     email,
     cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
     verified_at,
-    last_verification_sent_at,
-    created_at,
-    updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+	last_verification_sent_at,
+	created_at,
+	updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id
 `,
 		input.OwnerUserID,
 		input.Email,
 		input.CloudflareAddressID,
+		input.VerificationTokenHash,
+		formatNullableTime(input.VerificationExpiresAt),
 		formatNullableTime(input.VerifiedAt),
 		formatNullableTime(input.LastVerificationSentAt),
 		formatTime(now),
@@ -109,6 +138,8 @@ func (s *Store) UpdateEmailTarget(ctx context.Context, input UpdateEmailTargetIn
 UPDATE email_targets
 SET
     cloudflare_address_id = ?,
+    verification_token_hash = ?,
+    verification_expires_at = ?,
     verified_at = ?,
     last_verification_sent_at = ?,
     updated_at = ?
@@ -116,6 +147,8 @@ WHERE id = ?
 RETURNING id
 `,
 		input.CloudflareAddressID,
+		input.VerificationTokenHash,
+		formatNullableTime(input.VerificationExpiresAt),
 		formatNullableTime(input.VerifiedAt),
 		formatNullableTime(input.LastVerificationSentAt),
 		formatTime(now),
@@ -137,6 +170,8 @@ SELECT
     owner_user_id,
     email,
     cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
     verified_at,
     last_verification_sent_at,
     created_at,
@@ -150,6 +185,7 @@ WHERE id = ?
 // scanEmailTarget maps one email-target row into the model package.
 func scanEmailTarget(scanner interface{ Scan(dest ...any) error }) (model.EmailTarget, error) {
 	var item model.EmailTarget
+	var verificationExpiresAt sql.NullString
 	var verifiedAt sql.NullString
 	var lastVerificationSentAt sql.NullString
 	var createdAt string
@@ -160,6 +196,8 @@ func scanEmailTarget(scanner interface{ Scan(dest ...any) error }) (model.EmailT
 		&item.OwnerUserID,
 		&item.Email,
 		&item.CloudflareAddressID,
+		&item.VerificationTokenHash,
+		&verificationExpiresAt,
 		&verifiedAt,
 		&lastVerificationSentAt,
 		&createdAt,
@@ -169,6 +207,9 @@ func scanEmailTarget(scanner interface{ Scan(dest ...any) error }) (model.EmailT
 		return model.EmailTarget{}, err
 	}
 
+	if item.VerificationExpiresAt, err = parseNullableTime(verificationExpiresAt); err != nil {
+		return model.EmailTarget{}, err
+	}
 	if item.VerifiedAt, err = parseNullableTime(verifiedAt); err != nil {
 		return model.EmailTarget{}, err
 	}

@@ -14,6 +14,23 @@ import (
 	"linuxdospace/backend/internal/storage/sqlite"
 )
 
+// stubEmailTargetVerificationMailer keeps target-binding tests deterministic by
+// recording outbound verification emails instead of touching the real network.
+type stubEmailTargetVerificationMailer struct {
+	sent []EmailTargetVerificationMailInput
+	err  error
+}
+
+// SendVerification appends the requested verification email or returns the
+// preconfigured stub error.
+func (m *stubEmailTargetVerificationMailer) SendVerification(ctx context.Context, input EmailTargetVerificationMailInput) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.sent = append(m.sent, input)
+	return nil
+}
+
 // fakeEmailRoutingCloudflare keeps the tests focused on the permission service
 // behavior by emulating only the Email Routing operations exercised here.
 type fakeEmailRoutingCloudflare struct {
@@ -347,7 +364,9 @@ func TestResolveDefaultEmailRouteBeforeStateFallsBackToCloudflareSnapshot(t *tes
 		},
 	}
 
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	cfg := newPermissionEmailTestConfig()
+	cfg.Mail.ForwardingBackend = "cloudflare"
+	service := NewPermissionService(cfg, store, cf)
 	spec, err := service.resolveDefaultEmailRouteSpec(ctx, user)
 	if err != nil {
 		t.Fatalf("resolve default email route spec: %v", err)
@@ -400,7 +419,9 @@ func TestUpsertMyDefaultEmailRouteClearsCloudflareWhenDatabaseRowMissing(t *test
 		},
 	}
 
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	cfg := newPermissionEmailTestConfig()
+	cfg.Mail.ForwardingBackend = "cloudflare"
+	service := NewPermissionService(cfg, store, cf)
 	view, err := service.UpsertMyDefaultEmailRoute(ctx, user, UpsertMyDefaultEmailRouteRequest{
 		TargetEmail: "",
 		Enabled:     false,
@@ -426,9 +447,9 @@ func TestUpsertMyDefaultEmailRouteClearsCloudflareWhenDatabaseRowMissing(t *test
 }
 
 // TestUpsertMyCatchAllEmailRouteUsesCatchAllRuleAndEnsuresEmailRoutingDNS
-// verifies that namespace-wide email forwarding uses Cloudflare's dedicated
-// catch-all rule plus the required Email Routing DNS records, rather than a
-// fake literal mailbox such as catch-all@namespace.
+// preserves the legacy Cloudflare Email Routing behavior behind the explicit
+// cloudflare backend flag so operators can still run the old execution mode
+// while production defaults move to the database relay.
 func TestUpsertMyCatchAllEmailRouteUsesCatchAllRuleAndEnsuresEmailRoutingDNS(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
@@ -454,14 +475,16 @@ func TestUpsertMyCatchAllEmailRouteUsesCatchAllRuleAndEnsuresEmailRoutingDNS(t *
 		},
 	}
 
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "owner@example.com"})
-	if err != nil {
-		t.Fatalf("create owned email target: %v", err)
-	}
-
+	cfg := newPermissionEmailTestConfig()
+	cfg.Mail.ForwardingBackend = "cloudflare"
+	service, mailer := newPermissionServiceWithTestMailer(cfg, store, cf)
+	target := createVerifiedPermissionEmailTarget(t, ctx, service, mailer, user, "owner@example.com")
 	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
+	cf.addressesByAccount["account-default"] = []cloudflare.EmailRoutingDestinationAddress{{
+		ID:       "addr-1",
+		Email:    target.Email,
+		Verified: &verifiedAt,
+	}}
 
 	if _, err := service.SubmitPermissionApplication(ctx, user, SubmitPermissionApplicationRequest{Key: PermissionKeyEmailCatchAll}); err != nil {
 		t.Fatalf("submit catch-all permission application: %v", err)
@@ -580,6 +603,9 @@ func TestParseCatchAllTargetAddressAcceptsLegacyAndCanonical(t *testing.T) {
 func newPermissionEmailTestConfig() config.Config {
 	return config.Config{
 		App: config.AppConfig{
+			Name:          "LinuxDoSpace Test",
+			BaseURL:       "https://api.example.com",
+			FrontendURL:   "https://app.example.com",
 			SessionSecret: []byte("permission-email-test-secret"),
 		},
 		Cloudflare: config.CloudflareConfig{
@@ -589,7 +615,43 @@ func newPermissionEmailTestConfig() config.Config {
 			DefaultZoneID:     "zone-default",
 			DefaultUserQuota:  1,
 		},
+		Mail: config.MailConfig{
+			ForwardingBackend: config.EmailForwardingBackendDatabaseRelay,
+			Domain:            "mail.linuxdo.space",
+			HELODomain:        "mail.linuxdo.space",
+			ForwardFrom:       "relay@linuxdo.space",
+		},
 	}
+}
+
+// newPermissionServiceWithTestMailer constructs the permission service together
+// with a deterministic verification-mail stub used by the email tests.
+func newPermissionServiceWithTestMailer(cfg config.Config, store Store, cf CloudflareClient) (*PermissionService, *stubEmailTargetVerificationMailer) {
+	service := NewPermissionService(cfg, store, cf)
+	mailer := &stubEmailTargetVerificationMailer{}
+	service.targetVerificationMailer = mailer
+	return service, mailer
+}
+
+// createVerifiedPermissionEmailTarget drives the full local verification flow
+// used by the new platform-owned target-binding implementation so tests do not
+// manually mutate storage rows behind the service's back.
+func createVerifiedPermissionEmailTarget(t *testing.T, ctx context.Context, service *PermissionService, mailer *stubEmailTargetVerificationMailer, user model.User, email string) UserEmailTargetView {
+	t.Helper()
+
+	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: email})
+	if err != nil {
+		t.Fatalf("create owned email target: %v", err)
+	}
+	if len(mailer.sent) == 0 {
+		t.Fatalf("expected verification email to be sent for %q", email)
+	}
+
+	token := mustExtractVerificationToken(t, mailer.sent[len(mailer.sent)-1].VerificationURL)
+	if _, err := service.VerifyEmailTarget(ctx, token); err != nil {
+		t.Fatalf("verify owned email target %q: %v", email, err)
+	}
+	return target
 }
 
 // newFakeEmailRoutingCloudflare initializes the in-memory Cloudflare stub with
@@ -635,6 +697,28 @@ func seedPermissionEmailTestUser(t *testing.T, ctx context.Context, store *sqlit
 	})
 	if err != nil {
 		t.Fatalf("seed test user: %v", err)
+	}
+	return user
+}
+
+// seedPermissionEmailTestUserWithLinuxDOID inserts one local user with a
+// caller-controlled Linux Do id so tests can model multiple distinct accounts
+// without colliding on the unique upstream identifier.
+func seedPermissionEmailTestUserWithLinuxDOID(t *testing.T, ctx context.Context, store *sqlite.Store, linuxDOUserID int64, username string) model.User {
+	t.Helper()
+
+	normalizedUsername := strings.TrimSpace(username)
+	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
+		LinuxDOUserID:  linuxDOUserID,
+		Username:       normalizedUsername,
+		DisplayName:    normalizedUsername,
+		AvatarURL:      "https://example.com/avatar.png",
+		TrustLevel:     2,
+		IsLinuxDOAdmin: false,
+		IsAppAdmin:     strings.EqualFold(normalizedUsername, "admin"),
+	})
+	if err != nil {
+		t.Fatalf("seed test user with linuxdo id: %v", err)
 	}
 	return user
 }

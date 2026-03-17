@@ -137,40 +137,40 @@ When the service is behind Nginx or another reverse proxy, also verify:
 - the Linux Do OAuth callback URL matches the production API domain exactly
 - CORS allows both configured frontend origins
 
-## Cloudflare Email Routing
+## Cloudflare DNS and mail relay
 
-LinuxDoSpace now supports two mailbox-forwarding execution backends:
+LinuxDoSpace now defaults to:
+
+- `EMAIL_FORWARDING_BACKEND=database_relay`
+
+This is the current recommended and production-oriented mode. The reason is
+practical rather than stylistic: Cloudflare Email Routing has hard per-account
+limits for destination addresses and rules, which is incompatible with a
+multi-tenant mailbox-forwarding product at LinuxDoSpace's expected scale.
+
+In the current architecture:
+
+- all user mailbox routes live in LinuxDoSpace's own database
+- all forwarding targets are verified by LinuxDoSpace itself through one
+  platform-issued verification email and a one-time verification token
+- both default mailboxes and catch-all namespaces are received by the built-in
+  SMTP listener and then forwarded by the server's own delivery workers
+- Cloudflare is only used to keep managed `MX/TXT` records pointed at the
+  LinuxDoSpace SMTP ingress
+
+Legacy compatibility mode still exists:
 
 - `EMAIL_FORWARDING_BACKEND=cloudflare`
-  The backend writes exact and catch-all forwarding rules directly into Cloudflare Email Routing.
-- `EMAIL_FORWARDING_BACKEND=database_relay`
-  The backend uses a hybrid model:
-  exact mailboxes on the parent root domain still sync to Cloudflare Email Routing,
-  while subdomain-scoped relay namespaces and catch-all delivery are executed by the built-in SMTP listener and forwarded by direct MX delivery from this service itself.
 
-The current implementation still uses Cloudflare destination-address verification
-for user-owned forwarding targets in both modes, because that remains the
-existing ownership proof workflow.
+That mode is retained only as a rollback/compatibility path. It still depends
+on Cloudflare Email Routing rules and destination-address verification, and it
+is no longer the recommended production path.
 
-Required backend environment variables:
+Required backend environment variables for the recommended `database_relay` mode:
 
-- `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_DEFAULT_ROOT_DOMAIN`
 - `CLOUDFLARE_DEFAULT_ZONE_ID` (recommended for deterministic zone resolution)
-
-Required Cloudflare token capabilities:
-
-- DNS read/write for the managed zone
-- Email Routing Addresses read/write
-- Zone read
-
-Additional requirement for `EMAIL_FORWARDING_BACKEND=cloudflare` only:
-
-- Email Routing Rules read/write
-
-Additional requirement for `EMAIL_FORWARDING_BACKEND=database_relay`:
-
 - `MAIL_RELAY_ENABLED=true`
 - `MAIL_RELAY_ENSURE_DNS=true`
 - `MAIL_RELAY_SMTP_ADDR=:2525`
@@ -186,32 +186,43 @@ Additional requirement for `EMAIL_FORWARDING_BACKEND=database_relay`:
 - `MAIL_RELAY_WORKERS=64`
 - `MAIL_RELAY_MAX_DOMAIN_CONCURRENCY=8`
 
-Operational DNS note for `database_relay`:
+Required Cloudflare token capabilities for the recommended mode:
+
+- DNS read/write for the managed zone
+- Zone read
+
+Additional requirement for the legacy `cloudflare` backend only:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- Email Routing Addresses read/write
+- Email Routing Rules read/write
+
+Operational DNS notes for `database_relay`:
 
 - `MAIL_RELAY_MX_TARGET` must be a real mail host name such as `mail.linuxdo.space`,
   not a raw IP address; the corresponding `A`/`AAAA` record must stay `DNS only`
   so SMTP can reach the server directly
 - when `MAIL_RELAY_ENSURE_DNS=true`, LinuxDoSpace will create or update its own
-  managed `MX` and optional `TXT` records for routed mail domains and
-  subdomains, pointing them at `MAIL_RELAY_MX_TARGET`
-- on startup, LinuxDoSpace also scans already-approved catch-all namespaces and
-  existing subdomain relay routes, then backfills any missing relay `MX/TXT`
-  records before serving traffic
-- parent-root exact mailboxes intentionally do not receive these relay `MX/TXT`
-  records, because they keep using Cloudflare's exact-address forwarding path
+  managed `MX` and optional `TXT` records for every routed mail root, including
+  the default root domain
+- on startup, LinuxDoSpace scans active database-backed mail routes and
+  backfills any missing relay `MX/TXT` records before serving traffic
 - LinuxDoSpace only updates DNS records carrying its own mail-relay comment, so
   unrelated user TXT/MX records are not rewritten
 - the MX target itself must resolve to the real SMTP listener host running
   LinuxDoSpace, and that host must accept inbound SMTP on port `25`
-- LinuxDoSpace now always performs direct per-domain MX delivery for outbound
-  forwarding, so operators must prepare SMTP egress, `PTR/rDNS`, `HELO`,
-  `SPF`, and ideally `DKIM`/`DMARC` before expecting stable deliverability
+- LinuxDoSpace performs direct per-domain MX delivery for outbound forwarding,
+  so operators must prepare SMTP egress, `PTR/rDNS`, `HELO`, `SPF`, and ideally
+  `DKIM`/`DMARC` before expecting stable deliverability
 
 Operational notes:
 
-- destination mailboxes must be verified in Cloudflare before LinuxDoSpace can activate forwarding rules
-- `cloudflare` mode still depends on Cloudflare Email Routing DNS readiness
-- `database_relay` mode depends on the built-in SMTP listener being reachable on the configured MX target and on unrestricted outbound SMTP delivery to remote MX hosts
+- target mailboxes are verified by LinuxDoSpace itself, not by Cloudflare
+- ordinary mailbox forwarding now has a backend-only per-account daily limit
+  that is intentionally not exposed in the public UI
+- `database_relay` mode depends on the built-in SMTP listener being reachable
+  on the configured MX target and on unrestricted outbound SMTP delivery to
+  remote MX hosts
 
 ## Frontend deployment on Cloudflare Pages
 

@@ -21,6 +21,8 @@
   `https://developers.cloudflare.com/email-routing/email-workers/subdomains/`
 - Cloudflare Email Routing Catch-All API：
   `https://developers.cloudflare.com/api/resources/email_routing/subresources/rules/subresources/catch_all/`
+- Cloudflare Email Routing Limits：
+  `https://developers.cloudflare.com/email-routing/limits/`
 
 ## Spaceship DNS
 
@@ -35,3 +37,4 @@
 - 2026-03-11 已验证 `GET /zones/{zone_id}/email/routing/dns?subdomain=test.linuxdo.space` 会返回子域名级 Email Routing 所需的 MX/SPF 记录。
 - 2026-03-11 已验证 `GET /zones/{zone_id}/email/routing/rules/catch_all?subdomain=test.linuxdo.space` 仍会返回当前已存在的 catch-all 规则，而不是 `test.linuxdo.space` 的独立 catch-all 资源。
 - 2026-03-11 已验证当前生产 Cloudflare Token 缺少 `com.cloudflare.api.account.zone.create`，因此无法直接通过 API 创建 `test.linuxdo.space` child zone。
+- 2026-03-18 已再次核对 Cloudflare 官方限制文档：Free / Pro / Business 计划的 Email Routing destination addresses 上限为 `200`，rules 上限也为 `200`；因此 LinuxDoSpace 不能继续把多租户目标邮箱绑定建立在 Cloudflare destination addresses 上。

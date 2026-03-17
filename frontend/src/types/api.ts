@@ -275,7 +275,7 @@ export interface EmailRouteAvailabilityResult {
   reasons: string[];
 }
 
-// EmailTargetVerificationStatus mirrors the Cloudflare destination-email
+// EmailTargetVerificationStatus mirrors the platform-owned target-email
 // verification state enforced by the backend.
 export type EmailTargetVerificationStatus = 'pending' | 'verified';
 

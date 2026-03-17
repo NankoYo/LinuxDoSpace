@@ -7,5 +7,5 @@
 - 当前 DNS 记录列表与命名空间冲突检查会读取 Cloudflare 全量记录；在记录规模很大时需要引入缓存或更细的索引策略。
 - Linux Do Credit 已接入下单、查询、回调和商品配置，但当前还没有退款接口、后台订单检索页和自动对账报表。
 - 当前 Docker 发布工作流默认发布 `linux/amd64` 单架构镜像；如果未来需要 ARM 服务器，还需要补充多架构构建与验证。
-- 当前真实 catch-all 邮件能力仍未定稿。2026-03-11 的实测结果表明，同一个 `linuxdo.space` zone 下不能继续依赖公开 `catch_all?subdomain=` API 为多个用户安全创建独立子域名 catch-all；后续必须改为 child zone + NS 委托模型。
-- 当前用于生产的 Cloudflare Token 缺少 `com.cloudflare.api.account.zone.create`，因此 `test.linuxdo.space` 的 child-zone 联调尚未真正跑通。
+- 当前邮件转发已切换到服务端 SMTP 中转，但交付质量仍取决于服务器公网 `25` 端口、`PTR/rDNS`、`HELO`、`SPF`、`DKIM`、`DMARC` 等邮件基础设施是否完善。
+- 代码中仍保留 `EMAIL_FORWARDING_BACKEND=cloudflare` 的历史兼容路径；在数据库中转模式稳定后，应考虑进一步收缩这条回滚分支，降低后续维护复杂度。

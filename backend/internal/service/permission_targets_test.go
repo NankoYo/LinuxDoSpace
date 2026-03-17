@@ -2,28 +2,24 @@ package service
 
 import (
 	"context"
-	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
-	"linuxdospace/backend/internal/cloudflare"
-	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/storage"
-	"linuxdospace/backend/internal/storage/sqlite"
 )
 
-// TestCreateMyEmailTargetCreatesOwnedPendingBinding verifies that a newly added
-// target email is bound to the current user and stays pending until Cloudflare
-// confirms ownership through the verification email flow.
+// TestCreateMyEmailTargetCreatesOwnedPendingBinding verifies that a new target
+// inbox is bound to the current user and that LinuxDoSpace sends its own
+// verification email instead of relying on Cloudflare destination addresses.
 func TestCreateMyEmailTargetCreatesOwnedPendingBinding(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 101, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, mailer := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "Owner@Example.com"})
 	if err != nil {
@@ -33,10 +29,16 @@ func TestCreateMyEmailTargetCreatesOwnedPendingBinding(t *testing.T) {
 		t.Fatalf("expected normalized target email, got %q", item.Email)
 	}
 	if item.Verified {
-		t.Fatalf("expected the new target to stay pending until the verification email is confirmed")
+		t.Fatalf("expected the new target to stay pending until the verification link is opened")
 	}
-	if len(cf.createdAddresses) != 1 || cf.createdAddresses[0] != "owner@example.com" {
-		t.Fatalf("expected one cloudflare destination address to be created, got %v", cf.createdAddresses)
+	if len(mailer.sent) != 1 {
+		t.Fatalf("expected one verification email to be sent, got %d", len(mailer.sent))
+	}
+	if mailer.sent[0].TargetEmail != "owner@example.com" {
+		t.Fatalf("expected verification email target owner@example.com, got %q", mailer.sent[0].TargetEmail)
+	}
+	if !strings.Contains(mailer.sent[0].VerificationURL, "/v1/public/email-targets/verify?token=") {
+		t.Fatalf("expected verification callback url, got %q", mailer.sent[0].VerificationURL)
 	}
 
 	stored, err := store.GetEmailTargetByEmail(ctx, "owner@example.com")
@@ -46,43 +48,11 @@ func TestCreateMyEmailTargetCreatesOwnedPendingBinding(t *testing.T) {
 	if stored.OwnerUserID != user.ID {
 		t.Fatalf("expected owner user id %d, got %d", user.ID, stored.OwnerUserID)
 	}
-}
-
-// TestCreateMyEmailTargetRepairsCloudflareCreateResponseLoss verifies that the
-// service can recover when Cloudflare creates the destination address but the
-// immediate API response fails before the backend receives the new id.
-func TestCreateMyEmailTargetRepairsCloudflareCreateResponseLoss(t *testing.T) {
-	ctx := context.Background()
-	store := newAuthTestStore(t)
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 102, "alice")
-	seedPermissionEmailManagedDomain(t, ctx, store)
-
-	cf := &fakeEmailRoutingCloudflare{
-		addressesByAccount:    make(map[string][]cloudflare.EmailRoutingDestinationAddress),
-		createAddressThenFail: errors.New("simulated response loss"),
+	if strings.TrimSpace(stored.VerificationTokenHash) == "" {
+		t.Fatalf("expected stored verification token hash to be persisted")
 	}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "recover@example.com"})
-	if err != nil {
-		t.Fatalf("create email target with repairable cloudflare failure: %v", err)
-	}
-	if item.Email != "recover@example.com" {
-		t.Fatalf("expected normalized target email, got %q", item.Email)
-	}
-	if item.CloudflareAddressID == "" {
-		t.Fatalf("expected repaired target to keep the cloudflare destination id")
-	}
-	if len(cf.createdAddresses) != 1 || cf.createdAddresses[0] != "recover@example.com" {
-		t.Fatalf("expected exactly one remote destination create, got %v", cf.createdAddresses)
-	}
-
-	stored, err := store.GetEmailTargetByEmail(ctx, "recover@example.com")
-	if err != nil {
-		t.Fatalf("load repaired email target: %v", err)
-	}
-	if stored.CloudflareAddressID == "" {
-		t.Fatalf("expected repaired local row to persist the cloudflare destination id")
+	if stored.LastVerificationSentAt == nil {
+		t.Fatalf("expected verification send timestamp to be persisted")
 	}
 }
 
@@ -95,8 +65,7 @@ func TestCreateMyEmailTargetRejectsOtherUsersTarget(t *testing.T) {
 	userB := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 202, "bob")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, _ := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	if _, err := service.CreateMyEmailTarget(ctx, userA, CreateMyEmailTargetRequest{Email: "shared@example.com"}); err != nil {
 		t.Fatalf("create first email target: %v", err)
@@ -113,20 +82,23 @@ func TestCreateMyEmailTargetRejectsOtherUsersTarget(t *testing.T) {
 	}
 }
 
-// TestCreateMyEmailTargetKeepsRecentPendingBindingDuringPropagationWindow
-// verifies that a repeated add attempt during Cloudflare propagation returns
-// the existing pending row instead of creating another destination address.
-func TestCreateMyEmailTargetKeepsRecentPendingBindingDuringPropagationWindow(t *testing.T) {
+// TestCreateMyEmailTargetKeepsRecentPendingBindingDuringCooldown verifies that
+// pressing the add button again during the resend cooldown returns the existing
+// pending row instead of sending another verification email immediately.
+func TestCreateMyEmailTargetKeepsRecentPendingBindingDuringCooldown(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 203, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
+	expiresAt := time.Now().UTC().Add(time.Hour)
 	sentAt := time.Now().UTC()
 	existing, err := store.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
 		OwnerUserID:            user.ID,
 		Email:                  "pending@example.com",
-		CloudflareAddressID:    "addr-pending",
+		CloudflareAddressID:    "",
+		VerificationTokenHash:  "existing-hash",
+		VerificationExpiresAt:  &expiresAt,
 		VerifiedAt:             nil,
 		LastVerificationSentAt: &sentAt,
 	})
@@ -134,8 +106,7 @@ func TestCreateMyEmailTargetKeepsRecentPendingBindingDuringPropagationWindow(t *
 		t.Fatalf("seed recent pending email target: %v", err)
 	}
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, mailer := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "pending@example.com"})
 	if err != nil {
@@ -144,25 +115,21 @@ func TestCreateMyEmailTargetKeepsRecentPendingBindingDuringPropagationWindow(t *
 	if item.ID != existing.ID {
 		t.Fatalf("expected existing local target id %d, got %d", existing.ID, item.ID)
 	}
-	if item.CloudflareAddressID != "addr-pending" {
-		t.Fatalf("expected existing cloudflare id to stay stable, got %q", item.CloudflareAddressID)
-	}
-	if len(cf.createdAddresses) != 0 {
-		t.Fatalf("expected no additional remote destination create during propagation window, got %v", cf.createdAddresses)
+	if len(mailer.sent) != 0 {
+		t.Fatalf("expected no additional verification email during cooldown, got %d sends", len(mailer.sent))
 	}
 }
 
 // TestUpsertMyDefaultEmailRouteRejectsUnverifiedOwnedTarget verifies that the
-// default mailbox can only use targets that have completed Cloudflare
-// verification, even when the target is already bound to the current user.
+// default mailbox can only use targets that have completed LinuxDoSpace's own
+// verification flow.
 func TestUpsertMyDefaultEmailRouteRejectsUnverifiedOwnedTarget(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 301, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, _ := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "pending@example.com"})
 	if err != nil {
@@ -181,30 +148,31 @@ func TestUpsertMyDefaultEmailRouteRejectsUnverifiedOwnedTarget(t *testing.T) {
 	if normalized.Code != "conflict" {
 		t.Fatalf("expected conflict error, got %s: %v", normalized.Code, err)
 	}
-	if !strings.Contains(normalized.Message, "尚未完成 Cloudflare 验证") {
-		t.Fatalf("expected verification guidance in error message, got %q", normalized.Message)
+	if !strings.Contains(normalized.Message, "尚未完成平台验证") {
+		t.Fatalf("expected platform verification guidance in error message, got %q", normalized.Message)
 	}
 }
 
-// TestUpsertMyDefaultEmailRouteAcceptsVerifiedOwnedTarget verifies that the
-// default mailbox save succeeds once Cloudflare reports the bound target as
-// verified and the service synchronizes that state back into SQLite.
-func TestUpsertMyDefaultEmailRouteAcceptsVerifiedOwnedTarget(t *testing.T) {
+// TestVerifyEmailTargetMarksBindingUsableForForwarding verifies that consuming
+// the emailed token marks the target as verified and immediately unlocks the
+// default mailbox save flow.
+func TestVerifyEmailTargetMarksBindingUsableForForwarding(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 401, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, mailer := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "verified@example.com"})
 	if err != nil {
 		t.Fatalf("create email target: %v", err)
 	}
 
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
+	token := mustExtractVerificationToken(t, mailer.sent[0].VerificationURL)
+	if _, err := service.VerifyEmailTarget(ctx, token); err != nil {
+		t.Fatalf("verify email target: %v", err)
+	}
 
 	view, err := service.UpsertMyDefaultEmailRoute(ctx, user, UpsertMyDefaultEmailRouteRequest{
 		TargetEmail: target.Email,
@@ -219,86 +187,64 @@ func TestUpsertMyDefaultEmailRouteAcceptsVerifiedOwnedTarget(t *testing.T) {
 	if view.TargetEmail != "verified@example.com" {
 		t.Fatalf("expected verified target email to be saved, got %q", view.TargetEmail)
 	}
-
-	storedTarget, err := store.GetEmailTargetByEmail(ctx, "verified@example.com")
-	if err != nil {
-		t.Fatalf("load stored verified target: %v", err)
-	}
-	if storedTarget.VerifiedAt == nil {
-		t.Fatalf("expected verified timestamp to be synchronized into the backing store")
-	}
 }
 
-// TestListMyEmailTargetsKeepsRecentPendingBindingWithoutCloudflareSnapshot
-// verifies that a just-created pending target does not get its local binding
-// cleared merely because Cloudflare's list endpoint has not caught up yet.
-func TestListMyEmailTargetsKeepsRecentPendingBindingWithoutCloudflareSnapshot(t *testing.T) {
-	ctx := context.Background()
-	store := newAuthTestStore(t)
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 402, "alice")
-	seedPermissionEmailManagedDomain(t, ctx, store)
-
-	sentAt := time.Now().UTC()
-	if _, err := store.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
-		OwnerUserID:            user.ID,
-		Email:                  "lagging@example.com",
-		CloudflareAddressID:    "addr-lagging",
-		VerifiedAt:             nil,
-		LastVerificationSentAt: &sentAt,
-	}); err != nil {
-		t.Fatalf("seed lagging pending email target: %v", err)
-	}
-
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	items, err := service.ListMyEmailTargets(ctx, user)
-	if err != nil {
-		t.Fatalf("list my email targets during propagation window: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("expected one visible email target, got %d", len(items))
-	}
-	if items[0].CloudflareAddressID != "addr-lagging" {
-		t.Fatalf("expected local cloudflare id to survive propagation lag, got %q", items[0].CloudflareAddressID)
-	}
-	if items[0].VerificationStatus != EmailTargetVerificationPending {
-		t.Fatalf("expected target to remain pending, got %q", items[0].VerificationStatus)
-	}
-
-	stored, err := store.GetEmailTargetByEmail(ctx, "lagging@example.com")
-	if err != nil {
-		t.Fatalf("reload lagging email target: %v", err)
-	}
-	if stored.CloudflareAddressID != "addr-lagging" {
-		t.Fatalf("expected backing store to preserve cloudflare id during propagation lag, got %q", stored.CloudflareAddressID)
-	}
-}
-
-// TestResendMyEmailTargetVerificationRecreatesPendingAddress verifies that a
-// pending target can trigger a fresh Cloudflare verification email.
-func TestResendMyEmailTargetVerificationRecreatesPendingAddress(t *testing.T) {
+// TestResendMyEmailTargetVerificationRejectsRapidRepeat verifies that the
+// resend endpoint still protects the target inbox from tight retry loops.
+func TestResendMyEmailTargetVerificationRejectsRapidRepeat(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 501, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
+	service, _ := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
+
+	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "rapid@example.com"})
+	if err != nil {
+		t.Fatalf("create pending email target: %v", err)
+	}
+
+	_, err = service.ResendMyEmailTargetVerification(ctx, user, item.ID)
+	if err == nil {
+		t.Fatalf("expected rapid resend to be throttled")
+	}
+
+	normalized := NormalizeError(err)
+	if normalized.Code != "too_many_requests" {
+		t.Fatalf("expected too_many_requests, got %s: %v", normalized.Code, err)
+	}
+}
+
+// TestResendMyEmailTargetVerificationIssuesFreshTokenAfterCooldown verifies
+// that a pending target gets a fresh token and a second outbound message once
+// the resend cooldown has elapsed.
+func TestResendMyEmailTargetVerificationIssuesFreshTokenAfterCooldown(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 601, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+
+	service, mailer := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
 	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "pending@example.com"})
 	if err != nil {
 		t.Fatalf("create pending email target: %v", err)
 	}
+	firstStored, err := store.GetEmailTargetByEmail(ctx, item.Email)
+	if err != nil {
+		t.Fatalf("load first stored email target: %v", err)
+	}
 
-	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
+	agedSentAt := time.Now().UTC().Add(-2 * time.Minute)
 	if _, err := store.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     item.ID,
-		CloudflareAddressID:    item.CloudflareAddressID,
+		ID:                     firstStored.ID,
+		CloudflareAddressID:    "",
+		VerificationTokenHash:  firstStored.VerificationTokenHash,
+		VerificationExpiresAt:  firstStored.VerificationExpiresAt,
 		VerifiedAt:             nil,
-		LastVerificationSentAt: &oldSentAt,
+		LastVerificationSentAt: &agedSentAt,
 	}); err != nil {
-		t.Fatalf("age pending email target verification timestamp: %v", err)
+		t.Fatalf("age target resend timestamp: %v", err)
 	}
 
 	resent, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID)
@@ -308,202 +254,79 @@ func TestResendMyEmailTargetVerificationRecreatesPendingAddress(t *testing.T) {
 	if resent.Verified {
 		t.Fatalf("expected resent target to stay pending")
 	}
-	if resent.LastVerificationSentAt == nil {
-		t.Fatalf("expected resent target to record resend timestamp")
+	if len(mailer.sent) != 2 {
+		t.Fatalf("expected two verification emails total after resend, got %d", len(mailer.sent))
 	}
-	if len(cf.deletedAddresses) != 1 {
-		t.Fatalf("expected one destination address deletion, got %v", cf.deletedAddresses)
+
+	refreshed, err := store.GetEmailTargetByEmail(ctx, item.Email)
+	if err != nil {
+		t.Fatalf("reload resent email target: %v", err)
 	}
-	if len(cf.createdAddresses) != 2 {
-		t.Fatalf("expected create + recreate to happen, got %v", cf.createdAddresses)
+	if refreshed.VerificationTokenHash == firstStored.VerificationTokenHash {
+		t.Fatalf("expected resend to mint a fresh verification token hash")
 	}
-	if resent.CloudflareAddressID == item.CloudflareAddressID {
-		t.Fatalf("expected resend to recreate the Cloudflare destination address id")
+	if refreshed.LastVerificationSentAt == nil || !refreshed.LastVerificationSentAt.After(agedSentAt) {
+		t.Fatalf("expected resend timestamp to advance, got %+v", refreshed.LastVerificationSentAt)
 	}
 }
 
-// TestResendMyEmailTargetVerificationRejectsVerifiedTarget verifies that
-// already-verified targets cannot request another verification email.
-func TestResendMyEmailTargetVerificationRejectsVerifiedTarget(t *testing.T) {
+// TestVerifyEmailTargetRejectsExpiredToken verifies that stale verification
+// links are rejected and cleared so they cannot be retried indefinitely.
+func TestVerifyEmailTargetRejectsExpiredToken(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 502, "alice")
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 701, "alice")
 	seedPermissionEmailManagedDomain(t, ctx, store)
 
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "verified@example.com"})
+	token, tokenHash, err := generateEmailTargetVerificationToken()
 	if err != nil {
-		t.Fatalf("create verified email target: %v", err)
+		t.Fatalf("generate verification token: %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := store.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
+		OwnerUserID:            user.ID,
+		Email:                  "expired@example.com",
+		CloudflareAddressID:    "",
+		VerificationTokenHash:  tokenHash,
+		VerificationExpiresAt:  &expiredAt,
+		VerifiedAt:             nil,
+		LastVerificationSentAt: nil,
+	}); err != nil {
+		t.Fatalf("seed expired email target: %v", err)
 	}
 
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
-	if _, err := service.ListMyEmailTargets(ctx, user); err != nil {
-		t.Fatalf("sync verified email target: %v", err)
-	}
+	service, _ := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
 
-	_, err = service.ResendMyEmailTargetVerification(ctx, user, item.ID)
+	_, err = service.VerifyEmailTarget(ctx, token)
 	if err == nil {
-		t.Fatalf("expected verified target resend to be rejected")
+		t.Fatalf("expected expired verification token to fail")
 	}
-	if NormalizeError(err).Code != "conflict" {
-		t.Fatalf("expected conflict for verified target resend, got %v", err)
-	}
-}
-
-// TestResendMyEmailTargetVerificationRejectsRapidRepeat verifies that the
-// endpoint enforces a server-side resend cooldown instead of trusting the
-// frontend to suppress duplicate clicks.
-func TestResendMyEmailTargetVerificationRejectsRapidRepeat(t *testing.T) {
-	ctx := context.Background()
-	store := newAuthTestStore(t)
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 503, "alice")
-	seedPermissionEmailManagedDomain(t, ctx, store)
-
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "rapid@example.com"})
-	if err != nil {
-		t.Fatalf("create pending email target: %v", err)
-	}
-
-	_, err = service.ResendMyEmailTargetVerification(ctx, user, item.ID)
-	if err == nil {
-		t.Fatalf("expected resend cooldown rejection")
-	}
-
 	normalized := NormalizeError(err)
-	if normalized.Code != "too_many_requests" {
-		t.Fatalf("expected too_many_requests error, got %s: %v", normalized.Code, err)
+	if normalized.Code != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s: %v", normalized.Code, err)
 	}
-}
 
-// TestResendMyEmailTargetVerificationClearsStaleBindingAfterCreateFailure
-// verifies that a failed recreate does not leave the local row pointing at a
-// deleted Cloudflare destination id.
-func TestResendMyEmailTargetVerificationClearsStaleBindingAfterCreateFailure(t *testing.T) {
-	ctx := context.Background()
-	store := newAuthTestStore(t)
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 504, "alice")
-	seedPermissionEmailManagedDomain(t, ctx, store)
-
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "recover@example.com"})
+	stored, err := store.GetEmailTargetByEmail(ctx, "expired@example.com")
 	if err != nil {
-		t.Fatalf("create pending email target: %v", err)
+		t.Fatalf("reload expired email target: %v", err)
 	}
-
-	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
-	if _, err := store.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     item.ID,
-		CloudflareAddressID:    item.CloudflareAddressID,
-		VerifiedAt:             nil,
-		LastVerificationSentAt: &oldSentAt,
-	}); err != nil {
-		t.Fatalf("age pending email target verification timestamp: %v", err)
-	}
-
-	cf.failNextCreateAddress = errors.New("upstream create failed")
-	if _, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID); err == nil {
-		t.Fatalf("expected recreate failure")
-	}
-
-	stored, err := store.GetEmailTargetByEmail(ctx, "recover@example.com")
-	if err != nil {
-		t.Fatalf("reload repaired email target: %v", err)
-	}
-	if stored.CloudflareAddressID != "" {
-		t.Fatalf("expected stale cloudflare destination id to be cleared, got %q", stored.CloudflareAddressID)
-	}
-	if stored.VerifiedAt != nil {
-		t.Fatalf("expected failed recreate to keep target pending")
+	if strings.TrimSpace(stored.VerificationTokenHash) != "" {
+		t.Fatalf("expected expired verification token hash to be cleared")
 	}
 }
 
-// TestResendMyEmailTargetVerificationRollsBackNewDestinationOnDBFailure
-// verifies that the service deletes the freshly created Cloudflare destination
-// when the local persistence update fails afterward.
-func TestResendMyEmailTargetVerificationRollsBackNewDestinationOnDBFailure(t *testing.T) {
-	ctx := context.Background()
-	innerStore := newAuthTestStore(t)
-	store := &failingEmailTargetUpdateStore{Store: innerStore}
-	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, innerStore, 505, "alice")
-	seedPermissionEmailManagedDomain(t, ctx, innerStore)
-
-	cf := &fakeEmailRoutingCloudflare{addressesByAccount: make(map[string][]cloudflare.EmailRoutingDestinationAddress)}
-	service := NewPermissionService(newPermissionEmailTestConfig(), store, cf)
-
-	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "rollback@example.com"})
-	if err != nil {
-		t.Fatalf("create pending email target: %v", err)
-	}
-
-	oldSentAt := time.Now().UTC().Add(-emailTargetVerificationResendCooldown - time.Second)
-	if _, err := innerStore.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     item.ID,
-		CloudflareAddressID:    item.CloudflareAddressID,
-		VerifiedAt:             nil,
-		LastVerificationSentAt: &oldSentAt,
-	}); err != nil {
-		t.Fatalf("age pending email target verification timestamp: %v", err)
-	}
-
-	store.failNextUpdate = true
-	if _, err := service.ResendMyEmailTargetVerification(ctx, user, item.ID); err == nil {
-		t.Fatalf("expected local update failure")
-	}
-
-	if len(cf.deletedAddresses) < 2 {
-		t.Fatalf("expected original + rollback destination deletion, got %v", cf.deletedAddresses)
-	}
-
-	stored, err := innerStore.GetEmailTargetByEmail(ctx, "rollback@example.com")
-	if err != nil {
-		t.Fatalf("reload rolled back email target: %v", err)
-	}
-	if stored.CloudflareAddressID != "" {
-		t.Fatalf("expected rolled back target to clear the stale cloudflare id, got %q", stored.CloudflareAddressID)
-	}
-}
-
-// failingEmailTargetUpdateStore lets one test simulate a persistence failure on
-// the resend path without reimplementing the full storage contract.
-type failingEmailTargetUpdateStore struct {
-	*sqlite.Store
-	failNextUpdate bool
-}
-
-// UpdateEmailTarget fails once when requested so the service rollback path can
-// be exercised against the real SQLite-backed repository implementation.
-func (s *failingEmailTargetUpdateStore) UpdateEmailTarget(ctx context.Context, input storage.UpdateEmailTargetInput) (model.EmailTarget, error) {
-	if s.failNextUpdate {
-		s.failNextUpdate = false
-		return model.EmailTarget{}, errors.New("simulated update failure")
-	}
-	return s.Store.UpdateEmailTarget(ctx, input)
-}
-
-// seedPermissionEmailTestUserWithLinuxDOID inserts one local user while letting
-// each test control the unique Linux Do user id.
-func seedPermissionEmailTestUserWithLinuxDOID(t *testing.T, ctx context.Context, store *sqlite.Store, linuxdoUserID int64, username string) model.User {
+// mustExtractVerificationToken pulls the token query value back out of the test
+// mailer's verification URL so the service can be exercised end-to-end.
+func mustExtractVerificationToken(t *testing.T, verificationURL string) string {
 	t.Helper()
 
-	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
-		LinuxDOUserID:  linuxdoUserID,
-		Username:       username,
-		DisplayName:    username,
-		AvatarURL:      "https://example.com/avatar.png",
-		TrustLevel:     2,
-		IsLinuxDOAdmin: false,
-		IsAppAdmin:     false,
-	})
+	parsed, err := url.Parse(verificationURL)
 	if err != nil {
-		t.Fatalf("seed test user: %v", err)
+		t.Fatalf("parse verification url: %v", err)
 	}
-	return user
+	token := strings.TrimSpace(parsed.Query().Get("token"))
+	if token == "" {
+		t.Fatalf("expected verification token in url %q", verificationURL)
+	}
+	return token
 }

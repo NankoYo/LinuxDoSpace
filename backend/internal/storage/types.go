@@ -117,6 +117,8 @@ type CreateEmailTargetInput struct {
 	OwnerUserID            int64
 	Email                  string
 	CloudflareAddressID    string
+	VerificationTokenHash  string
+	VerificationExpiresAt  *time.Time
 	VerifiedAt             *time.Time
 	LastVerificationSentAt *time.Time
 }
@@ -126,6 +128,8 @@ type CreateEmailTargetInput struct {
 type UpdateEmailTargetInput struct {
 	ID                     int64
 	CloudflareAddressID    string
+	VerificationTokenHash  string
+	VerificationExpiresAt  *time.Time
 	VerifiedAt             *time.Time
 	LastVerificationSentAt *time.Time
 }
@@ -225,6 +229,7 @@ type RefundEmailCatchAllInput struct {
 type EnqueueMailDeliveryGroupInput struct {
 	OriginalRecipients   []string
 	TargetRecipients     []string
+	OwnerUserIDs         []int64
 	CatchAllOwnerUserIDs []int64
 }
 

@@ -10,17 +10,15 @@ import (
 	"linuxdospace/backend/internal/config"
 )
 
-// EnsureDatabaseRelayIngressDNSForRootDomain ensures one namespace-scoped mail
-// domain points at the built-in SMTP relay when database-relay mode is active.
-// The helper intentionally skips the parent root because the parent mailbox
-// flow still relies on Cloudflare's exact-address forwarding.
+// EnsureDatabaseRelayIngressDNSForRootDomain ensures one routed mail root
+// points at the built-in SMTP relay when database-relay mode is active.
 func EnsureDatabaseRelayIngressDNSForRootDomain(ctx context.Context, cfg config.Config, cf CloudflareClient, rootDomain string) error {
 	return ensureDatabaseRelayIngressDNSForRootDomain(ctx, cfg, cf, rootDomain)
 }
 
 // EnsureDatabaseRelayIngressDNSState scans the current database state and keeps
-// the namespace-scoped relay MX/TXT records aligned with the mail routes that
-// are actually active right now.
+// the relay MX/TXT records aligned with the routed mail roots that are
+// actually active right now.
 //
 // Two production constraints drive this stricter reconciliation:
 //  1. Cloudflare free zones have a hard DNS-record quota, so pre-allocating two
@@ -68,20 +66,20 @@ func EnsureDatabaseRelayIngressDNSState(ctx context.Context, cfg config.Config, 
 }
 
 // collectRequiredDatabaseRelayNamespaceRoots reduces the live email-route table
-// to the namespace roots that currently need SMTP ingress. Only enabled routes
-// with a concrete forwarding target are allowed to hold relay MX/TXT records.
+// to the routed roots that currently need SMTP ingress. The configured default
+// root is always included because every logged-in user conceptually owns one
+// implicit default mailbox there, even before they save a forwarding target.
 func collectRequiredDatabaseRelayNamespaceRoots(ctx context.Context, cfg config.Config, store Store) (map[string]struct{}, error) {
 	namespaceRoots := map[string]struct{}{}
 	addNamespaceRoot := func(rootDomain string) {
 		normalizedRoot := normalizeDNSName(rootDomain)
-		if normalizedRoot == "" {
-			return
-		}
-		if !usesDatabaseRelayNamespaceRoot(cfg, normalizedRoot) {
+		if normalizedRoot == "" || !cfg.UsesDatabaseMailRelay() {
 			return
 		}
 		namespaceRoots[normalizedRoot] = struct{}{}
 	}
+
+	addNamespaceRoot(cfg.Cloudflare.DefaultRootDomain)
 
 	emailRoutes, err := store.ListEmailRoutes(ctx)
 	if err != nil {
@@ -97,34 +95,50 @@ func collectRequiredDatabaseRelayNamespaceRoots(ctx context.Context, cfg config.
 }
 
 // pruneStaleDatabaseRelayIngressDNS removes LinuxDoSpace-managed relay MX/TXT
-// records for namespace roots that no longer have any active database-backed
-// mail route. This is the safety valve that frees Cloudflare DNS quota after a
-// user disables or clears their catch-all forwarding.
+// records for roots that no longer have any active database-backed mail route.
+// The default public email root is intentionally kept because default mailbox
+// delivery now also depends on the local SMTP relay.
 func pruneStaleDatabaseRelayIngressDNS(ctx context.Context, cfg config.Config, cf CloudflareClient, provisioner emailRoutingProvisioner, requiredRoots map[string]struct{}) error {
-	defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
-	if defaultRoot == "" {
-		return nil
-	}
-
-	zoneID, err := provisioner.resolveZoneID(ctx, defaultRoot)
-	if err != nil {
-		return fmt.Errorf("resolve default zone for database mail relay dns pruning: %w", err)
-	}
-
-	existingRecords, err := cf.ListAllDNSRecords(ctx, zoneID)
-	if err != nil {
-		return fmt.Errorf("list cloudflare dns records for database mail relay dns pruning: %w", err)
-	}
-
-	for _, item := range existingRecords {
-		if !isDatabaseRelayManagedDNSRecord(cfg, item) {
-			continue
+	inspectedZones := map[string]struct{}{}
+	for rootDomain := range requiredRoots {
+		zoneID, err := provisioner.resolveZoneID(ctx, rootDomain)
+		if err != nil {
+			return fmt.Errorf("resolve zone for database mail relay dns pruning: %w", err)
 		}
-		if _, stillRequired := requiredRoots[normalizeDNSName(item.Name)]; stillRequired {
-			continue
+		inspectedZones[zoneID] = struct{}{}
+	}
+	if len(inspectedZones) == 0 {
+		defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
+		if defaultRoot != "" {
+			zoneID, err := provisioner.resolveZoneID(ctx, defaultRoot)
+			if err != nil {
+				return fmt.Errorf("resolve default zone for database mail relay dns pruning: %w", err)
+			}
+			inspectedZones[zoneID] = struct{}{}
 		}
-		if err := cf.DeleteDNSRecord(ctx, zoneID, strings.TrimSpace(item.ID)); err != nil {
-			return fmt.Errorf("delete stale database mail relay dns record %s %s: %w", item.Type, item.Name, err)
+	}
+
+	for zoneID := range inspectedZones {
+		existingRecords, err := cf.ListAllDNSRecords(ctx, zoneID)
+		if err != nil {
+			return fmt.Errorf("list cloudflare dns records for database mail relay dns pruning: %w", err)
+		}
+
+		for _, item := range existingRecords {
+			if !isDatabaseRelayManagedDNSRecord(cfg, item) {
+				continue
+			}
+			normalizedName := normalizeDNSName(item.Name)
+			defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
+			if normalizedName == defaultRoot {
+				continue
+			}
+			if _, stillRequired := requiredRoots[normalizedName]; stillRequired {
+				continue
+			}
+			if err := cf.DeleteDNSRecord(ctx, zoneID, strings.TrimSpace(item.ID)); err != nil {
+				return fmt.Errorf("delete stale database mail relay dns record %s %s: %w", item.Type, item.Name, err)
+			}
 		}
 	}
 	return nil
@@ -142,27 +156,20 @@ func isDatabaseRelayManagedDNSRecord(cfg config.Config, item cloudflare.DNSRecor
 	default:
 		return false
 	}
-	return usesDatabaseRelayNamespaceRoot(cfg, item.Name)
+	return cfg.UsesDatabaseMailRelay()
 }
 
 // ensureDatabaseRelayIngressDNSForRootDomain keeps the service-layer validation
 // in one place so both request-time saves and startup backfills apply the same
-// parent-root safety guard before writing relay MX/TXT records.
+// normalization rules before writing relay MX/TXT records.
 func ensureDatabaseRelayIngressDNSForRootDomain(ctx context.Context, cfg config.Config, cf CloudflareClient, rootDomain string) error {
 	if !cfg.UsesDatabaseMailRelay() {
 		return nil
 	}
 
 	normalizedRoot := normalizeDNSName(rootDomain)
-	defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
 	if normalizedRoot == "" {
-		return ValidationError("catch-all relay namespace is empty")
-	}
-	if defaultRoot != "" && normalizedRoot == defaultRoot {
-		return UnavailableError(
-			"refusing to bootstrap mail-relay dns on the parent root domain",
-			fmt.Errorf("parent root %s must stay on cloudflare mail routing", defaultRoot),
-		)
+		return ValidationError("mail relay root domain is empty")
 	}
 
 	return newEmailRoutingProvisioner(cfg, cf).ensureDatabaseRelayIngressDNS(ctx, normalizedRoot)
@@ -181,7 +188,7 @@ func deleteDatabaseRelayIngressDNSForRootDomain(ctx context.Context, cfg config.
 	}
 
 	normalizedRoot := normalizeDNSName(rootDomain)
-	if !usesDatabaseRelayNamespaceRoot(cfg, normalizedRoot) {
+	if normalizedRoot == "" {
 		return nil
 	}
 

@@ -18,6 +18,7 @@ Use it to keep architecture, deployment, API, and release knowledge traceable ac
 - The Go backend already provides Linux Do OAuth, server-side sessions, CSRF checks, managed-domain allocation, DNS record management, and administrator APIs.
 - The backend now also exposes an append-only quantity ledger and derived balance APIs to support future paid features without sacrificing auditability.
 - The email catch-all flow now uses separate mutable runtime state for subscription expiry, remaining prepaid count, and UTC-day usage caps instead of overloading the immutable quantity ledger.
+- Default mailboxes and catch-all mail now both use the built-in SMTP relay plus database-stored routing state; Cloudflare is only used for DNS management, not for destination-address forwarding targets.
 - PostgreSQL is the current production database backend.
 - SQLite compatibility is still kept in the repository for local development, tests, and rollback-only fallback scenarios.
 - Cloudflare integration, Docker packaging, and GHCR-based release workflows are in place.

@@ -73,6 +73,7 @@ func (q *PersistentQueue) Enqueue(ctx context.Context, request EnqueueRequest) e
 		groups = append(groups, storage.EnqueueMailDeliveryGroupInput{
 			OriginalRecipients:   append([]string(nil), group.OriginalRecipients...),
 			TargetRecipients:     []string{group.TargetEmail},
+			OwnerUserIDs:         append([]int64(nil), group.OwnerUserIDs...),
 			CatchAllOwnerUserIDs: append([]int64(nil), group.CatchAllOwnerUserIDs...),
 		})
 	}
@@ -89,6 +90,8 @@ func (q *PersistentQueue) Enqueue(ctx context.Context, request EnqueueRequest) e
 	}
 
 	switch {
+	case errors.Is(err, storage.ErrMailForwardDailyLimitExceeded):
+		return ErrForwardingDailyLimitExceeded
 	case errors.Is(err, storage.ErrEmailCatchAllDailyLimitExceeded):
 		return ErrCatchAllDailyLimitExceeded
 	case errors.Is(err, storage.ErrEmailCatchAllInsufficientRemainingCount):

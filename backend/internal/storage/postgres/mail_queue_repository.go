@@ -20,7 +20,10 @@ type MarkMailDeliveryJobRetryInput = storage.MarkMailDeliveryJobRetryInput
 type MarkMailDeliveryJobFailedInput = storage.MarkMailDeliveryJobFailedInput
 type CleanupMailDeliveryJobsInput = storage.CleanupMailDeliveryJobsInput
 
-const mailQueueCatchAllPolicyKey = "email_catch_all"
+const (
+	mailQueueCatchAllPolicyKey    = "email_catch_all"
+	defaultMailForwardDailyLimit  = int64(1000)
+)
 
 // EnqueueMailDeliveryBatch atomically reserves any required catch-all quota and
 // persists every outbound delivery job derived from one accepted SMTP message.
@@ -71,7 +74,8 @@ RETURNING id
 	for _, group := range input.Groups {
 		originalRecipients := normalizeMailAddressSlice(group.OriginalRecipients)
 		targetRecipients := normalizeMailAddressSlice(group.TargetRecipients)
-		ownerUserIDs := uniqueInt64Values(group.CatchAllOwnerUserIDs)
+		ownerUserIDs := uniqueInt64Values(group.OwnerUserIDs)
+		catchAllOwnerUserIDs := uniqueInt64Values(group.CatchAllOwnerUserIDs)
 
 		if len(originalRecipients) == 0 {
 			return nil, fmt.Errorf("mail delivery group original recipients are required")
@@ -80,8 +84,14 @@ RETURNING id
 			return nil, fmt.Errorf("mail delivery group target recipients are required")
 		}
 
-		reservations := make([]model.MailDeliveryReservation, 0, len(ownerUserIDs))
 		for _, ownerUserID := range ownerUserIDs {
+			if err := consumeMailForwardDailyUsageTx(ctx, tx, ownerUserID, 1, defaultMailForwardDailyLimit, now); err != nil {
+				return nil, err
+			}
+		}
+
+		reservations := make([]model.MailDeliveryReservation, 0, len(catchAllOwnerUserIDs))
+		for _, ownerUserID := range catchAllOwnerUserIDs {
 			reservation, reservationErr := consumeMailQueueCatchAllReservationTx(ctx, tx, ownerUserID, 1, defaultDailyLimit, now)
 			if reservationErr != nil {
 				return nil, reservationErr
@@ -153,6 +163,72 @@ RETURNING id
 		return nil, err
 	}
 	return jobs, nil
+}
+
+// consumeMailForwardDailyUsageTx enforces the hidden per-user daily forwarding
+// ceiling for every accepted outbound mail group, regardless of whether the
+// route was exact or catch-all.
+func consumeMailForwardDailyUsageTx(ctx context.Context, tx *queryTx, userID int64, count int64, defaultLimit int64, now time.Time) error {
+	if userID <= 0 || count <= 0 {
+		return nil
+	}
+
+	usageDate := timeutil.ShanghaiDayKey(now)
+	if defaultLimit <= 0 {
+		defaultLimit = defaultMailForwardDailyLimit
+	}
+
+	var usedCount int64
+	var rowExists bool
+	row := tx.QueryRowContext(ctx, `
+SELECT used_count
+FROM mail_forward_daily_usage
+WHERE user_id = ? AND usage_date = ?
+`, userID, usageDate)
+	switch err := row.Scan(&usedCount); err {
+	case nil:
+		rowExists = true
+	case sql.ErrNoRows:
+		rowExists = false
+		usedCount = 0
+	default:
+		return err
+	}
+
+	if usedCount+count > defaultLimit {
+		return storage.ErrMailForwardDailyLimitExceeded
+	}
+
+	if rowExists {
+		_, err := tx.ExecContext(ctx, `
+UPDATE mail_forward_daily_usage
+SET used_count = used_count + ?, updated_at = ?
+WHERE user_id = ? AND usage_date = ?
+`,
+			count,
+			formatTime(now),
+			userID,
+			usageDate,
+		)
+		return err
+	}
+
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO mail_forward_daily_usage (
+    user_id,
+    usage_date,
+    used_count,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?)
+`,
+		userID,
+		usageDate,
+		count,
+		formatTime(now),
+		formatTime(now),
+	)
+	return err
 }
 
 // ClaimMailDeliveryJobs leases ready queued jobs and stale processing jobs for

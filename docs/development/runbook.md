@@ -135,6 +135,6 @@ After local startup, verify:
 - When OAuth is not configured, authentication endpoints should fail closed instead of pretending to work.
 - If `CLOUDFLARE_DEFAULT_ZONE_ID` is empty, the backend will resolve the zone through the Cloudflare API.
 - If the frontend reports a non-JSON API response, check `VITE_API_BASE_URL` and reverse-proxy routing first.
-- If mailbox forwarding save fails, verify that the target mailbox has already completed Cloudflare destination-address verification.
+- If mailbox forwarding save fails, verify that the target mailbox has already completed LinuxDoSpace's own verification email flow.
 - If `database_relay` mode is enabled and inbound mail never arrives, verify LinuxDoSpace created the managed MX/TXT records you expect, the MX target resolves correctly, and host port `25` reaches the container's SMTP listener on `2525`.
 - If `database_relay` mode is enabled and mail is accepted but not forwarded, verify outbound TCP `25` egress, remote MX reachability, `PTR/rDNS`, `MAIL_RELAY_HELO_DOMAIN`, and recipient-domain SMTP replies.

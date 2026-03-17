@@ -89,7 +89,7 @@ type CloudflareConfig struct {
 }
 
 const (
-	// EmailForwardingBackendCloudflare keeps the historical behavior where the
+	// EmailForwardingBackendCloudflare keeps the legacy behavior where the
 	// backend writes forwarding rules directly into Cloudflare Email Routing.
 	EmailForwardingBackendCloudflare = "cloudflare"
 
@@ -190,7 +190,7 @@ func Load() (Config, error) {
 			DefaultUserQuota:    mustParseInt(getEnv("CLOUDFLARE_DEFAULT_USER_QUOTA", "1")),
 		},
 		Mail: MailConfig{
-			ForwardingBackend:    strings.ToLower(getEnv("EMAIL_FORWARDING_BACKEND", EmailForwardingBackendCloudflare)),
+			ForwardingBackend:    strings.ToLower(getEnv("EMAIL_FORWARDING_BACKEND", EmailForwardingBackendDatabaseRelay)),
 			RelayEnabled:         mustParseBool(getEnv("MAIL_RELAY_ENABLED", "false")),
 			EnsureDNS:            mustParseBool(getEnv("MAIL_RELAY_ENSURE_DNS", "true")),
 			SMTPAddr:             getEnv("MAIL_RELAY_SMTP_ADDR", ":2525"),

@@ -118,6 +118,14 @@ func (s emailRouteSyncState) Address() string {
 // local storage and the external provider do not silently diverge.
 func (p emailRoutingProvisioner) SyncForwardingState(ctx context.Context, before emailRouteSyncState, after emailRouteSyncState, persist func() error) error {
 	if p.cfg.UsesDatabaseMailRelay() && p.shouldUseDatabaseRelayForMutation(before, after) {
+		// Pure database-relay mode owns SMTP ingress itself, so any route that
+		// currently points at a concrete target inbox must first ensure the MX/TXT
+		// records for that root already send mail into LinuxDoSpace.
+		if after.Exists && strings.TrimSpace(after.TargetEmail) != "" {
+			if err := p.ensureDatabaseRelayIngressDNS(ctx, after.RootDomain); err != nil {
+				return err
+			}
+		}
 		return persist()
 	}
 
@@ -142,29 +150,16 @@ func (p emailRoutingProvisioner) SyncForwardingState(ctx context.Context, before
 }
 
 // shouldUseDatabaseRelayForMutation decides whether the current route mutation
-// should stay database-only. Parent-domain exact mailboxes still use
-// Cloudflare's free exact-address forwarding, while subdomain-scoped routes and
-// namespace catch-all routes are handled by the local SMTP relay.
+// should stay database-only. After the full mail cutover, both exact mailboxes
+// and catch-all namespaces are handled by LinuxDoSpace's own SMTP relay.
 func (p emailRoutingProvisioner) shouldUseDatabaseRelayForMutation(before emailRouteSyncState, after emailRouteSyncState) bool {
-	matchKind := strings.TrimSpace(after.MatchKind)
-	if matchKind == "" {
-		matchKind = strings.TrimSpace(before.MatchKind)
-	}
-	if matchKind == emailRouteMatchKindCatchAll {
-		return true
-	}
-
-	rootDomain := strings.TrimSpace(after.RootDomain)
-	if rootDomain == "" {
-		rootDomain = strings.TrimSpace(before.RootDomain)
-	}
-	return usesDatabaseRelayNamespaceRoot(p.cfg, rootDomain)
+	return p.cfg.UsesDatabaseMailRelay()
 }
 
-// usesDatabaseRelayNamespaceRoot reports whether one routed root should be
-// served by the local SMTP relay instead of Cloudflare Email Routing. Only
-// subdomains under the configured default root qualify; the parent root itself
-// keeps using Cloudflare exact mailbox forwarding.
+// usesDatabaseRelayNamespaceRoot reports whether one routed root belongs to a
+// child namespace under the configured default root. The helper is retained for
+// legacy compatibility decisions even though current production defaults route
+// both the parent root and child namespaces through the local SMTP relay.
 func usesDatabaseRelayNamespaceRoot(cfg config.Config, rootDomain string) bool {
 	if !cfg.UsesDatabaseMailRelay() {
 		return false

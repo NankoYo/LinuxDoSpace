@@ -14,6 +14,10 @@ var (
 	// subscription and not enough prepaid remaining count to accept the mail.
 	ErrEmailCatchAllInsufficientRemainingCount = errors.New("email catch-all remaining count is insufficient")
 
+	// ErrMailForwardDailyLimitExceeded means one user has already consumed the
+	// hidden per-day mailbox forwarding cap enforced by the local SMTP relay.
+	ErrMailForwardDailyLimitExceeded = errors.New("mail forward daily limit exceeded")
+
 	// ErrPOWChallengeDailyLimitExceeded means the current user already claimed
 	// the maximum number of proof-of-work rewards allowed for the UTC day.
 	ErrPOWChallengeDailyLimitExceeded = errors.New("pow challenge daily limit exceeded")

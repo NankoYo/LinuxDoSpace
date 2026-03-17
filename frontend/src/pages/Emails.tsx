@@ -303,7 +303,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
         tone: 'success',
         message: createdTarget.verified
           ? `目标邮箱 ${createdTarget.email} 已完成绑定，现在可以直接用于转发。`
-          : `目标邮箱 ${createdTarget.email} 已绑定到你的账号。Cloudflare 验证邮件已发出，请前往邮箱确认后点击“刷新状态”。`,
+          : `目标邮箱 ${createdTarget.email} 已绑定到你的账号。平台验证邮件已发出，请前往该邮箱确认后点击“刷新状态”。`,
       });
     } catch (error) {
       setTargetNotice({ tone: 'error', message: readableErrorMessage(error, '添加目标邮箱失败。') });
@@ -345,7 +345,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       setEmailTargets((currentTargets) => upsertEmailTarget(currentTargets, updatedTarget));
       setTargetRowNotices((current) => ({
         ...current,
-        [targetID]: { tone: 'success', message: `已重新向 ${updatedTarget.email} 发送 Cloudflare 验证邮件，请前往目标邮箱查收。` },
+        [targetID]: { tone: 'success', message: `已重新向 ${updatedTarget.email} 发送平台验证邮件，请前往目标邮箱查收。` },
       }));
     } catch (error) {
       setTargetRowNotices((current) => ({
@@ -375,7 +375,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       return;
     }
     if (nextTarget && !isVerifiedTargetOwned(nextTarget, verifiedTargets)) {
-      setDefaultNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成 Cloudflare 验证的目标邮箱。' });
+      setDefaultNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成平台验证的目标邮箱。' });
       return;
     }
 
@@ -437,7 +437,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
       return;
     }
     if (nextTarget && !isVerifiedTargetOwned(nextTarget, verifiedTargets)) {
-      setCatchAllNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成 Cloudflare 验证的目标邮箱。' });
+      setCatchAllNotice({ tone: 'error', message: '当前只能选择已经绑定到你账号且已完成平台验证的目标邮箱。' });
       return;
     }
 
@@ -535,7 +535,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
             </div>
 
             <InfoBlock title="默认邮箱" description={normalizedUsername ? `每位用户默认保留 ${normalizedUsername}@${configuredRootDomain}，但必须先绑定自己的目标邮箱后才能转发。` : '每位用户都会默认保留一个与用户名同名的邮箱地址。'} />
-            <InfoBlock title="我的转发目标" description="先在“我的转发目标”里绑定目标邮箱。新增后 Cloudflare 会向该邮箱发送确认邮件，验证完成后该目标才会出现在下拉选择器里。" />
+            <InfoBlock title="我的转发目标" description="先在“我的转发目标”里绑定目标邮箱。新增后平台会向该邮箱发送确认邮件，验证完成后该目标才会出现在下拉选择器里。" />
             <InfoBlock title="我的邮箱列表" description="这里会展示当前账号已经存在或默认保留的邮箱行，包括默认邮箱、已存在的自定义邮箱以及已配置的邮箱泛解析。" />
             <InfoBlock title="邮箱泛解析权限" description="邮箱泛解析不是默认开放功能。只有满足权限条件的用户才可以申请，并在通过后配置转发目标。" />
           </GlassCard>
@@ -650,7 +650,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
             </div>
 
             <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
-              每个目标邮箱都会和当前 LinuxDoSpace 账号绑定，其他用户不能重复占用。首次添加时，Cloudflare 会向该邮箱发送确认邮件；只有完成确认后，这个目标邮箱才会出现在下方配置下拉框中。
+              每个目标邮箱都会和当前 LinuxDoSpace 账号绑定，其他用户不能重复占用。首次添加时，平台会向该邮箱发送确认邮件；只有完成确认后，这个目标邮箱才会出现在下方配置下拉框中。
             </div>
 
             <form className="space-y-4" onSubmit={(event) => void handleCreateTarget(event)}>
@@ -677,7 +677,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
 
             {emailTargets.length === 0 ? (
               <div className="rounded-3xl border border-dashed border-white/20 bg-white/25 p-6 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/15 dark:text-gray-200">
-                你当前还没有绑定任何目标邮箱。先添加一个你自己的邮箱地址，完成 Cloudflare 验证后，它才会出现在默认邮箱和邮箱泛解析的下拉框里。
+                你当前还没有绑定任何目标邮箱。先添加一个你自己的邮箱地址，完成平台验证后，它才会出现在默认邮箱和邮箱泛解析的下拉框里。
               </div>
             ) : (
               <div className="overflow-x-auto rounded-3xl border border-white/15 bg-white/35 dark:border-white/10 dark:bg-black/20">
@@ -686,7 +686,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                     <tr className="border-b border-white/15 text-sm text-gray-600 dark:border-white/10 dark:text-gray-300">
                       <th className="px-5 py-4 font-semibold">目标邮箱</th>
                       <th className="px-5 py-4 font-semibold">验证状态</th>
-                      <th className="px-5 py-4 font-semibold">同步状态</th>
+                      <th className="px-5 py-4 font-semibold">平台状态</th>
                       <th className="px-5 py-4 font-semibold">最近动作</th>
                     </tr>
                   </thead>
@@ -702,11 +702,11 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                           <td className="px-5 py-4 align-top">
                             <StatusChip {...status} />
                             <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-                              {item.verified_at ? `验证通过：${formatDate(item.verified_at)}` : '等待你在目标邮箱中确认 Cloudflare 验证邮件。'}
+                              {item.verified_at ? `验证通过：${formatDate(item.verified_at)}` : '等待你在目标邮箱中确认平台验证邮件。'}
                             </div>
                           </td>
                           <td className="px-5 py-4 align-top text-sm text-gray-700 dark:text-gray-200">
-                            {item.cloudflare_address_id ? '已在 Cloudflare 建立目标邮箱绑定' : '等待 Cloudflare 创建目标邮箱绑定'}
+                            {item.verified ? '目标邮箱已可用于转发' : '等待目标邮箱完成平台验证'}
                           </td>
                           <td className="px-5 py-4 align-top text-sm text-gray-600 dark:text-gray-300">
                             <div>{item.last_verification_sent_at ? `验证邮件发送于 ${formatDate(item.last_verification_sent_at)}` : `最近更新于 ${formatDate(item.updated_at)}`}</div>
@@ -767,7 +767,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                     placeholder={verifiedTargets.length > 0 ? '请选择已验证的目标邮箱' : '暂无已验证的目标邮箱'}
                     disabled={savingDefault}
                   />
-                  <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">只有上方“我的转发目标”中已经完成 Cloudflare 验证的邮箱，才允许被保存为默认邮箱转发目标。</div>
+                  <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">只有上方“我的转发目标”中已经完成平台验证的邮箱，才允许被保存为默认邮箱转发目标。</div>
                 </div>
 
                 <ToggleSwitch
@@ -874,7 +874,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                           placeholder={verifiedTargets.length > 0 ? '请选择已验证的目标邮箱' : '暂无已验证的目标邮箱'}
                           disabled={savingCatchAll}
                         />
-                        <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">保存后会把整段命名空间 {catchAllAddress} 转发到所选目标邮箱。只有已经绑定到你账号且完成 Cloudflare 验证的邮箱，才允许被设置为转发目标。</div>
+                        <div className="text-sm leading-7 text-gray-600 dark:text-gray-300">保存后会把整段命名空间 {catchAllAddress} 转发到所选目标邮箱。只有已经绑定到你账号且完成平台验证的邮箱，才允许被设置为转发目标。</div>
                       </div>
 
                       <ToggleSwitch
@@ -886,7 +886,7 @@ export function Emails({ authenticated, sessionLoading, user, publicDomains, csr
                       />
 
                       <div className="rounded-2xl border border-white/15 bg-white/35 p-4 text-sm leading-7 text-gray-700 dark:border-white/10 dark:bg-black/20 dark:text-gray-200">
-                        当前 catch-all 额度与订阅状态由后端实时判断。父域默认邮箱仍然走 Cloudflare 精确转发，子域命名空间邮件则由服务端 relay 处理。
+                        当前默认邮箱与邮箱泛解析都会由服务端中转处理，额度与订阅状态均以后端实时判断结果为准。
                       </div>
 
                       <button

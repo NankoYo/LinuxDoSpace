@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"linuxdospace/backend/internal/cloudflare"
 	"linuxdospace/backend/internal/storage"
@@ -77,14 +76,8 @@ func TestDatabaseRelayCatchAllPermissionApprovalDefersRelayDNSUntilRouteSave(t *
 	cfg.Mail.MXPriority = 10
 	cfg.Mail.SPFValue = "v=spf1 -all"
 
-	service := NewPermissionService(cfg, store, cf)
-	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "owner@example.com"})
-	if err != nil {
-		t.Fatalf("create owned email target: %v", err)
-	}
-
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
+	service, mailer := newPermissionServiceWithTestMailer(cfg, store, cf)
+	target := createVerifiedPermissionEmailTarget(t, ctx, service, mailer, user, "owner@example.com")
 
 	if _, err := service.SubmitPermissionApplication(ctx, user, SubmitPermissionApplicationRequest{Key: PermissionKeyEmailCatchAll}); err != nil {
 		t.Fatalf("submit catch-all permission application: %v", err)
@@ -130,10 +123,10 @@ func TestDatabaseRelayCatchAllPermissionApprovalDefersRelayDNSUntilRouteSave(t *
 	}
 }
 
-// TestDatabaseRelayDefaultMailboxKeepsCloudflareExactForwarding verifies that
-// the parent-domain exact mailbox still uses Cloudflare Email Routing even
-// while subdomain catch-all delivery uses the local relay.
-func TestDatabaseRelayDefaultMailboxKeepsCloudflareExactForwarding(t *testing.T) {
+// TestDatabaseRelayDefaultMailboxUsesLocalRelayIngress verifies that the
+// parent-domain default mailbox now boots the same relay MX/TXT ingress as the
+// child-namespace routes, without creating any Cloudflare Email Routing rule.
+func TestDatabaseRelayDefaultMailboxUsesLocalRelayIngress(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 703, "alice")
@@ -148,14 +141,8 @@ func TestDatabaseRelayDefaultMailboxKeepsCloudflareExactForwarding(t *testing.T)
 	cfg.Mail.MXPriority = 10
 	cfg.Mail.SPFValue = "v=spf1 -all"
 
-	service := NewPermissionService(cfg, store, cf)
-	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "owner@example.com"})
-	if err != nil {
-		t.Fatalf("create owned email target: %v", err)
-	}
-
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
+	service, mailer := newPermissionServiceWithTestMailer(cfg, store, cf)
+	target := createVerifiedPermissionEmailTarget(t, ctx, service, mailer, user, "owner@example.com")
 
 	view, err := service.UpsertMyDefaultEmailRoute(ctx, user, UpsertMyDefaultEmailRouteRequest{
 		TargetEmail: target.Email,
@@ -169,15 +156,14 @@ func TestDatabaseRelayDefaultMailboxKeepsCloudflareExactForwarding(t *testing.T)
 	}
 
 	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
-	if len(zoneDNSRecords) != 0 {
-		t.Fatalf("expected no relay dns records for the parent domain mailbox, got %+v", zoneDNSRecords)
+	if !hasDNSRecord(zoneDNSRecords, "MX", "linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected relay MX record for the parent domain mailbox, got %+v", zoneDNSRecords)
 	}
-	exactRule, found := findEmailRoutingRuleByAddress(cf.rulesByZone["zone-default"], "alice@linuxdo.space")
-	if !found {
-		t.Fatalf("expected cloudflare exact email-routing rule for the parent domain mailbox, got %+v", cf.rulesByZone["zone-default"])
+	if !hasDNSRecord(zoneDNSRecords, "TXT", "linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected relay SPF record for the parent domain mailbox, got %+v", zoneDNSRecords)
 	}
-	if targetEmail := extractForwardTargetEmail(exactRule); targetEmail != "owner@example.com" {
-		t.Fatalf("expected parent-domain exact route to forward to owner@example.com, got %q", targetEmail)
+	if len(cf.rulesByZone["zone-default"]) != 0 {
+		t.Fatalf("expected no cloudflare exact email-routing rule writes, got %+v", cf.rulesByZone["zone-default"])
 	}
 }
 
@@ -240,14 +226,8 @@ func TestDatabaseRelayCatchAllSaveBackfillsMissingIngressDNS(t *testing.T) {
 	cfg.Mail.MXPriority = 10
 	cfg.Mail.SPFValue = "v=spf1 -all"
 
-	service := NewPermissionService(cfg, store, cf)
-	target, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "owner@example.com"})
-	if err != nil {
-		t.Fatalf("create owned email target: %v", err)
-	}
-
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"][0].Verified = &verifiedAt
+	service, mailer := newPermissionServiceWithTestMailer(cfg, store, cf)
+	target := createVerifiedPermissionEmailTarget(t, ctx, service, mailer, user, "owner@example.com")
 
 	if _, err := store.UpsertAdminApplication(ctx, storage.UpsertAdminApplicationInput{
 		ApplicantUserID: user.ID,
@@ -281,8 +261,8 @@ func TestDatabaseRelayCatchAllSaveBackfillsMissingIngressDNS(t *testing.T) {
 
 // TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes
 // verifies that startup now reconciles relay DNS against actual active routes:
-// stale permission-only records are deleted, while enabled subdomain routes are
-// backfilled if their ingress MX/TXT is missing.
+// stale permission-only records are deleted, enabled subdomain routes are
+// backfilled, and the default public root is always kept pointed at the relay.
 func TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
@@ -348,12 +328,18 @@ func TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes
 	if !hasDNSRecord(zoneDNSRecords, "TXT", "bob.linuxdo.space", "v=spf1 -all") {
 		t.Fatalf("expected startup bootstrap to create bob relay SPF record, got %+v", zoneDNSRecords)
 	}
+	if !hasDNSRecord(zoneDNSRecords, "MX", "linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected startup bootstrap to keep the default root on the relay, got %+v", zoneDNSRecords)
+	}
+	if !hasDNSRecord(zoneDNSRecords, "TXT", "linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected startup bootstrap to keep the default root spf record, got %+v", zoneDNSRecords)
+	}
 }
 
-// TestDatabaseRelayModeUsesCloudflareSnapshotsOnlyForParentDomain verifies that
-// hybrid mode still trusts Cloudflare for parent-domain exact mailboxes while
-// keeping subdomain catch-all state database-only.
-func TestDatabaseRelayModeUsesCloudflareSnapshotsOnlyForParentDomain(t *testing.T) {
+// TestDatabaseRelayModeIgnoresCloudflareSnapshots verifies that once the
+// database relay backend is selected, remote Cloudflare Email Routing state no
+// longer affects search or read paths.
+func TestDatabaseRelayModeIgnoresCloudflareSnapshots(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 701, "alice")
@@ -403,8 +389,8 @@ func TestDatabaseRelayModeUsesCloudflareSnapshotsOnlyForParentDomain(t *testing.
 	if err != nil {
 		t.Fatalf("lookup forwarding snapshot in database relay mode: %v", err)
 	}
-	if !forwardingSnapshot.Found {
-		t.Fatalf("expected parent-domain exact route snapshot to stay visible in hybrid mode")
+	if forwardingSnapshot.Found {
+		t.Fatalf("expected database relay mode to ignore cloudflare exact-route snapshots")
 	}
 
 	catchAllSnapshot, err := service.lookupCloudflareCatchAllSnapshot(ctx, "alice.linuxdo.space")
@@ -419,7 +405,7 @@ func TestDatabaseRelayModeUsesCloudflareSnapshotsOnlyForParentDomain(t *testing.
 	if err != nil {
 		t.Fatalf("check email availability in database relay mode: %v", err)
 	}
-	if availability.Available {
-		t.Fatalf("expected parent-domain search to respect existing cloudflare exact-route state, got %+v", availability)
+	if !availability.Available {
+		t.Fatalf("expected parent-domain search to ignore remote cloudflare state in database relay mode, got %+v", availability)
 	}
 }

@@ -34,8 +34,12 @@
 - `quantity_records`：面向未来收费、兑换码、订阅和手动赠送场景的追加式数量账本。
 - `payment_products`：Linux Do Credit 可购买项目定义，保存启用状态、单价、发放数量和效果类型。
 - `payment_orders`：Linux Do Credit 本地订单表，保存业务单号、网关状态、支付 URL、支付成功时间、权益发放时间，以及动态域名购买的根域名/模式/最终分配结果。
+- `email_targets`：用户绑定的目标邮箱，保存目标邮箱归属、平台自有验证 token 哈希、过期时间、最近发送时间和验证完成时间。
 - `email_catch_all_access`：邮箱泛解析的可变运行时状态，保存订阅到期时间、剩余次数和用户级日限额覆盖值。
 - `email_catch_all_daily_usage`：邮箱泛解析按 UTC 日期累计的当日用量，用于执行单人单日最高限额。
+- `mail_forward_daily_usage`：普通邮箱转发按上海时区日期累计的隐藏用量表，只在后端执行风控和上限判断。
+- `mail_messages`：服务端已接收的原始邮件消息体与原始 envelope 信息。
+- `mail_delivery_jobs`：服务端待投递、重试中、已成功或已失败的转发任务队列表。
 - `audit_logs`：关键动作审计日志。
 
 ## DNS 命名空间模型
@@ -59,6 +63,9 @@
 - 数量相关能力当前采用“不可变记录 + 实时汇总余额”模型，避免后续收费逻辑直接修改余额而丢失审计链路。
 - 邮箱泛解析收费能力当前采用“双层模型”：数量账本只保留审计历史，真正执行时读取单独的订阅/剩余次数状态，并以服务端 UTC 日期执行单人单日限额。
 - Linux Do Credit 支付能力当前采用“三段式闭环”：先保留本地订单、再创建上游支付链接、最后通过查询或异步回调幂等发放权益，避免重复到账。
+- 目标邮箱归属验证当前完全由 LinuxDoSpace 自己发信、自行签发一次性验证 token 完成，不再依赖 Cloudflare Email Routing destination address。
+- 当前默认邮箱和邮箱泛解析都走数据库驱动的服务端 SMTP 中转；Cloudflare 只负责将受管域名的 `MX/TXT` 指向 LinuxDoSpace 的 SMTP 入口。
+- 继续保留 `cloudflare` 邮件后端仅作为回滚兼容路径；新的生产默认值是 `database_relay`，以避开 Cloudflare Email Routing 目标地址/规则数量上限。
 
 ## 下一步架构扩展
 

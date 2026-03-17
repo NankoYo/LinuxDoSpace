@@ -3,15 +3,12 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
-
-	"linuxdospace/backend/internal/cloudflare"
 )
 
-// TestAdminCreateEmailRouteDatabaseRelayKeepsCloudflareExactForwarding verifies
-// that administrator-created parent-domain exact mailboxes still sync to
-// Cloudflare Email Routing while avoiding relay MX/TXT bootstrap.
-func TestAdminCreateEmailRouteDatabaseRelayKeepsCloudflareExactForwarding(t *testing.T) {
+// TestAdminCreateEmailRouteDatabaseRelayUsesLocalRelayIngress verifies that
+// administrator-created parent-domain exact mailboxes now rely on the local
+// SMTP relay ingress and no longer create Cloudflare Email Routing rules.
+func TestAdminCreateEmailRouteDatabaseRelayUsesLocalRelayIngress(t *testing.T) {
 	ctx := context.Background()
 	store := newAuthTestStore(t)
 	actor := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 801, "admin")
@@ -26,12 +23,6 @@ func TestAdminCreateEmailRouteDatabaseRelayKeepsCloudflareExactForwarding(t *tes
 	cfg.Mail.MXTarget = "mail.linuxdo.space"
 	cfg.Mail.MXPriority = 10
 	cfg.Mail.SPFValue = "v=spf1 -all"
-	verifiedAt := time.Now().UTC()
-	cf.addressesByAccount["account-default"] = []cloudflare.EmailRoutingDestinationAddress{{
-		ID:       "addr-1",
-		Email:    "owner@example.com",
-		Verified: &verifiedAt,
-	}}
 
 	service := NewAdminService(cfg, store, cf)
 	item, err := service.CreateEmailRoute(ctx, actor, UpsertEmailRouteRequest{
@@ -49,14 +40,13 @@ func TestAdminCreateEmailRouteDatabaseRelayKeepsCloudflareExactForwarding(t *tes
 	}
 
 	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
-	if len(zoneDNSRecords) != 0 {
-		t.Fatalf("expected admin exact-route flow to avoid relay dns bootstrap, got %+v", zoneDNSRecords)
+	if !hasDNSRecord(zoneDNSRecords, "MX", "linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected admin exact-route flow to bootstrap relay MX, got %+v", zoneDNSRecords)
 	}
-	exactRule, found := findEmailRoutingRuleByAddress(cf.rulesByZone["zone-default"], "hello@linuxdo.space")
-	if !found {
-		t.Fatalf("expected admin exact-route flow to sync one cloudflare exact rule, got %+v", cf.rulesByZone["zone-default"])
+	if !hasDNSRecord(zoneDNSRecords, "TXT", "linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected admin exact-route flow to bootstrap relay SPF, got %+v", zoneDNSRecords)
 	}
-	if targetEmail := extractForwardTargetEmail(exactRule); targetEmail != "owner@example.com" {
-		t.Fatalf("expected admin exact route to forward to owner@example.com, got %q", targetEmail)
+	if len(cf.rulesByZone["zone-default"]) != 0 {
+		t.Fatalf("expected no cloudflare exact rule writes, got %+v", cf.rulesByZone["zone-default"])
 	}
 }
