@@ -9,9 +9,16 @@
   DNS failures still fail closed.
 - Replaced Cloudflare destination-address ownership proof with LinuxDoSpace-issued verification emails and one-time verification tokens, removing the user target-binding dependency on Cloudflare Email Routing limits.
 - Added a backend-only daily per-account forwarding guard for ordinary mailbox forwarding, enforced in the relay queue layer rather than exposed in the public UI.
+- Hardened SMTP relay quota accounting so both ordinary mailbox forwarding and
+  catch-all daily usage now use one atomic upsert path per user/day, closing
+  the concurrent read-then-write window that could previously overshoot daily
+  caps or surface duplicate-row conflicts under contention.
 - Changed database-relay namespace DNS allocation to be route-driven instead of permission-driven: catch-all approval no longer pre-allocates relay `MX/TXT`, startup now prunes stale LinuxDoSpace-managed relay records that no longer back any active route, and Cloudflare quota-exhaustion errors now return an explicit operator hint.
 - Hardened paid domain purchases with exact-prefix reservation keys, stale checkout release, Cloudflare realtime conflict re-checking during entitlement apply, and public/generic payment-flow isolation for the internal `domain_allocation_purchase` product.
 - Updated managed-domain bootstrap defaults so built-in sale roots start at `10 LDC` base price, skip optional unresolved zones during startup, and no longer overwrite administrator-edited configuration on restart.
+- Aligned the container image default `EMAIL_FORWARDING_BACKEND` with the
+  database-relay production architecture so incomplete runtime `.env` files no
+  longer silently fall back to the legacy Cloudflare forwarding path.
 - Tightened the GitHub remote deploy workflow so terminal container crashes and
   dead detached deploy processes are detected earlier instead of waiting for the
   full polling window to expire.

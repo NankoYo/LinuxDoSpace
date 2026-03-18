@@ -182,42 +182,8 @@ func consumeMailForwardDailyUsageTx(ctx context.Context, tx *sql.Tx, userID int6
 		defaultLimit = defaultMailForwardDailyLimit
 	}
 
-	var usedCount int64
-	var rowExists bool
+	var updatedUsedCount int64
 	row := tx.QueryRowContext(ctx, `
-SELECT used_count
-FROM mail_forward_daily_usage
-WHERE user_id = ? AND usage_date = ?
-`, userID, usageDate)
-	switch err := row.Scan(&usedCount); err {
-	case nil:
-		rowExists = true
-	case sql.ErrNoRows:
-		rowExists = false
-		usedCount = 0
-	default:
-		return err
-	}
-
-	if usedCount+count > defaultLimit {
-		return storage.ErrMailForwardDailyLimitExceeded
-	}
-
-	if rowExists {
-		_, err := tx.ExecContext(ctx, `
-UPDATE mail_forward_daily_usage
-SET used_count = used_count + ?, updated_at = ?
-WHERE user_id = ? AND usage_date = ?
-`,
-			count,
-			formatTime(now),
-			userID,
-			usageDate,
-		)
-		return err
-	}
-
-	_, err := tx.ExecContext(ctx, `
 INSERT INTO mail_forward_daily_usage (
     user_id,
     usage_date,
@@ -225,14 +191,27 @@ INSERT INTO mail_forward_daily_usage (
     created_at,
     updated_at
 ) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(user_id, usage_date) DO UPDATE SET
+    used_count = mail_forward_daily_usage.used_count + excluded.used_count,
+    updated_at = excluded.updated_at
+WHERE mail_forward_daily_usage.used_count + excluded.used_count <= ?
+RETURNING used_count
 `,
 		userID,
 		usageDate,
 		count,
 		formatTime(now),
 		formatTime(now),
+		defaultLimit,
 	)
-	return err
+	if err := row.Scan(&updatedUsedCount); err != nil {
+		if err == sql.ErrNoRows {
+			return storage.ErrMailForwardDailyLimitExceeded
+		}
+		return err
+	}
+	_ = updatedUsedCount
+	return nil
 }
 
 // ClaimMailDeliveryJobs leases ready queued jobs and stale processing jobs for

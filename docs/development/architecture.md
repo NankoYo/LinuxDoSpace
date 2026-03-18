@@ -65,6 +65,7 @@
 - Linux Do Credit 支付能力当前采用“三段式闭环”：先保留本地订单、再创建上游支付链接、最后通过查询或异步回调幂等发放权益，避免重复到账。
 - 目标邮箱归属验证当前完全由 LinuxDoSpace 自己发信、自行签发一次性验证 token 完成，不再依赖 Cloudflare Email Routing destination address。
 - 当前默认邮箱和邮箱泛解析都走数据库驱动的服务端 SMTP 中转；Cloudflare 只负责将受管域名的 `MX/TXT` 指向 LinuxDoSpace 的 SMTP 入口。
+- SMTP 相关的每日额度扣减当前统一采用数据库内的原子 `UPSERT` 写法，而不是“先查再改”，避免高并发投递下出现次数超卖、上限绕过或重复插入冲突。
 - 继续保留 `cloudflare` 邮件后端仅作为回滚兼容路径；新的生产默认值是 `database_relay`，以避开 Cloudflare Email Routing 目标地址/规则数量上限。
 
 ## 下一步架构扩展

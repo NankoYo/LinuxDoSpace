@@ -187,42 +187,12 @@ func (s *Store) ConsumeEmailCatchAll(ctx context.Context, input ConsumeEmailCatc
 		access.UpdatedAt = now
 	}
 
-	if usageExists {
-		row := tx.QueryRowContext(ctx, `
-UPDATE email_catch_all_daily_usage
-SET used_count = used_count + ?, updated_at = ?
-WHERE user_id = ? AND usage_date = ?
-RETURNING
-    user_id,
-    usage_date,
-    used_count,
-    created_at,
-    updated_at
-`, input.Count, formatTime(now), input.UserID, usageDate)
-		usage, err = scanEmailCatchAllDailyUsage(row)
-		if err != nil {
-			return model.EmailCatchAllConsumeResult{}, err
+	usage, err = upsertEmailCatchAllDailyUsageTx(ctx, tx, input.UserID, usageDate, input.Count, effectiveDailyLimit, now)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.EmailCatchAllConsumeResult{}, storage.ErrEmailCatchAllDailyLimitExceeded
 		}
-	} else {
-		row := tx.QueryRowContext(ctx, `
-INSERT INTO email_catch_all_daily_usage (
-    user_id,
-    usage_date,
-    used_count,
-    created_at,
-    updated_at
-) VALUES (?, ?, ?, ?, ?)
-RETURNING
-    user_id,
-    usage_date,
-    used_count,
-    created_at,
-    updated_at
-`, input.UserID, usageDate, input.Count, formatTime(now), formatTime(now))
-		usage, err = scanEmailCatchAllDailyUsage(row)
-		if err != nil {
-			return model.EmailCatchAllConsumeResult{}, err
-		}
+		return model.EmailCatchAllConsumeResult{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -238,6 +208,40 @@ RETURNING
 		ConsumedTemporaryRewardCount:     consumedTemporaryRewardCount,
 		ConsumedTemporaryRewardExpiresAt: consumedTemporaryRewardExpiresAt,
 	}, nil
+}
+
+// upsertEmailCatchAllDailyUsageTx atomically creates or increments one
+// per-user Shanghai-day usage row while enforcing the effective daily limit
+// inside the same write statement. This closes the read-then-update race that
+// could otherwise surface duplicate inserts or cap overshoot under contention.
+func upsertEmailCatchAllDailyUsageTx(ctx context.Context, tx *sql.Tx, userID int64, usageDate string, count int64, effectiveDailyLimit int64, now time.Time) (model.EmailCatchAllDailyUsage, error) {
+	row := tx.QueryRowContext(ctx, `
+INSERT INTO email_catch_all_daily_usage (
+    user_id,
+    usage_date,
+    used_count,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(user_id, usage_date) DO UPDATE SET
+    used_count = email_catch_all_daily_usage.used_count + excluded.used_count,
+    updated_at = excluded.updated_at
+WHERE email_catch_all_daily_usage.used_count + excluded.used_count <= ?
+RETURNING
+    user_id,
+    usage_date,
+    used_count,
+    created_at,
+    updated_at
+`,
+		userID,
+		usageDate,
+		count,
+		formatTime(now),
+		formatTime(now),
+		effectiveDailyLimit,
+	)
+	return scanEmailCatchAllDailyUsage(row)
 }
 
 // RefundEmailCatchAll rolls back one previously reserved catch-all usage unit.

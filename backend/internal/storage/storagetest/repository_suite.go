@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1281,6 +1282,70 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 		if usage.UsedCount != 0 {
 			t.Fatalf("expected terminal failure to refund daily usage back to 0, got %d", usage.UsedCount)
+		}
+	})
+
+	t.Run("mail delivery queue enforces ordinary forwarding daily limit without partial overflow writes", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "mail-forward-limit-owner")
+		now := time.Now().UTC().Truncate(time.Second)
+
+		// The hidden ordinary-forwarding ceiling is intentionally backend-only.
+		// This regression test drives the durable queue through 1000 accepted
+		// groups first, then confirms the 1001st enqueue fails cleanly without
+		// partially writing an overflow batch.
+		groups := make([]storage.EnqueueMailDeliveryGroupInput, 0, 1000)
+		for index := 0; index < 1000; index++ {
+			groups = append(groups, storage.EnqueueMailDeliveryGroupInput{
+				OriginalRecipients: []string{
+					"hello-" + timeutil.ShanghaiDayKey(now) + "-" + string(rune('a'+(index%26))) + "-" + strconv.Itoa(index) + "@linuxdo.space",
+				},
+				TargetRecipients: []string{"target@example.com"},
+				OwnerUserIDs:     []int64{user.ID},
+			})
+		}
+
+		jobs, err := store.EnqueueMailDeliveryBatch(ctx, storage.EnqueueMailDeliveryBatchInput{
+			OriginalEnvelopeFrom: "sender@example.com",
+			RawMessage:           []byte("Subject: ordinary-limit-test\r\n\r\nbody"),
+			MaxAttempts:          2,
+			QueuedAt:             now,
+			Groups:               groups,
+		})
+		if err != nil {
+			t.Fatalf("enqueue ordinary forwarding batch up to limit: %v", err)
+		}
+		if len(jobs) != 1000 {
+			t.Fatalf("expected 1000 queued ordinary forwarding jobs at the limit, got %d", len(jobs))
+		}
+
+		_, err = store.EnqueueMailDeliveryBatch(ctx, storage.EnqueueMailDeliveryBatchInput{
+			OriginalEnvelopeFrom: "sender@example.com",
+			RawMessage:           []byte("Subject: ordinary-limit-overflow\r\n\r\nbody"),
+			MaxAttempts:          2,
+			QueuedAt:             now,
+			Groups: []storage.EnqueueMailDeliveryGroupInput{{
+				OriginalRecipients: []string{"overflow@linuxdo.space"},
+				TargetRecipients:   []string{"target@example.com"},
+				OwnerUserIDs:       []int64{user.ID},
+			}},
+		})
+		if !errors.Is(err, storage.ErrMailForwardDailyLimitExceeded) {
+			t.Fatalf("expected ordinary forwarding limit error on overflow enqueue, got %v", err)
+		}
+
+		claimed, err := store.ClaimMailDeliveryJobs(ctx, storage.ClaimMailDeliveryJobsInput{
+			Limit:         1001,
+			LeaseDuration: time.Minute,
+			Now:           now,
+		})
+		if err != nil {
+			t.Fatalf("claim ordinary forwarding jobs after overflow rejection: %v", err)
+		}
+		if len(claimed) != 1000 {
+			t.Fatalf("expected overflow rejection to leave exactly 1000 queued jobs, got %d", len(claimed))
 		}
 	})
 

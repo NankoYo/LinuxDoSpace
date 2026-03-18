@@ -72,6 +72,7 @@ jobs:
     name: Deploy To Debian
     needs: build-and-push
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: read
@@ -301,6 +302,7 @@ jobs:
           show_diagnostics() {
             docker ps --filter name=linuxdospace --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
             docker compose ps || true
+            docker inspect linuxdospace --format '{{json .State}}' 2>/dev/null || true
             docker logs --tail 80 linuxdospace || true
           }
 
@@ -314,10 +316,10 @@ jobs:
             if [ "$SKIP_REMOTE_PULL" = 'true' ]; then
               echo 'Using preloaded image from the GitHub runner.'
               deployment_command_result=0
-              timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d --force-recreate || deployment_command_result=$?
+              timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d --force-recreate --remove-orphans || deployment_command_result=$?
             else
               deployment_command_result=0
-              timeout "$DOCKER_PULL_TIMEOUT_SECONDS" docker pull "$TARGET_IMAGE" && timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d --force-recreate || deployment_command_result=$?
+              timeout "$DOCKER_PULL_TIMEOUT_SECONDS" docker pull "$TARGET_IMAGE" && timeout "$COMPOSE_UP_TIMEOUT_SECONDS" docker compose up -d --force-recreate --remove-orphans || deployment_command_result=$?
             fi
 
             if [ "$deployment_command_result" -eq 0 ]; then
