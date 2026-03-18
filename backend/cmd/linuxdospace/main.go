@@ -83,9 +83,11 @@ func main() {
 	if err := domainService.EnsureBuiltInManagedDomains(ctx); err != nil {
 		log.Fatalf("bootstrap built-in managed domains: %v", err)
 	}
+	bootstrapWarnings := make([]string, 0, 4)
 	if err := service.EnsureDatabaseRelayIngressDNSState(ctx, cfg, store, cloudflareClient); err != nil {
 		var warning *service.DatabaseRelayIngressDNSBootstrapWarning
 		if errors.As(err, &warning) {
+			bootstrapWarnings = append(bootstrapWarnings, warning.Warnings...)
 			log.Printf("bootstrap database mail relay ingress dns warning: %v", warning)
 		} else {
 			log.Fatalf("bootstrap database mail relay ingress dns: %v", err)
@@ -95,6 +97,7 @@ func main() {
 	handler := httpapi.NewRouter(httpapi.RouterDependencies{
 		Config:            cfg,
 		Version:           version,
+		StartupWarnings:   bootstrapWarnings,
 		Store:             store,
 		AuthService:       authService,
 		DomainService:     domainService,

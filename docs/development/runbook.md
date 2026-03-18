@@ -112,6 +112,8 @@ Recorded backup artifacts:
 Post-cutover validation:
 
 - `GET /healthz` must return `200` with `"status":"ok"`.
+- If `/healthz` also reports `degraded=true` or any `startup_warnings`, treat
+  the deployment as online-but-impaired rather than fully healthy.
 - `GET /v1/public/domains` must return JSON.
 - `GET /v1/public/supervision` must return JSON.
 - The reported runtime version must match the released PostgreSQL-capable commit.

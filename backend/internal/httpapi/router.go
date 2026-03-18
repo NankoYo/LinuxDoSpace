@@ -12,6 +12,7 @@ import (
 type RouterDependencies struct {
 	Config            config.Config
 	Version           string
+	StartupWarnings   []string
 	Store             adminPasswordAttemptStore
 	AuthService       *service.AuthService
 	DomainService     *service.DomainService
@@ -27,6 +28,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	api := &API{
 		config:               deps.Config,
 		version:              deps.Version,
+		startupWarnings:      append([]string(nil), deps.StartupWarnings...),
 		authService:          deps.AuthService,
 		domainService:        deps.DomainService,
 		adminService:         deps.AdminService,

@@ -28,6 +28,8 @@ Returns process health, version, and dependency readiness.
 The payload now also exposes `mail_forwarding_backend` and `mail_relay_enabled`
 so operators can verify whether the instance is running in `cloudflare` or
 `database_relay` mode.
+When the process stays online with known startup degradation, the payload also
+includes `degraded=true` plus a `startup_warnings` string array.
 
 ### `GET /v1/public/domains`
 Returns the enabled managed root-domain list.

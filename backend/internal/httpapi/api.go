@@ -9,6 +9,7 @@ import (
 type API struct {
 	config               config.Config
 	version              string
+	startupWarnings      []string
 	authService          *service.AuthService
 	domainService        *service.DomainService
 	adminService         *service.AdminService

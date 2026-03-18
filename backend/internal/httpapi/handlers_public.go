@@ -7,7 +7,7 @@ import (
 
 // handleHealth 返回服务健康状态。
 func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"status":                  "ok",
 		"app":                     a.config.App.Name,
 		"version":                 a.version,
@@ -17,7 +17,12 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"mail_forwarding_backend": a.config.Mail.ForwardingBackend,
 		"mail_relay_enabled":      a.config.Mail.RelayEnabled,
 		"time":                    time.Now().UTC(),
-	})
+	}
+	if len(a.startupWarnings) > 0 {
+		payload["degraded"] = true
+		payload["startup_warnings"] = append([]string(nil), a.startupWarnings...)
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // handlePublicDomains 返回当前可公开申请的根域名。

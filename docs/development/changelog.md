@@ -22,6 +22,12 @@
 - Tightened the GitHub remote deploy workflow so terminal container crashes and
   dead detached deploy processes are detected earlier instead of waiting for the
   full polling window to expire.
+- Added `/healthz` startup-warning reporting so default-root relay DNS conflicts
+  and similar degraded startup states are visible to operators instead of being
+  hidden only in process logs.
+- Hardened the SQLite fallback DSN with `immediate` write transactions,
+  `busy_timeout`, and `WAL` defaults so concurrent local/test writes are less
+  likely to fail with `SQLITE_BUSY`.
 - Added per-root-domain sale settings plus public dynamic namespace purchase flow on the domain search page, with fixed length multipliers, hidden random 12+ character purchases, and built-in bootstrap roots for `cifang.love`, `openapi.best`, and `metapi.cc`.
 - Added dedicated dynamic Linux Do Credit domain-order creation plus paid entitlement application so successful checkouts can automatically create new allocation namespaces.
 - Added a reviewed-but-not-auto-applied reserved-prefix audit draft for common single-character, digit, infrastructure, and high-value prefixes.
