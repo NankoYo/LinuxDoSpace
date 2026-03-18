@@ -146,6 +146,8 @@ jobs:
           DOCKER_PULL_TIMEOUT_SECONDS: '600'
           REMOTE_IMAGE_STREAM_TIMEOUT_SECONDS: '1800'
           COMPOSE_UP_TIMEOUT_SECONDS: '300'
+          REMOTE_DEPLOY_POLL_ROUNDS: '40'
+          REMOTE_DEPLOY_POLL_INTERVAL_SECONDS: '10'
           REMOTE_DEPLOY_BASENAME: github-actions-deploy-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
@@ -279,6 +281,22 @@ jobs:
             return 1
           }
 
+          # deployment_has_terminal_container_failure detects container states
+          # that cannot become healthy without another compose recreation.
+          # Failing fast here avoids burning the full health-check window when
+          # the backend already crashed during startup.
+          deployment_has_terminal_container_failure() {
+            current_status="$(container_runtime_status)"
+            case "$current_status" in
+              exited|dead|removing)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
           # show_diagnostics prints enough context for the Actions runner to debug a failed attempt.
           show_diagnostics() {
             docker ps --filter name=linuxdospace --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
@@ -312,6 +330,11 @@ jobs:
                   echo 'success' > "$STATUS_FILE"
                   trap - EXIT
                   exit 0
+                fi
+
+                if deployment_has_terminal_container_failure; then
+                  echo 'Container reached a terminal failed state before becoming healthy.'
+                  break
                 fi
               done
             else
@@ -433,18 +456,32 @@ jobs:
           }
 
           # wait_for_remote_deployment_result polls the remote status file and streams recent logs.
-          # SSH timeouts, explicit failure, or polling timeouts all bubble up to the outer retry loop.
+          # SSH timeouts, explicit failure, detached-process death, or polling timeouts all bubble up to the outer retry loop.
           wait_for_remote_deployment_result() {
-            for poll_round in $(seq 1 120); do
-              echo "Poll round ${poll_round}/120"
+            for poll_round in $(seq 1 "$REMOTE_DEPLOY_POLL_ROUNDS"); do
+              echo "Poll round ${poll_round}/${REMOTE_DEPLOY_POLL_ROUNDS}"
 
               remote_status="$({
                 ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
                   cd '$DEPLOY_PATH' && \
-                  if [ -f '$REMOTE_STATUS_FILE' ]; then cat '$REMOTE_STATUS_FILE'; else echo running; fi"
+                  remote_status=running && \
+                  remote_pid_state=missing && \
+                  if [ -f '$REMOTE_STATUS_FILE' ]; then remote_status=\$(cat '$REMOTE_STATUS_FILE'); fi && \
+                  if [ -f '$REMOTE_PID_FILE' ]; then \
+                    if kill -0 \$(cat '$REMOTE_PID_FILE') 2>/dev/null; then \
+                      remote_pid_state=alive; \
+                    else \
+                      remote_pid_state=dead; \
+                    fi; \
+                  fi && \
+                  printf '%s|%s\n' \"\$remote_status\" \"\$remote_pid_state\""
               } | tr -d '\r')" || return 1
 
+              remote_pid_state="${remote_status#*|}"
+              remote_status="${remote_status%%|*}"
+
               echo "Remote deployment status: ${remote_status}"
+              echo "Remote deployment pid state: ${remote_pid_state}"
 
               ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
                 cd '$DEPLOY_PATH' && \
@@ -460,7 +497,15 @@ jobs:
                 return 1
               fi
 
-              sleep 15
+              if [ "$remote_status" = 'running' ] && [ "$remote_pid_state" = 'dead' ]; then
+                echo 'Remote deployment process exited without reporting success.'
+                ssh $SSH_OPTS -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "\
+                  cd '$DEPLOY_PATH' && \
+                  if [ -f '$REMOTE_LOG_FILE' ]; then tail -n 120 '$REMOTE_LOG_FILE'; fi" || true
+                return 1
+              fi
+
+              sleep "$REMOTE_DEPLOY_POLL_INTERVAL_SECONDS"
             done
 
             echo 'Timed out while waiting for remote deployment result.'

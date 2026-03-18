@@ -93,9 +93,9 @@ Workflow file:
 
 The workflow is designed to:
 
-- build and publish the image to GHCR on pushes that should produce a release image
-- publish versioned images on tag pushes
-- optionally deploy the already-published image to Debian after publication succeeds
+- build and publish the shared `ghcr.io/moyeranqianzhi/linuxdospace:latest` image on `main`
+- deploy the already-published `latest` image on tag pushes after verifying the image revision matches the tag commit
+- allow the same deploy path to be triggered manually through `workflow_dispatch`
 
 ## Required GitHub secrets
 
@@ -110,14 +110,12 @@ Server deployment requires these secrets when the workflow is configured to depl
 - `DEPLOY_SSH_KNOWN_HOSTS`
 - `DEPLOY_SSH_PRIVATE_KEY`
 - `DEPLOY_ENV_FILE`
-- `DEPLOY_GHCR_USERNAME`
-- `DEPLOY_GHCR_TOKEN`
 
 Notes:
 
 - `DEPLOY_ENV_FILE` should contain the full multi-line `.env` file content.
 - `DEPLOY_SSH_KNOWN_HOSTS` must contain the pinned SSH host key lines for the Debian server. Do not rely on live `ssh-keyscan` during deployment.
-- `DEPLOY_GHCR_TOKEN` must have permission to pull the GHCR image.
+- GHCR access in the current workflow uses the built-in `GITHUB_TOKEN`, so a separate deploy-only GHCR credential is no longer required.
 
 ## Post-deploy verification
 
@@ -207,6 +205,11 @@ Operational DNS notes for `database_relay`:
   the default root domain
 - on startup, LinuxDoSpace scans active database-backed mail routes and
   backfills any missing relay `MX/TXT` records before serving traffic
+- if Cloudflare rejects the default root-domain `MX` write with the specific
+  “This zone is managed by Email Routing. Disable Email Routing to add/modify
+  MX records.” response, LinuxDoSpace now logs a startup warning and continues
+  serving traffic instead of crashing; this exception is intentionally limited
+  to the default root domain so child namespace relay DNS still fails closed
 - LinuxDoSpace only updates DNS records carrying its own mail-relay comment, so
   unrelated user TXT/MX records are not rewritten
 - the MX target itself must resolve to the real SMTP listener host running

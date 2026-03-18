@@ -46,6 +46,8 @@ type fakeEmailRoutingCloudflare struct {
 	createdAddresses           []string
 	enabledDNSZones            []string
 	updatedCatchAllSubdomains  []string
+	createDNSErrors            map[string]error
+	updateDNSErrors            map[string]error
 	failNextCreateAddress      error
 	createAddressThenFail      error
 	deleteAddressErrors        map[string]error
@@ -113,6 +115,9 @@ func (f *fakeEmailRoutingCloudflare) GetDNSRecord(ctx context.Context, zoneID st
 
 // CreateDNSRecord appends one new in-memory DNS record.
 func (f *fakeEmailRoutingCloudflare) CreateDNSRecord(ctx context.Context, zoneID string, input cloudflare.CreateDNSRecordInput) (cloudflare.DNSRecord, error) {
+	if err := f.lookupDNSMutationError(f.createDNSErrors, input.Type, input.Name); err != nil {
+		return cloudflare.DNSRecord{}, err
+	}
 	record := cloudflare.DNSRecord{
 		ID:       fmt.Sprintf("dns-%d", len(f.dnsRecordsByZone[strings.TrimSpace(zoneID)])+1),
 		Type:     strings.ToUpper(strings.TrimSpace(input.Type)),
@@ -132,6 +137,9 @@ func (f *fakeEmailRoutingCloudflare) CreateDNSRecord(ctx context.Context, zoneID
 
 // UpdateDNSRecord replaces the stored payload for one existing in-memory DNS record.
 func (f *fakeEmailRoutingCloudflare) UpdateDNSRecord(ctx context.Context, zoneID string, recordID string, input cloudflare.UpdateDNSRecordInput) (cloudflare.DNSRecord, error) {
+	if err := f.lookupDNSMutationError(f.updateDNSErrors, input.Type, input.Name); err != nil {
+		return cloudflare.DNSRecord{}, err
+	}
 	records := f.dnsRecordsByZone[strings.TrimSpace(zoneID)]
 	for index := range records {
 		if records[index].ID != strings.TrimSpace(recordID) {
@@ -679,7 +687,19 @@ func newFakeEmailRoutingCloudflare() *fakeEmailRoutingCloudflare {
 		requiredDNSByZoneSubdomain: map[string]map[string][]cloudflare.EmailRoutingDNSRecord{"zone-default": {}},
 		dnsRecordsByZone:           make(map[string][]cloudflare.DNSRecord),
 		addressesByAccount:         make(map[string][]cloudflare.EmailRoutingDestinationAddress),
+		createDNSErrors:            make(map[string]error),
+		updateDNSErrors:            make(map[string]error),
 	}
+}
+
+// lookupDNSMutationError returns one configured fake API failure for the exact
+// DNS type/name pair currently being created or updated.
+func (f *fakeEmailRoutingCloudflare) lookupDNSMutationError(source map[string]error, recordType string, name string) error {
+	if len(source) == 0 {
+		return nil
+	}
+	key := strings.ToUpper(strings.TrimSpace(recordType)) + ":" + strings.ToLower(strings.TrimSpace(name))
+	return source[key]
 }
 
 // seedPermissionEmailTestUser inserts one local user used by the email-routing tests.

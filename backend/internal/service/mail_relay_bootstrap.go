@@ -57,12 +57,72 @@ func EnsureDatabaseRelayIngressDNSState(ctx context.Context, cfg config.Config, 
 	}
 	sort.Strings(orderedRoots)
 
+	warnings := make([]string, 0, len(orderedRoots))
 	for _, rootDomain := range orderedRoots {
 		if err := ensureDatabaseRelayIngressDNSForRootDomain(ctx, cfg, cf, rootDomain); err != nil {
+			if warningMessage, ok := classifyDatabaseRelayIngressDNSBootstrapWarning(cfg, rootDomain, err); ok {
+				warnings = append(warnings, warningMessage)
+				continue
+			}
 			return fmt.Errorf("ensure database mail relay ingress dns for %s: %w", rootDomain, err)
 		}
 	}
+	if len(warnings) > 0 {
+		return &DatabaseRelayIngressDNSBootstrapWarning{Warnings: warnings}
+	}
 	return nil
+}
+
+// DatabaseRelayIngressDNSBootstrapWarning captures one or more known bootstrap
+// limitations that should not abort process startup. LinuxDoSpace currently
+// uses this only for the default root-domain MX conflict caused by
+// Cloudflare-managed Email Routing, because that case blocks automatic DNS
+// provisioning but does not make the HTTP/API service itself unsafe to start.
+type DatabaseRelayIngressDNSBootstrapWarning struct {
+	Warnings []string
+}
+
+// Error renders the aggregated warning payload as one log-friendly string.
+func (w *DatabaseRelayIngressDNSBootstrapWarning) Error() string {
+	if w == nil || len(w.Warnings) == 0 {
+		return ""
+	}
+	return strings.Join(w.Warnings, "; ")
+}
+
+// classifyDatabaseRelayIngressDNSBootstrapWarning decides whether one
+// bootstrap-time DNS failure is a recognized operator-managed limitation that
+// should degrade to a warning instead of killing the backend process.
+//
+// The rule is intentionally narrow:
+//   - only the configured default root domain may soft-fail
+//   - only Cloudflare's explicit "Email Routing manages MX here" response is
+//     accepted as a warning
+//
+// Child namespaces still fail closed because their relay MX/TXT rows are
+// required for the user-facing catch-all forwarding path to function.
+func classifyDatabaseRelayIngressDNSBootstrapWarning(cfg config.Config, rootDomain string, err error) (string, bool) {
+	normalizedRoot := normalizeDNSName(rootDomain)
+	defaultRoot := normalizeDNSName(cfg.Cloudflare.DefaultRootDomain)
+	if normalizedRoot == "" || normalizedRoot != defaultRoot {
+		return "", false
+	}
+	if !isCloudflareEmailRoutingManagedMXConflict(err) {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"default mail root %s still uses Cloudflare-managed Email Routing MX records; skipping automatic relay DNS bootstrap for this root and continuing startup",
+		normalizedRoot,
+	), true
+}
+
+// isCloudflareEmailRoutingManagedMXConflict recognizes the exact Cloudflare
+// provider response raised when a zone already delegates MX handling to Email
+// Routing and therefore rejects direct MX writes through the generic DNS API.
+func isCloudflareEmailRoutingManagedMXConflict(err error) bool {
+	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(normalized, "managed by email routing") &&
+		strings.Contains(normalized, "disable email routing to add/modify mx records")
 }
 
 // collectRequiredDatabaseRelayNamespaceRoots reduces the live email-route table

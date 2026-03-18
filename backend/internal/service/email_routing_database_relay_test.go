@@ -336,6 +336,109 @@ func TestEnsureDatabaseRelayIngressDNSStatePrunesOrphansAndBackfillsActiveRoutes
 	}
 }
 
+// TestEnsureDatabaseRelayIngressDNSStateWarnsWhenDefaultRootMXIsManagedByCloudflareEmailRouting
+// verifies that startup no longer crashes when Cloudflare refuses MX writes on
+// the default root because that exact root still uses Cloudflare-managed Email
+// Routing. The backend should continue booting while still backfilling active
+// child namespaces that require local relay ingress.
+func TestEnsureDatabaseRelayIngressDNSStateWarnsWhenDefaultRootMXIsManagedByCloudflareEmailRouting(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 709, "bob")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+	seedPermissionEmailAllocation(t, ctx, store, user, "linuxdo.space", "bob")
+
+	cf := newFakeEmailRoutingCloudflare()
+	cf.createDNSErrors["MX:linuxdo.space"] = errors.New("cloudflare api error: This zone is managed by Email Routing. Disable Email Routing to add/modify MX records.")
+
+	cfg := newPermissionEmailTestConfig()
+	cfg.Mail.ForwardingBackend = "database_relay"
+	cfg.Mail.EnsureDNS = true
+	cfg.Mail.Domain = "mail.linuxdo.space"
+	cfg.Mail.MXTarget = "mail.linuxdo.space"
+	cfg.Mail.MXPriority = 10
+	cfg.Mail.SPFValue = "v=spf1 -all"
+
+	if _, err := store.CreateEmailRoute(ctx, storage.CreateEmailRouteInput{
+		OwnerUserID: user.ID,
+		RootDomain:  "bob.linuxdo.space",
+		Prefix:      "hello",
+		TargetEmail: "owner@example.com",
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("seed bob subdomain email route: %v", err)
+	}
+
+	err := EnsureDatabaseRelayIngressDNSState(ctx, cfg, store, cf)
+	var warning *DatabaseRelayIngressDNSBootstrapWarning
+	if !errors.As(err, &warning) {
+		t.Fatalf("expected bootstrap warning, got %v", err)
+	}
+	if len(warning.Warnings) != 1 {
+		t.Fatalf("expected one aggregated warning, got %+v", warning.Warnings)
+	}
+	if !strings.Contains(warning.Error(), "Cloudflare-managed Email Routing MX records") {
+		t.Fatalf("expected operator-facing warning detail, got %q", warning.Error())
+	}
+
+	zoneDNSRecords := cf.dnsRecordsByZone["zone-default"]
+	if !hasDNSRecord(zoneDNSRecords, "MX", "bob.linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected child namespace relay MX bootstrap to continue, got %+v", zoneDNSRecords)
+	}
+	if !hasDNSRecord(zoneDNSRecords, "TXT", "bob.linuxdo.space", "v=spf1 -all") {
+		t.Fatalf("expected child namespace relay SPF bootstrap to continue, got %+v", zoneDNSRecords)
+	}
+	if hasDNSRecord(zoneDNSRecords, "MX", "linuxdo.space", "mail.linuxdo.space") {
+		t.Fatalf("expected default root relay MX creation to be skipped after Cloudflare-managed warning, got %+v", zoneDNSRecords)
+	}
+}
+
+// TestEnsureDatabaseRelayIngressDNSStateStillFailsForManagedChildNamespaceMXConflict
+// verifies that the new startup warning path stays narrowly scoped to the
+// default root. A child namespace that cannot receive relay MX/TXT records must
+// still fail closed because user-facing catch-all forwarding would otherwise be
+// silently broken.
+func TestEnsureDatabaseRelayIngressDNSStateStillFailsForManagedChildNamespaceMXConflict(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 710, "bob")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+	seedPermissionEmailAllocation(t, ctx, store, user, "linuxdo.space", "bob")
+
+	cf := newFakeEmailRoutingCloudflare()
+	cf.createDNSErrors["MX:bob.linuxdo.space"] = errors.New("cloudflare api error: This zone is managed by Email Routing. Disable Email Routing to add/modify MX records.")
+
+	cfg := newPermissionEmailTestConfig()
+	cfg.Mail.ForwardingBackend = "database_relay"
+	cfg.Mail.EnsureDNS = true
+	cfg.Mail.Domain = "mail.linuxdo.space"
+	cfg.Mail.MXTarget = "mail.linuxdo.space"
+	cfg.Mail.MXPriority = 10
+	cfg.Mail.SPFValue = "v=spf1 -all"
+
+	if _, err := store.CreateEmailRoute(ctx, storage.CreateEmailRouteInput{
+		OwnerUserID: user.ID,
+		RootDomain:  "bob.linuxdo.space",
+		Prefix:      "hello",
+		TargetEmail: "owner@example.com",
+		Enabled:     true,
+	}); err != nil {
+		t.Fatalf("seed bob subdomain email route: %v", err)
+	}
+
+	err := EnsureDatabaseRelayIngressDNSState(ctx, cfg, store, cf)
+	if err == nil {
+		t.Fatalf("expected child namespace bootstrap to fail closed")
+	}
+	var warning *DatabaseRelayIngressDNSBootstrapWarning
+	if errors.As(err, &warning) {
+		t.Fatalf("expected hard failure instead of warning, got %v", warning)
+	}
+	if !strings.Contains(err.Error(), "bob.linuxdo.space") {
+		t.Fatalf("expected failing namespace in error, got %v", err)
+	}
+}
+
 // TestDatabaseRelayModeIgnoresCloudflareSnapshots verifies that once the
 // database relay backend is selected, remote Cloudflare Email Routing state no
 // longer affects search or read paths.
