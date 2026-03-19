@@ -7,6 +7,13 @@ LinuxDoSpace 是一个基于 Cloudflare DNS 的二级域名分发站，主要面
 - `frontend/`：基于 Vite 的前端演示界面。
 - `backend/`：基于 Go 的后端服务。
 - `docs/development/`：项目开发文档、API 文档、已知问题与变更记录。
+- `sdk/`：邮件实时流的多语言 SDK。
+
+SDK 说明：
+
+- Python SDK 位于 `sdk/python`
+- 当前 PyPI 安装命令是 `pip install linuxdospace`
+- 多语言 SDK 协议说明见 [sdk/spec/MAIL_STREAM_PROTOCOL.md](/G:/ClaudeProjects/LinuxDoSpace/LinuxDoSpace/sdk/spec/MAIL_STREAM_PROTOCOL.md)
 
 当前开发重点是后端基础能力：
 

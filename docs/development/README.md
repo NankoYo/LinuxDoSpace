@@ -12,6 +12,7 @@ Use it to keep architecture, deployment, API, and release knowledge traceable ac
 5. [references.md](/G:/ClaudeProjects/LinuxDoSpace/LinuxDoSpace/docs/development/references.md)
 6. [known-issues.md](/G:/ClaudeProjects/LinuxDoSpace/LinuxDoSpace/docs/development/known-issues.md)
 7. [changelog.md](/G:/ClaudeProjects/LinuxDoSpace/LinuxDoSpace/docs/development/changelog.md)
+8. [sdk-multi-language.md](/G:/ClaudeProjects/LinuxDoSpace/LinuxDoSpace/docs/development/sdk-multi-language.md)
 
 ## Current project state
 
