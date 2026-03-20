@@ -13,6 +13,7 @@ const tokenStreamBufferSize = 128
 type TokenStreamEvent struct {
 	Type                 string   `json:"type"`
 	TokenPublicID        string   `json:"token_public_id,omitempty"`
+	OwnerUsername        string   `json:"owner_username,omitempty"`
 	OriginalEnvelopeFrom string   `json:"original_envelope_from,omitempty"`
 	OriginalRecipients   []string `json:"original_recipients,omitempty"`
 	ReceivedAt           string   `json:"received_at,omitempty"`

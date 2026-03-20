@@ -200,6 +200,19 @@ func (s *TokenService) Hub() *mailrelay.TokenStreamHub {
 	return s.hub
 }
 
+// ResolveStreamOwnerUsername returns the normalized Linux Do username that
+// owns the currently authenticated API token stream.
+func (s *TokenService) ResolveStreamOwnerUsername(ctx context.Context, token model.APIToken) (string, error) {
+	user, err := s.db.GetUserByID(ctx, token.OwnerUserID)
+	if err != nil {
+		if storage.IsNotFound(err) {
+			return "", NotFoundError("api token owner not found")
+		}
+		return "", InternalError("failed to load api token owner", err)
+	}
+	return strings.ToLower(strings.TrimSpace(user.Username)), nil
+}
+
 // RequireOwnedEmailAPIToken validates that the given token exists, belongs to the
 // current user, is active, and supports the email stream capability.
 func (s *TokenService) RequireOwnedEmailAPIToken(ctx context.Context, user model.User, publicID string) (model.APIToken, error) {

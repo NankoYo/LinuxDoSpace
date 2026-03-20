@@ -107,6 +107,11 @@ func (a *API) handleTokenEmailStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	ownerUsername, err := a.tokenService.ResolveStreamOwnerUsername(r.Context(), token)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -137,6 +142,7 @@ func (a *API) handleTokenEmailStream(w http.ResponseWriter, r *http.Request) {
 	if err := encoder.Encode(mailrelay.TokenStreamEvent{
 		Type:          "ready",
 		TokenPublicID: token.PublicID,
+		OwnerUsername: ownerUsername,
 	}); err != nil {
 		return
 	}
