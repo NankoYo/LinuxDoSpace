@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { ChevronDown, Copy, KeyRound, LoaderCircle, Plus, Trash2, X } from 'lucide-react';
+import { ChevronDown, Copy, KeyRound, LoaderCircle, Plus, Trash2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
+import { GlassModal } from './GlassModal';
 import { APIError, createMyAPIToken, listMyAPITokens, revokeMyAPIToken } from '../lib/api';
 import type { UserAPIToken } from '../types/api';
 
@@ -51,8 +52,8 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
   // revokingTokenPublicIDs 逐行记录哪些 TOKEN 正在撤销。
   const [revokingTokenPublicIDs, setRevokingTokenPublicIDs] = useState<Record<string, boolean>>({});
 
-  // isCreateFormOpen 控制“创建 TOKEN”表单是否展开。
-  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
+  // isCreateModalOpen 控制“创建 TOKEN”弹窗是否显示。
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   // isListExpanded 控制完整 TOKEN 列表是否展开。
   const [isListExpanded, setIsListExpanded] = useState(false);
@@ -96,7 +97,7 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
     }
   }
 
-  // handleCreateToken 创建新的 TOKEN，并在成功后自动收起创建表单。
+  // handleCreateToken 创建新的 TOKEN，并在成功后关闭弹窗。
   async function handleCreateToken(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!csrfToken) {
@@ -117,7 +118,7 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
       setApiTokens((currentItems) => upsertAPIToken(currentItems, result.token));
       setCreatedTokenSecret(result.raw_token);
       setNewTokenName('');
-      setIsCreateFormOpen(false);
+      setIsCreateModalOpen(false);
       setIsListExpanded(true);
       setTokenNotice({
         tone: 'success',
@@ -206,12 +207,13 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
             onClick={() => {
               setCreatedTokenSecret('');
               setTokenNotice(null);
-              setIsCreateFormOpen((current) => !current);
+              setNewTokenName('');
+              setIsCreateModalOpen(true);
             }}
             className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-600 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:from-violet-600 hover:to-fuchsia-700"
           >
-            {isCreateFormOpen ? <X size={16} /> : <Plus size={16} />}
-            {isCreateFormOpen ? '收起创建' : '创建 TOKEN'}
+            <Plus size={16} />
+            创建 TOKEN
           </button>
         </div>
       </div>
@@ -247,8 +249,32 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
         </div>
       ) : null}
 
-      {isCreateFormOpen ? (
-        <form className="space-y-4 rounded-3xl border border-white/15 bg-white/30 p-5 dark:border-white/10 dark:bg-black/15" onSubmit={(event) => void handleCreateToken(event)}>
+      <GlassModal
+        open={isCreateModalOpen}
+        title="创建 TOKEN"
+        onClose={() => setIsCreateModalOpen(false)}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(false)}
+              className="flex-1 rounded-xl bg-gray-100 px-4 py-2 font-medium text-gray-900 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              form="create-api-token-form"
+              disabled={creatingToken}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-600 px-4 py-2 font-medium text-white shadow-lg transition-all hover:from-violet-600 hover:to-fuchsia-700 disabled:opacity-60"
+            >
+              {creatingToken ? <LoaderCircle size={16} className="animate-spin" /> : <Plus size={16} />}
+              创建
+            </button>
+          </>
+        }
+      >
+        <form id="create-api-token-form" className="space-y-4" onSubmit={(event) => void handleCreateToken(event)}>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">TOKEN 名称</label>
             <div className="mt-2 flex min-w-0 items-center rounded-2xl border border-white/20 bg-white/55 px-4 py-3 shadow-inner dark:border-white/10 dark:bg-black/35">
@@ -261,26 +287,8 @@ export function APITokenManager({ csrfToken, className = '' }: APITokenManagerPr
               />
             </div>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="submit"
-              disabled={creatingToken}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-violet-500 to-fuchsia-600 px-5 py-3 font-semibold text-white shadow-lg transition hover:from-violet-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {creatingToken ? <LoaderCircle className="animate-spin" size={18} /> : <Plus size={18} />}
-              创建 TOKEN
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsCreateFormOpen(false)}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/20 bg-white/55 px-5 py-3 font-semibold text-gray-800 transition hover:bg-white/70 dark:border-white/10 dark:bg-black/30 dark:text-gray-100 dark:hover:bg-black/40"
-            >
-              取消
-            </button>
-          </div>
         </form>
-      ) : null}
+      </GlassModal>
 
       {!isListExpanded ? (
         loading ? null : apiTokens.length === 0 ? (

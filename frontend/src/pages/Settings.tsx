@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GlassCard } from '../components/GlassCard';
 import { APITokenManager } from '../components/APITokenManager';
+import { GlassModal } from '../components/GlassModal';
 import { GlassSelect, type GlassSelectOption } from '../components/GlassSelect';
 import { ToggleSwitch } from '../components/ToggleSwitch';
 import {
   Plus,
   Trash2,
   Edit2,
-  X,
   LoaderCircle,
   ArrowRight,
   LogOut,
@@ -598,34 +598,29 @@ export function Settings({
 
       {!sessionLoading ? <APITokenManager csrfToken={csrfToken} className="mt-6" /> : null}
 
-      <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      <GlassModal
+        open={isModalOpen}
+        title={editingRecord ? '修改记录' : '添加记录'}
+        onClose={closeModal}
+        footer={
+          <>
+            <button
               onClick={closeModal}
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-md bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl border border-white/20 dark:border-white/10 rounded-3xl p-6 shadow-2xl"
+              className="flex-1 rounded-xl bg-gray-100 px-4 py-2 font-medium text-gray-900 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-white dark:hover:bg-gray-700"
             >
-              <button
-                onClick={closeModal}
-                className="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors"
-              >
-                <X size={20} />
-              </button>
-
-              <h2 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">
-                {editingRecord ? '修改记录' : '添加记录'}
-              </h2>
-
-              <div className="space-y-4">
+              取消
+            </button>
+            <button
+              onClick={() => void handleSave()}
+              disabled={isSaving}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 px-4 py-2 font-medium text-white shadow-lg transition-all hover:from-teal-600 hover:to-emerald-700 disabled:opacity-60"
+            >
+              {isSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
+              保存
+            </button>
+          </>
+        }
+      >
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">记录类型</label>
                   <GlassSelect
@@ -723,28 +718,7 @@ export function Settings({
                     />
                   </>
                 )}
-              </div>
-
-              <div className="mt-8 flex gap-3">
-                <button
-                  onClick={closeModal}
-                  className="flex-1 px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-900 dark:text-white font-medium transition-colors"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={() => void handleSave()}
-                  disabled={isSaving}
-                  className="flex-1 px-4 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 disabled:opacity-60 text-white font-medium shadow-lg transition-all flex items-center justify-center gap-2"
-                >
-                  {isSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />}
-                  保存
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      </GlassModal>
     </div>
   );
 }
