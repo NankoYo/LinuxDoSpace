@@ -25,6 +25,24 @@ import (
 // version is injected at build time via -ldflags. It falls back to dev during local development.
 var version = "dev"
 
+// effectiveHTTPWriteTimeout disables the generic http.Server write timeout when
+// the public API exposes long-lived streaming endpoints such as
+// `/v1/token/email/stream`.
+//
+// Go's server-level WriteTimeout applies to the whole lifetime of the response
+// rather than to each individual write call. That is safe for short JSON
+// request/response APIs, but it breaks NDJSON/SSE-style streams by forcibly
+// closing otherwise healthy connections once the timeout window expires.
+//
+// LinuxDoSpace already sits behind Nginx/Cloudflare in production, so the
+// reverse proxies remain the correct place to enforce upstream idle/read limits.
+func effectiveHTTPWriteTimeout(cfg config.Config) time.Duration {
+	if cfg.App.WriteTimeout <= 0 {
+		return 0
+	}
+	return 0
+}
+
 // main loads configuration, wires dependencies, and starts the backend HTTP server.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -111,11 +129,19 @@ func main() {
 		POWService:        powService,
 	})
 
+	httpWriteTimeout := effectiveHTTPWriteTimeout(cfg)
+	if cfg.App.WriteTimeout > 0 && httpWriteTimeout == 0 {
+		log.Printf(
+			"disabling http write timeout for long-lived streaming endpoints; configured APP_WRITE_TIMEOUT=%s",
+			cfg.App.WriteTimeout,
+		)
+	}
+
 	server := &http.Server{
 		Addr:         cfg.App.Addr,
 		Handler:      handler,
 		ReadTimeout:  cfg.App.ReadTimeout,
-		WriteTimeout: cfg.App.WriteTimeout,
+		WriteTimeout: httpWriteTimeout,
 		IdleTimeout:  cfg.App.IdleTimeout,
 	}
 
