@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { X } from 'lucide-react';
 
@@ -23,7 +24,33 @@ export function GlassModal({
   footer,
   maxWidthClassName = 'max-w-md',
 }: GlassModalProps) {
-  return (
+  // mounted 保证 portal 只在浏览器环境挂载，避免访问 document 时报错。
+  const [mounted, setMounted] = useState(false);
+
+  // 组件挂载后再允许弹窗渲染到 document.body。
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  // 弹窗打开时锁定 body 滚动，避免背景内容和遮罩一起滚动。
+  useEffect(() => {
+    if (!mounted || !open || typeof document === 'undefined') {
+      return;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [mounted, open]);
+
+  if (!mounted || typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
     <AnimatePresence>
       {open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
@@ -57,6 +84,7 @@ export function GlassModal({
           </motion.div>
         </div>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
