@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -78,13 +79,27 @@ func (q *PersistentQueue) Enqueue(ctx context.Context, request EnqueueRequest) e
 				continue
 			}
 			if q.hub != nil {
-				_ = q.hub.Publish(TokenMailEvent{
+				delivered := q.hub.Publish(TokenMailEvent{
 					TokenPublicID:        group.TargetTokenPublicID,
 					OriginalEnvelopeFrom: request.OriginalEnvelopeFrom,
 					OriginalRecipients:   append([]string(nil), group.OriginalRecipients...),
 					ReceivedAt:           q.now(),
 					RawMessage:           append([]byte(nil), request.RawMessage...),
 				})
+				if delivered == 0 {
+					log.Printf(
+						"linuxdospace api token mail delivery dropped: token=%s recipients=%v reason=no_active_stream_subscriber",
+						group.TargetTokenPublicID,
+						group.OriginalRecipients,
+					)
+				} else {
+					log.Printf(
+						"linuxdospace api token mail delivery published: token=%s recipients=%v subscribers=%d",
+						group.TargetTokenPublicID,
+						group.OriginalRecipients,
+						delivered,
+					)
+				}
 			}
 			continue
 		}

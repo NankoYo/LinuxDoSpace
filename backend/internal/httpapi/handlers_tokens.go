@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -120,6 +121,17 @@ func (a *API) handleTokenEmailStream(w http.ResponseWriter, r *http.Request) {
 
 	streamChannel, unsubscribe := a.tokenService.Hub().Subscribe(token.PublicID)
 	defer unsubscribe()
+	log.Printf(
+		"linuxdospace api token stream connected: token=%s remote_addr=%s user_agent=%q",
+		token.PublicID,
+		r.RemoteAddr,
+		r.UserAgent(),
+	)
+	defer log.Printf(
+		"linuxdospace api token stream disconnected: token=%s remote_addr=%s",
+		token.PublicID,
+		r.RemoteAddr,
+	)
 
 	encoder := json.NewEncoder(w)
 	if err := encoder.Encode(mailrelay.TokenStreamEvent{
