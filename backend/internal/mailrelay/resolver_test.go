@@ -14,9 +14,10 @@ import (
 // fakeResolverStore keeps the mail relay unit tests focused on route
 // resolution instead of a concrete SQL backend.
 type fakeResolverStore struct {
-	routes  map[string]model.EmailRoute
-	targets map[string]model.EmailTarget
-	tokens  map[string]model.APIToken
+	routes   map[string]model.EmailRoute
+	targets  map[string]model.EmailTarget
+	tokens   map[string]model.APIToken
+	controls map[int64]model.UserControl
 }
 
 // GetEmailRouteByAddress returns one in-memory route keyed by domain + prefix.
@@ -45,6 +46,15 @@ func (f *fakeResolverStore) GetAPITokenByPublicID(ctx context.Context, publicID 
 	item, ok := f.tokens[key]
 	if !ok {
 		return model.APIToken{}, sql.ErrNoRows
+	}
+	return item, nil
+}
+
+// GetUserControlByUserID returns one in-memory moderation control row.
+func (f *fakeResolverStore) GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error) {
+	item, ok := f.controls[userID]
+	if !ok {
+		return model.UserControl{}, sql.ErrNoRows
 	}
 	return item, nil
 }
@@ -173,7 +183,7 @@ func TestDBResolverRejectsMismatchedTargetOwnership(t *testing.T) {
 func TestBuildForwardMessageAddsTraceHeaders(t *testing.T) {
 	raw := []byte("From: sender@example.com\r\nSubject: Test\r\n\r\nhello")
 
-	message, err := buildForwardMessage(raw, "bounce@example.com", []string{"alice@linuxdo.space"})
+	message, err := buildForwardMessage(raw, "bounce@example.com", []string{"alice@linuxdo.space"}, "signed-loop-token")
 	if err != nil {
 		t.Fatalf("build forward message: %v", err)
 	}
@@ -181,6 +191,9 @@ func TestBuildForwardMessageAddsTraceHeaders(t *testing.T) {
 	serialized := string(message)
 	if !strings.Contains(serialized, "X-LinuxDoSpace-Relay: 1\r\n") {
 		t.Fatalf("expected relay marker header, got %q", serialized)
+	}
+	if !strings.Contains(serialized, "X-LinuxDoSpace-Relay-Signature: signed-loop-token\r\n") {
+		t.Fatalf("expected relay signature header, got %q", serialized)
 	}
 	if !strings.Contains(serialized, "X-LinuxDoSpace-Original-Envelope-From: bounce@example.com\r\n") {
 		t.Fatalf("expected original envelope from header, got %q", serialized)
@@ -196,10 +209,62 @@ func TestBuildForwardMessageAddsTraceHeaders(t *testing.T) {
 // TestBuildForwardMessageRejectsRelayLoop verifies that the relay does not
 // forward a message that already passed through LinuxDoSpace once.
 func TestBuildForwardMessageRejectsRelayLoop(t *testing.T) {
-	raw := []byte("X-LinuxDoSpace-Relay: 1\r\nFrom: sender@example.com\r\n\r\nhello")
+	raw := []byte("X-LinuxDoSpace-Relay: 1\r\nX-LinuxDoSpace-Relay-Signature: signed-loop-token\r\nFrom: sender@example.com\r\n\r\nhello")
 
-	_, err := buildForwardMessage(raw, "", []string{"alice@linuxdo.space"})
+	_, err := buildForwardMessage(raw, "", []string{"alice@linuxdo.space"}, "signed-loop-token")
 	if !errors.Is(err, ErrRelayLoopDetected) {
 		t.Fatalf("expected relay loop detection, got %v", err)
+	}
+}
+
+// TestBuildForwardMessageIgnoresSpoofedUnsignedRelayHeader verifies that an
+// attacker cannot blackhole inbound mail merely by adding the visible relay
+// marker without the secret signature value.
+func TestBuildForwardMessageIgnoresSpoofedUnsignedRelayHeader(t *testing.T) {
+	raw := []byte("X-LinuxDoSpace-Relay: 1\r\nFrom: sender@example.com\r\n\r\nhello")
+
+	message, err := buildForwardMessage(raw, "", []string{"alice@linuxdo.space"}, "signed-loop-token")
+	if err != nil {
+		t.Fatalf("expected spoofed unsigned relay header to be ignored, got %v", err)
+	}
+	if !strings.Contains(string(message), "X-LinuxDoSpace-Relay-Signature: signed-loop-token\r\n") {
+		t.Fatalf("expected signed relay header to be added, got %q", string(message))
+	}
+}
+
+// TestDBResolverRejectsBannedOwner verifies that banned users cannot keep
+// receiving mail through already-configured routes.
+func TestDBResolverRejectsBannedOwner(t *testing.T) {
+	verifiedAt := time.Now().UTC()
+	resolver := NewDBResolver(&fakeResolverStore{
+		routes: map[string]model.EmailRoute{
+			"linuxdo.space|alice": {
+				ID:          1,
+				OwnerUserID: 10,
+				RootDomain:  "linuxdo.space",
+				Prefix:      "alice",
+				TargetEmail: "exact@example.com",
+				Enabled:     true,
+			},
+		},
+		targets: map[string]model.EmailTarget{
+			"exact@example.com": {
+				ID:          11,
+				OwnerUserID: 10,
+				Email:       "exact@example.com",
+				VerifiedAt:  &verifiedAt,
+			},
+		},
+		controls: map[int64]model.UserControl{
+			10: {
+				UserID:   10,
+				IsBanned: true,
+			},
+		},
+	})
+
+	_, err := resolver.ResolveRecipient(context.Background(), "alice@linuxdo.space")
+	if !errors.Is(err, ErrRouteDisabled) {
+		t.Fatalf("expected banned owner to disable routing, got %v", err)
 	}
 }

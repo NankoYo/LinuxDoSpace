@@ -183,9 +183,16 @@ func (s *TokenService) AuthenticateEmailStreamToken(ctx context.Context, rawToke
 	if !apiTokenHasScope(item, model.APITokenScopeEmail) {
 		return model.APIToken{}, ForbiddenError("api token does not allow email streaming")
 	}
+	control, err := s.db.GetUserControlByUserID(ctx, item.OwnerUserID)
+	if err == nil && control.IsBanned {
+		return model.APIToken{}, ForbiddenError("api token owner is banned")
+	}
+	if err != nil && !storage.IsNotFound(err) {
+		return model.APIToken{}, InternalError("failed to load api token owner control", err)
+	}
 
 	now := time.Now().UTC()
-	if _, err := s.db.UpdateAPIToken(ctx, storage.UpdateAPITokenInput{
+	if _, err = s.db.UpdateAPIToken(ctx, storage.UpdateAPITokenInput{
 		ID:         item.ID,
 		LastUsedAt: &now,
 	}); err != nil {

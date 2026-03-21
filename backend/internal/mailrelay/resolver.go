@@ -57,6 +57,7 @@ type ResolverStore interface {
 	GetEmailRouteByAddress(ctx context.Context, rootDomain string, prefix string) (model.EmailRoute, error)
 	GetEmailTargetByEmail(ctx context.Context, email string) (model.EmailTarget, error)
 	GetAPITokenByPublicID(ctx context.Context, publicID string) (model.APIToken, error)
+	GetUserControlByUserID(ctx context.Context, userID int64) (model.UserControl, error)
 }
 
 // RecipientResolver turns one SMTP envelope recipient into the target inbox
@@ -127,6 +128,9 @@ func (r *DBResolver) resolveStoredRoute(ctx context.Context, originalRecipient s
 	if !route.Enabled {
 		return ResolvedRecipient{}, fmt.Errorf("%w: %s", ErrRouteDisabled, originalRecipient)
 	}
+	if err := r.ensureRouteOwnerAllowed(ctx, route.OwnerUserID, originalRecipient); err != nil {
+		return ResolvedRecipient{}, err
+	}
 
 	targetKind := strings.TrimSpace(route.TargetKind)
 	if targetKind == "" {
@@ -191,6 +195,27 @@ func (r *DBResolver) resolveStoredRoute(ctx context.Context, originalRecipient s
 		RoutePrefix:         route.Prefix,
 		UsedCatchAll:        usedCatchAll,
 	}, nil
+}
+
+// ensureRouteOwnerAllowed fails closed when an administrator banned the route
+// owner. The relay must not continue forwarding mail to disabled accounts.
+func (r *DBResolver) ensureRouteOwnerAllowed(ctx context.Context, ownerUserID int64, originalRecipient string) error {
+	if ownerUserID <= 0 {
+		return nil
+	}
+
+	control, err := r.store.GetUserControlByUserID(ctx, ownerUserID)
+	switch {
+	case err == nil:
+		if control.IsBanned {
+			return fmt.Errorf("%w: %s", ErrRouteDisabled, originalRecipient)
+		}
+		return nil
+	case storage.IsNotFound(err):
+		return nil
+	default:
+		return fmt.Errorf("load route owner control for %s: %w", originalRecipient, err)
+	}
 }
 
 func apiTokenSupportsEmail(token model.APIToken) bool {

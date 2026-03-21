@@ -52,7 +52,7 @@ type directMXEmailTargetVerificationMailer struct {
 // send time so tests can pass minimal configs without crashing constructors.
 func newEmailTargetVerificationMailer(cfg config.Config) EmailTargetVerificationMailer {
 	return &directMXEmailTargetVerificationMailer{
-		forwarder: mailrelay.NewSMTPForwarder(cfg.Mail),
+		forwarder: mailrelay.NewSMTPForwarder(cfg),
 		now: func() time.Time {
 			return time.Now().UTC()
 		},

@@ -22,6 +22,7 @@ func TestSMTPForwarderDirectMXDelivery(t *testing.T) {
 		helloDomain: "mail.linuxdo.space",
 		requireTLS:  false,
 		mxCacheTTL:  time.Hour,
+		relaySignature: "test-relay-signature",
 		lookupMX: func(ctx context.Context, name string) ([]*net.MX, error) {
 			return []*net.MX{{Host: "mx.example.test.", Pref: 10}}, nil
 		},
@@ -76,6 +77,7 @@ func TestSMTPForwarderCachesMXLookups(t *testing.T) {
 		requireTLS:      false,
 		mxLookupTimeout: time.Second,
 		mxCacheTTL:      time.Hour,
+		relaySignature:  "test-relay-signature",
 		lookupMX: func(ctx context.Context, name string) ([]*net.MX, error) {
 			lookupCount++
 			return []*net.MX{{Host: "mx.example.test.", Pref: 10}}, nil
@@ -124,6 +126,7 @@ func TestSMTPForwarderRejectsPlaintextServerWhenTLSRequired(t *testing.T) {
 		helloDomain: "mail.linuxdo.space",
 		requireTLS:  true,
 		mxCacheTTL:  time.Hour,
+		relaySignature: "test-relay-signature",
 		lookupMX: func(ctx context.Context, name string) ([]*net.MX, error) {
 			return []*net.MX{{Host: "mx.example.test.", Pref: 10}}, nil
 		},

@@ -161,7 +161,8 @@ func main() {
 		dispatcher := mailrelay.NewDispatcher(
 			cfg.Mail,
 			store,
-			mailrelay.NewSMTPForwarder(cfg.Mail),
+			mailrelay.NewSMTPForwarder(cfg),
+			tokenHub,
 			log.Default(),
 		)
 		smtpServer = mailrelay.NewServer(

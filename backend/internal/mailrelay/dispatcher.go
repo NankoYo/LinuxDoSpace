@@ -17,6 +17,7 @@ import (
 type Dispatcher struct {
 	store              QueueStore
 	forwarder          MessageForwarder
+	tokenHub           *TokenStreamHub
 	logger             interface{ Printf(string, ...any) }
 	workers            int
 	pollInterval       time.Duration
@@ -33,7 +34,7 @@ type Dispatcher struct {
 
 // NewDispatcher constructs the bounded background worker pool that drains the
 // durable mail queue and retries failed jobs safely.
-func NewDispatcher(mail config.MailConfig, store QueueStore, forwarder MessageForwarder, logger *log.Logger) *Dispatcher {
+func NewDispatcher(mail config.MailConfig, store QueueStore, forwarder MessageForwarder, tokenHub *TokenStreamHub, logger *log.Logger) *Dispatcher {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -41,6 +42,7 @@ func NewDispatcher(mail config.MailConfig, store QueueStore, forwarder MessageFo
 	return &Dispatcher{
 		store:              store,
 		forwarder:          forwarder,
+		tokenHub:           tokenHub,
 		logger:             logger,
 		workers:            mail.QueueWorkers,
 		pollInterval:       mail.QueuePollInterval,
@@ -158,14 +160,19 @@ func (d *Dispatcher) claimOneJob(ctx context.Context) (model.MailDeliveryJob, bo
 // processJob performs the network delivery and then persists the appropriate
 // queue outcome, including retries or terminal refunds.
 func (d *Dispatcher) processJob(ctx context.Context, workerNumber int, job model.MailDeliveryJob) {
-	forwardCtx, cancel := context.WithTimeout(ctx, d.forwardTimeout)
-	err := d.forwarder.Forward(forwardCtx, ForwardRequest{
-		OriginalEnvelopeFrom: job.OriginalEnvelopeFrom,
-		OriginalEnvelopeTo:   append([]string(nil), job.OriginalRecipients...),
-		TargetRecipients:     append([]string(nil), job.TargetRecipients...),
-		RawMessage:           append([]byte(nil), job.RawMessage...),
-	})
-	cancel()
+	var err error
+	if targetTokenPublicID, ok := decodeAPITokenDeliveryJob(job.TargetRecipients); ok {
+		err = d.publishTokenJob(job, targetTokenPublicID)
+	} else {
+		forwardCtx, cancel := context.WithTimeout(ctx, d.forwardTimeout)
+		err = d.forwarder.Forward(forwardCtx, ForwardRequest{
+			OriginalEnvelopeFrom: job.OriginalEnvelopeFrom,
+			OriginalEnvelopeTo:   append([]string(nil), job.OriginalRecipients...),
+			TargetRecipients:     append([]string(nil), job.TargetRecipients...),
+			RawMessage:           append([]byte(nil), job.RawMessage...),
+		})
+		cancel()
+	}
 
 	if err == nil {
 		if markErr := d.retryStorageOperation(ctx, func(operationCtx context.Context) error {
@@ -286,4 +293,61 @@ func sleepContext(ctx context.Context, duration time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// decodeAPITokenDeliveryJob recognizes the queue representation used for
+// ephemeral API-token stream targets.
+func decodeAPITokenDeliveryJob(targetRecipients []string) (string, bool) {
+	if len(targetRecipients) != 1 {
+		return "", false
+	}
+	return decodeAPITokenDeliveryTarget(targetRecipients[0])
+}
+
+// publishTokenJob replays one queued message into the live API-token stream.
+// If the stream disappeared before dispatch, the job is treated as a deliberate
+// drop to honor the product rule that disconnected token targets do not retain
+// mail server-side.
+func (d *Dispatcher) publishTokenJob(job model.MailDeliveryJob, targetTokenPublicID string) error {
+	if d.tokenHub == nil {
+		return errors.New("api token stream hub is not configured")
+	}
+	if !d.tokenHub.HasSubscribers(targetTokenPublicID) {
+		d.logger.Printf(
+			"linuxdospace api token mail delivery dropped after dequeue: job=%d token=%s recipients=%v reason=no_active_stream_subscriber",
+			job.ID,
+			targetTokenPublicID,
+			job.OriginalRecipients,
+		)
+		return nil
+	}
+
+	delivered, subscribers := d.tokenHub.Publish(TokenMailEvent{
+		TokenPublicID:        targetTokenPublicID,
+		OriginalEnvelopeFrom: job.OriginalEnvelopeFrom,
+		OriginalRecipients:   append([]string(nil), job.OriginalRecipients...),
+		ReceivedAt:           d.now(),
+		RawMessage:           append([]byte(nil), job.RawMessage...),
+	})
+	if delivered > 0 {
+		d.logger.Printf(
+			"linuxdospace api token mail delivery published from queue: job=%d token=%s recipients=%v subscribers=%d delivered=%d",
+			job.ID,
+			targetTokenPublicID,
+			job.OriginalRecipients,
+			subscribers,
+			delivered,
+		)
+		return nil
+	}
+	if subscribers == 0 {
+		d.logger.Printf(
+			"linuxdospace api token mail delivery dropped during publish: job=%d token=%s recipients=%v reason=no_active_stream_subscriber",
+			job.ID,
+			targetTokenPublicID,
+			job.OriginalRecipients,
+		)
+		return nil
+	}
+	return errors.New("api token stream subscribers are backpressured")
 }

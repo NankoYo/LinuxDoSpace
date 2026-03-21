@@ -168,3 +168,122 @@ func TestDispatcherMarksFailedAtMaxAttempts(t *testing.T) {
 		t.Fatalf("expected no retry update at max attempts, got %d", len(store.retryInputs))
 	}
 }
+
+// TestDispatcherPublishesTokenJobs verifies that API-token targets now flow
+// through the durable queue before being emitted to live stream subscribers.
+func TestDispatcherPublishesTokenJobs(t *testing.T) {
+	store := &dispatcherStoreStub{}
+	hub := NewTokenStreamHub()
+	channel, unsubscribe := hub.Subscribe("ldt_token")
+	defer unsubscribe()
+
+	dispatcher := &Dispatcher{
+		store:          store,
+		forwarder:      &dispatcherForwarderStub{},
+		tokenHub:       hub,
+		logger:         log.Default(),
+		retryBaseDelay: time.Second,
+		retryMaxDelay:  time.Minute,
+		storageTimeout: time.Second,
+		now: func() time.Time {
+			return time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	dispatcher.processJob(context.Background(), 1, model.MailDeliveryJob{
+		ID:                   40,
+		OriginalEnvelopeFrom: "sender@example.com",
+		OriginalRecipients:   []string{"one@alice.linuxdo.space"},
+		TargetRecipients:     []string{encodeAPITokenDeliveryTarget("ldt_token")},
+		RawMessage:           []byte("Subject: test\r\n\r\nbody"),
+		AttemptCount:         1,
+		MaxAttempts:          3,
+	})
+
+	if len(store.deliveredInputs) != 1 {
+		t.Fatalf("expected token job to be marked delivered, got %d delivered updates", len(store.deliveredInputs))
+	}
+
+	select {
+	case event := <-channel:
+		if event.TokenPublicID != "ldt_token" {
+			t.Fatalf("expected token public id ldt_token, got %q", event.TokenPublicID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for token stream event")
+	}
+}
+
+// TestDispatcherDropsTokenJobsWithoutSubscribers verifies that disconnected
+// token targets are treated as deliberate drops rather than retry storms.
+func TestDispatcherDropsTokenJobsWithoutSubscribers(t *testing.T) {
+	store := &dispatcherStoreStub{}
+	dispatcher := &Dispatcher{
+		store:          store,
+		forwarder:      &dispatcherForwarderStub{},
+		tokenHub:       NewTokenStreamHub(),
+		logger:         log.Default(),
+		retryBaseDelay: time.Second,
+		retryMaxDelay:  time.Minute,
+		storageTimeout: time.Second,
+		now: func() time.Time {
+			return time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	dispatcher.processJob(context.Background(), 1, model.MailDeliveryJob{
+		ID:                   41,
+		OriginalEnvelopeFrom: "sender@example.com",
+		OriginalRecipients:   []string{"one@alice.linuxdo.space"},
+		TargetRecipients:     []string{encodeAPITokenDeliveryTarget("ldt_token")},
+		RawMessage:           []byte("Subject: test\r\n\r\nbody"),
+		AttemptCount:         1,
+		MaxAttempts:          3,
+	})
+
+	if len(store.deliveredInputs) != 1 {
+		t.Fatalf("expected dropped token job to be marked delivered, got %d delivered updates", len(store.deliveredInputs))
+	}
+	if len(store.retryInputs) != 0 {
+		t.Fatalf("expected no retry for disconnected token target, got %d", len(store.retryInputs))
+	}
+}
+
+// TestDispatcherRetriesBackpressuredTokenJobs verifies that a connected but
+// stalled stream consumer triggers retry rather than silent loss.
+func TestDispatcherRetriesBackpressuredTokenJobs(t *testing.T) {
+	store := &dispatcherStoreStub{}
+	hub := NewTokenStreamHub()
+	_, unsubscribe := hub.Subscribe("ldt_token")
+	defer unsubscribe()
+	for index := 0; index < tokenStreamBufferSize; index++ {
+		hub.Publish(TokenMailEvent{TokenPublicID: "ldt_token"})
+	}
+
+	dispatcher := &Dispatcher{
+		store:          store,
+		forwarder:      &dispatcherForwarderStub{},
+		tokenHub:       hub,
+		logger:         log.Default(),
+		retryBaseDelay: time.Second,
+		retryMaxDelay:  time.Minute,
+		storageTimeout: time.Second,
+		now: func() time.Time {
+			return time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	dispatcher.processJob(context.Background(), 1, model.MailDeliveryJob{
+		ID:                   42,
+		OriginalEnvelopeFrom: "sender@example.com",
+		OriginalRecipients:   []string{"one@alice.linuxdo.space"},
+		TargetRecipients:     []string{encodeAPITokenDeliveryTarget("ldt_token")},
+		RawMessage:           []byte("Subject: test\r\n\r\nbody"),
+		AttemptCount:         1,
+		MaxAttempts:          3,
+	})
+
+	if len(store.retryInputs) != 1 {
+		t.Fatalf("expected one retry for backpressured token stream, got %d", len(store.retryInputs))
+	}
+}

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -22,6 +24,11 @@ const (
 	// relayMarkerHeader is written to every forwarded message and rejected on
 	// inbound mail so misconfigured routes cannot create infinite forward loops.
 	relayMarkerHeader = "X-LinuxDoSpace-Relay"
+
+	// relaySignatureHeader carries one secret-derived loop marker. Attackers may
+	// spoof arbitrary visible headers, so LinuxDoSpace only trusts the exact
+	// signature value derived from the server-side session secret.
+	relaySignatureHeader = "X-LinuxDoSpace-Relay-Signature"
 
 	// originalEnvelopeFromHeader preserves the original SMTP MAIL FROM value
 	// because the relay uses its own envelope sender when forwarding outward.
@@ -65,6 +72,7 @@ type SMTPForwarder struct {
 	mxLookupTimeout      time.Duration
 	mxCacheTTL           time.Duration
 	maxDomainConcurrency int
+	relaySignature       string
 
 	dialContext func(ctx context.Context, network string, address string) (net.Conn, error)
 	lookupMX    func(ctx context.Context, name string) ([]*net.MX, error)
@@ -146,7 +154,8 @@ func (l *domainConcurrencyLimiter) channel(domain string) chan struct{} {
 
 // NewSMTPForwarder builds the direct-MX outbound forwarder from runtime
 // configuration. The returned instance is safe for concurrent worker use.
-func NewSMTPForwarder(mail config.MailConfig) *SMTPForwarder {
+func NewSMTPForwarder(cfg config.Config) *SMTPForwarder {
+	mail := cfg.Mail
 	dialer := &net.Dialer{}
 	return &SMTPForwarder{
 		from:                 strings.TrimSpace(mail.ForwardFrom),
@@ -155,6 +164,7 @@ func NewSMTPForwarder(mail config.MailConfig) *SMTPForwarder {
 		mxLookupTimeout:      mail.MXLookupTimeout,
 		mxCacheTTL:           mail.MXCacheTTL,
 		maxDomainConcurrency: mail.MaxDomainConcurrency,
+		relaySignature:       deriveRelayLoopSignature(cfg.App.SessionSecret),
 		dialContext:          dialer.DialContext,
 		lookupMX:             net.DefaultResolver.LookupMX,
 		now: func() time.Time {
@@ -178,7 +188,7 @@ func (f *SMTPForwarder) Forward(ctx context.Context, request ForwardRequest) err
 		return fmt.Errorf("smtp helo domain is empty")
 	}
 
-	message, err := buildForwardMessage(request.RawMessage, request.OriginalEnvelopeFrom, request.OriginalEnvelopeTo)
+	message, err := buildForwardMessage(request.RawMessage, request.OriginalEnvelopeFrom, request.OriginalEnvelopeTo, f.relaySignature)
 	if err != nil {
 		return err
 	}
@@ -188,7 +198,7 @@ func (f *SMTPForwarder) Forward(ctx context.Context, request ForwardRequest) err
 
 // buildForwardMessage validates the original message, blocks relay loops, and
 // prepends the LinuxDoSpace-specific trace headers before forwarding.
-func buildForwardMessage(raw []byte, originalEnvelopeFrom string, originalEnvelopeTo []string) ([]byte, error) {
+func buildForwardMessage(raw []byte, originalEnvelopeFrom string, originalEnvelopeTo []string, relaySignature string) ([]byte, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil, fmt.Errorf("smtp message body is empty")
 	}
@@ -197,14 +207,20 @@ func buildForwardMessage(raw []byte, originalEnvelopeFrom string, originalEnvelo
 	if err != nil {
 		return nil, fmt.Errorf("parse smtp message header: %w", err)
 	}
-	if strings.TrimSpace(header.Get(relayMarkerHeader)) != "" {
+	if relaySignature != "" && strings.TrimSpace(header.Get(relaySignatureHeader)) == relaySignature {
 		return nil, ErrRelayLoopDetected
 	}
 
 	var builder strings.Builder
-	builder.Grow(len(raw) + 256)
+	builder.Grow(len(raw) + 320)
 	builder.WriteString(relayMarkerHeader)
 	builder.WriteString(": 1\r\n")
+	if relaySignature != "" {
+		builder.WriteString(relaySignatureHeader)
+		builder.WriteString(": ")
+		builder.WriteString(relaySignature)
+		builder.WriteString("\r\n")
+	}
 	builder.WriteString(originalEnvelopeFromHeader)
 	builder.WriteString(": ")
 	builder.WriteString(sanitizeHeaderValue(displayEnvelopeSender(originalEnvelopeFrom)))
@@ -518,4 +534,15 @@ func copyStringSlice(values []string) []string {
 		return nil
 	}
 	return append([]string(nil), values...)
+}
+
+// deriveRelayLoopSignature turns the server-side session secret into one
+// stable, non-public loop-detection token used only inside forwarded headers.
+func deriveRelayLoopSignature(sessionSecret []byte) string {
+	if len(sessionSecret) == 0 {
+		return ""
+	}
+
+	sum := sha256.Sum256(append(append([]byte(nil), sessionSecret...), []byte(":linuxdospace-mail-relay-loop")...))
+	return hex.EncodeToString(sum[:])
 }

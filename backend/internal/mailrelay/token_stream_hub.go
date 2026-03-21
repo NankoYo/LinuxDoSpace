@@ -92,16 +92,39 @@ func (h *TokenStreamHub) Subscribe(tokenPublicID string) (<-chan TokenMailEvent,
 	return channel, cancel
 }
 
-// Publish broadcasts one mail event to every currently connected client for
-// the given token. If no client is connected, the event is dropped immediately.
-func (h *TokenStreamHub) Publish(event TokenMailEvent) int {
+// SubscriberCount reports how many live consumers are currently attached to
+// the given token public id.
+func (h *TokenStreamHub) SubscriberCount(tokenPublicID string) int {
 	if h == nil {
 		return 0
 	}
 
-	normalizedID := strings.TrimSpace(event.TokenPublicID)
+	normalizedID := strings.TrimSpace(tokenPublicID)
 	if normalizedID == "" {
 		return 0
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.subscribers[normalizedID])
+}
+
+// HasSubscribers is the convenient boolean form used by the SMTP queue when it
+// decides whether an ephemeral API-token target should be accepted or dropped.
+func (h *TokenStreamHub) HasSubscribers(tokenPublicID string) bool {
+	return h.SubscriberCount(tokenPublicID) > 0
+}
+
+// Publish broadcasts one mail event to every currently connected client for
+// the given token. If no client is connected, the event is dropped immediately.
+func (h *TokenStreamHub) Publish(event TokenMailEvent) (int, int) {
+	if h == nil {
+		return 0, 0
+	}
+
+	normalizedID := strings.TrimSpace(event.TokenPublicID)
+	if normalizedID == "" {
+		return 0, 0
 	}
 
 	h.mu.RLock()
@@ -120,5 +143,5 @@ func (h *TokenStreamHub) Publish(event TokenMailEvent) int {
 		default:
 		}
 	}
-	return delivered
+	return delivered, len(listeners)
 }

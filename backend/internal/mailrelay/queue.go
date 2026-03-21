@@ -13,6 +13,8 @@ import (
 	"linuxdospace/backend/internal/storage"
 )
 
+const apiTokenDeliveryTargetPrefix = "linuxdospace-api-token:"
+
 // QueueStore is the minimum durable-queue contract the mail relay needs from
 // the shared storage layer.
 type QueueStore interface {
@@ -75,32 +77,24 @@ func (q *PersistentQueue) Enqueue(ctx context.Context, request EnqueueRequest) e
 	groups := make([]storage.EnqueueMailDeliveryGroupInput, 0, len(request.Groups))
 	for _, group := range request.Groups {
 		if group.TargetKind == model.EmailRouteTargetKindAPIToken {
-			if strings.TrimSpace(group.TargetTokenPublicID) == "" {
+			targetTokenPublicID := strings.TrimSpace(group.TargetTokenPublicID)
+			if targetTokenPublicID == "" {
 				continue
 			}
-			if q.hub != nil {
-				delivered := q.hub.Publish(TokenMailEvent{
-					TokenPublicID:        group.TargetTokenPublicID,
-					OriginalEnvelopeFrom: request.OriginalEnvelopeFrom,
-					OriginalRecipients:   append([]string(nil), group.OriginalRecipients...),
-					ReceivedAt:           q.now(),
-					RawMessage:           append([]byte(nil), request.RawMessage...),
-				})
-				if delivered == 0 {
-					log.Printf(
-						"linuxdospace api token mail delivery dropped: token=%s recipients=%v reason=no_active_stream_subscriber",
-						group.TargetTokenPublicID,
-						group.OriginalRecipients,
-					)
-				} else {
-					log.Printf(
-						"linuxdospace api token mail delivery published: token=%s recipients=%v subscribers=%d",
-						group.TargetTokenPublicID,
-						group.OriginalRecipients,
-						delivered,
-					)
-				}
+			if q.hub == nil || !q.hub.HasSubscribers(targetTokenPublicID) {
+				log.Printf(
+					"linuxdospace api token mail delivery dropped before enqueue: token=%s recipients=%v reason=no_active_stream_subscriber",
+					targetTokenPublicID,
+					group.OriginalRecipients,
+				)
+				continue
 			}
+			groups = append(groups, storage.EnqueueMailDeliveryGroupInput{
+				OriginalRecipients:   append([]string(nil), group.OriginalRecipients...),
+				TargetRecipients:     []string{encodeAPITokenDeliveryTarget(targetTokenPublicID)},
+				OwnerUserIDs:         append([]int64(nil), group.OwnerUserIDs...),
+				CatchAllOwnerUserIDs: append([]int64(nil), group.CatchAllOwnerUserIDs...),
+			})
 			continue
 		}
 		if strings.TrimSpace(group.TargetEmail) == "" {
@@ -138,4 +132,25 @@ func (q *PersistentQueue) Enqueue(ctx context.Context, request EnqueueRequest) e
 	default:
 		return fmt.Errorf("enqueue durable mail delivery batch: %w", err)
 	}
+}
+
+// encodeAPITokenDeliveryTarget stores API-token queue jobs inside the same
+// durable queue table without pretending they are ordinary SMTP addresses.
+func encodeAPITokenDeliveryTarget(publicID string) string {
+	return apiTokenDeliveryTargetPrefix + strings.TrimSpace(publicID)
+}
+
+// decodeAPITokenDeliveryTarget extracts the token public id from one queue
+// target marker. Non-token targets return false.
+func decodeAPITokenDeliveryTarget(target string) (string, bool) {
+	trimmed := strings.TrimSpace(target)
+	if !strings.HasPrefix(trimmed, apiTokenDeliveryTargetPrefix) {
+		return "", false
+	}
+	publicID := strings.TrimPrefix(trimmed, apiTokenDeliveryTargetPrefix)
+	publicID = strings.TrimSpace(publicID)
+	if publicID == "" {
+		return "", false
+	}
+	return publicID, true
 }
