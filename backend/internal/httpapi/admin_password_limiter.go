@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 const (
 	adminPasswordBucketSession = "session"
 	adminPasswordBucketIP      = "client_ip"
+	adminPasswordBucketUser    = "user"
 )
 
 // adminPasswordAttemptStore is the narrow persistence contract needed by the
@@ -61,13 +63,13 @@ func newAdminPasswordLimiter(store adminPasswordAttemptStore, maxFailures int, b
 
 // Check reports whether the current session or client IP is still inside a
 // temporary lockout window and returns the remaining block duration.
-func (l *adminPasswordLimiter) Check(ctx context.Context, sessionID string, clientIP string, now time.Time) (time.Duration, bool) {
+func (l *adminPasswordLimiter) Check(ctx context.Context, sessionID string, clientIP string, userID int64, now time.Time) (time.Duration, bool) {
 	if l == nil {
 		return 0, false
 	}
 
 	l.cleanup(ctx, now)
-	blockedUntil := l.maxBlockedUntil(ctx, now, sessionID, clientIP)
+	blockedUntil := l.maxBlockedUntil(ctx, now, sessionID, clientIP, userID)
 	if blockedUntil.IsZero() {
 		return 0, false
 	}
@@ -76,7 +78,7 @@ func (l *adminPasswordLimiter) Check(ctx context.Context, sessionID string, clie
 
 // RegisterFailure increments the failed-attempt counters for the current
 // session and client IP after one incorrect admin password submission.
-func (l *adminPasswordLimiter) RegisterFailure(ctx context.Context, sessionID string, clientIP string, now time.Time) {
+func (l *adminPasswordLimiter) RegisterFailure(ctx context.Context, sessionID string, clientIP string, userID int64, now time.Time) {
 	if l == nil {
 		return
 	}
@@ -84,22 +86,24 @@ func (l *adminPasswordLimiter) RegisterFailure(ctx context.Context, sessionID st
 	l.cleanup(ctx, now)
 	l.registerFailureForKey(ctx, adminPasswordBucketSession, sessionID, now)
 	l.registerFailureForKey(ctx, adminPasswordBucketIP, clientIP, now)
+	l.registerFailureForKey(ctx, adminPasswordBucketUser, adminPasswordUserBucketKey(userID), now)
 }
 
 // Reset clears the limiter state for the current session and client IP after a
 // successful password verification so legitimate admins are not penalized by
 // earlier mistakes.
-func (l *adminPasswordLimiter) Reset(ctx context.Context, sessionID string, clientIP string) {
+func (l *adminPasswordLimiter) Reset(ctx context.Context, sessionID string, clientIP string, userID int64) {
 	if l == nil {
 		return
 	}
 
 	_ = l.deleteAttempt(ctx, adminPasswordBucketSession, sessionID)
 	_ = l.deleteAttempt(ctx, adminPasswordBucketIP, clientIP)
+	_ = l.deleteAttempt(ctx, adminPasswordBucketUser, adminPasswordUserBucketKey(userID))
 }
 
 // maxBlockedUntil returns the later block boundary across the two identity buckets.
-func (l *adminPasswordLimiter) maxBlockedUntil(ctx context.Context, now time.Time, sessionID string, clientIP string) time.Time {
+func (l *adminPasswordLimiter) maxBlockedUntil(ctx context.Context, now time.Time, sessionID string, clientIP string, userID int64) time.Time {
 	var blockedUntil time.Time
 
 	if state, ok := l.loadAttempt(ctx, adminPasswordBucketSession, sessionID, now); ok && state.BlockedUntil != nil && state.BlockedUntil.After(now) {
@@ -108,8 +112,20 @@ func (l *adminPasswordLimiter) maxBlockedUntil(ctx context.Context, now time.Tim
 	if state, ok := l.loadAttempt(ctx, adminPasswordBucketIP, clientIP, now); ok && state.BlockedUntil != nil && state.BlockedUntil.After(blockedUntil) {
 		blockedUntil = *state.BlockedUntil
 	}
+	if state, ok := l.loadAttempt(ctx, adminPasswordBucketUser, adminPasswordUserBucketKey(userID), now); ok && state.BlockedUntil != nil && state.BlockedUntil.After(blockedUntil) {
+		blockedUntil = *state.BlockedUntil
+	}
 
 	return blockedUntil
+}
+
+// adminPasswordUserBucketKey converts one local user id into the persistent key
+// used by the per-admin-user throttle bucket.
+func adminPasswordUserBucketKey(userID int64) string {
+	if userID <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(userID, 10)
 }
 
 // registerFailureForKey records one failed attempt for the target limiter

@@ -1151,6 +1151,166 @@ func RunRepositoryBehaviorSuite(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("allocation creation enforces quota under concurrency", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "quota-owner")
+		managedDomain, err := store.UpsertManagedDomain(ctx, storage.UpsertManagedDomainInput{
+			RootDomain:       "quota.linuxdo.space",
+			CloudflareZoneID: "zone-quota",
+			DefaultQuota:     1,
+			AutoProvision:    false,
+			IsDefault:        false,
+			Enabled:          true,
+		})
+		if err != nil {
+			t.Fatalf("upsert managed domain with quota 1: %v", err)
+		}
+
+		var successCount atomic.Int32
+		var quotaFailureCount atomic.Int32
+		errs := make(chan error, 2)
+		start := make(chan struct{})
+		var waitGroup sync.WaitGroup
+
+		for _, prefix := range []string{"alpha", "beta"} {
+			waitGroup.Add(1)
+			go func(prefix string) {
+				defer waitGroup.Done()
+				<-start
+				_, createErr := store.CreateAllocation(ctx, storage.CreateAllocationInput{
+					UserID:           user.ID,
+					ManagedDomainID:  managedDomain.ID,
+					Prefix:           prefix,
+					NormalizedPrefix: prefix,
+					FQDN:             prefix + "." + managedDomain.RootDomain,
+					Source:           "concurrency-test",
+					Status:           "active",
+				})
+				switch {
+				case createErr == nil:
+					successCount.Add(1)
+				case errors.Is(createErr, storage.ErrAllocationQuotaExceeded):
+					quotaFailureCount.Add(1)
+				default:
+					errs <- createErr
+				}
+			}(prefix)
+		}
+
+		close(start)
+		waitGroup.Wait()
+		close(errs)
+		for createErr := range errs {
+			t.Fatalf("unexpected concurrent allocation error: %v", createErr)
+		}
+
+		if successCount.Load() != 1 {
+			t.Fatalf("expected exactly one allocation creation to succeed, got %d", successCount.Load())
+		}
+		if quotaFailureCount.Load() != 1 {
+			t.Fatalf("expected exactly one allocation creation to fail by quota, got %d", quotaFailureCount.Load())
+		}
+	})
+
+	t.Run("email route upsert refuses silent owner transfer", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		ownerA := newTestUser(t, ctx, store, "route-owner-a")
+		ownerB := newTestUser(t, ctx, store, "route-owner-b")
+
+		_, err := store.UpsertEmailRouteByAddress(ctx, storage.UpsertEmailRouteByAddressInput{
+			OwnerUserID: ownerA.ID,
+			RootDomain:  "linuxdo.space",
+			Prefix:      "shared",
+			TargetEmail: "a@example.com",
+			TargetKind:  model.EmailRouteTargetKindEmail,
+			Enabled:     true,
+		})
+		if err != nil {
+			t.Fatalf("seed initial email route: %v", err)
+		}
+
+		_, err = store.UpsertEmailRouteByAddress(ctx, storage.UpsertEmailRouteByAddressInput{
+			OwnerUserID: ownerB.ID,
+			RootDomain:  "linuxdo.space",
+			Prefix:      "shared",
+			TargetEmail: "b@example.com",
+			TargetKind:  model.EmailRouteTargetKindEmail,
+			Enabled:     true,
+		})
+		if !errors.Is(err, storage.ErrEmailRouteOwnershipConflict) {
+			t.Fatalf("expected ownership conflict, got %v", err)
+		}
+	})
+
+	t.Run("email target verification token can be consumed only once under concurrency", func(t *testing.T) {
+		ctx := context.Background()
+		store := newStore(t)
+
+		user := newTestUser(t, ctx, store, "verify-owner")
+		expiresAt := time.Now().UTC().Add(time.Hour)
+		target, err := store.CreateEmailTarget(ctx, storage.CreateEmailTargetInput{
+			OwnerUserID:           user.ID,
+			Email:                 "verify@example.com",
+			VerificationTokenHash: "verification-hash",
+			VerificationExpiresAt: &expiresAt,
+		})
+		if err != nil {
+			t.Fatalf("create email target: %v", err)
+		}
+
+		var successCount atomic.Int32
+		var notFoundCount atomic.Int32
+		errs := make(chan error, 2)
+		start := make(chan struct{})
+		var waitGroup sync.WaitGroup
+
+		for attempt := 0; attempt < 2; attempt++ {
+			waitGroup.Add(1)
+			go func() {
+				defer waitGroup.Done()
+				<-start
+				_, consumeErr := store.ConsumeEmailTargetVerificationToken(ctx, "verification-hash", time.Now().UTC())
+				switch {
+				case consumeErr == nil:
+					successCount.Add(1)
+				case storage.IsNotFound(consumeErr):
+					notFoundCount.Add(1)
+				default:
+					errs <- consumeErr
+				}
+			}()
+		}
+
+		close(start)
+		waitGroup.Wait()
+		close(errs)
+		for consumeErr := range errs {
+			t.Fatalf("unexpected concurrent verification consume error: %v", consumeErr)
+		}
+
+		if successCount.Load() != 1 {
+			t.Fatalf("expected exactly one verification consume success, got %d", successCount.Load())
+		}
+		if notFoundCount.Load() != 1 {
+			t.Fatalf("expected exactly one verification consume miss, got %d", notFoundCount.Load())
+		}
+
+		reloaded, err := store.GetEmailTargetByEmail(ctx, target.Email)
+		if err != nil {
+			t.Fatalf("reload consumed target: %v", err)
+		}
+		if reloaded.VerifiedAt == nil {
+			t.Fatalf("expected consumed target to be verified")
+		}
+		if reloaded.VerificationTokenHash != "" {
+			t.Fatalf("expected verification token hash to be cleared after consume")
+		}
+	})
+
 	t.Run("mail delivery queue refunds catch-all quota only after terminal failure", func(t *testing.T) {
 		ctx := context.Background()
 		store := newStore(t)

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"regexp"
 	"sort"
@@ -389,6 +390,9 @@ func (s *DomainService) CreateAllocation(ctx context.Context, user model.User, r
 		Status:           "active",
 	})
 	if err != nil {
+		if errors.Is(err, storage.ErrAllocationQuotaExceeded) {
+			return model.Allocation{}, ForbiddenError("allocation quota exceeded")
+		}
 		if isAllocationConflictError(err) {
 			return model.Allocation{}, ConflictError("the requested allocation already exists or changed concurrently")
 		}

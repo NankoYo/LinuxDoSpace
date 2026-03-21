@@ -235,3 +235,54 @@ func TestEnsureBuiltInManagedDomainsSkipsMissingOptionalZones(t *testing.T) {
 		t.Fatalf("expected missing optional built-in zones to be skipped, got %v", err)
 	}
 }
+
+// TestGetMyOrderHidesOtherUsersOrders verifies that the user-facing payment API
+// does not reveal whether another user's order number exists.
+func TestGetMyOrderHidesOtherUsersOrders(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+
+	owner, err := store.UpsertUser(ctx, storage.UpsertUserInput{
+		LinuxDOUserID: 3001,
+		Username:      "owner",
+		DisplayName:   "Owner",
+		AvatarURL:     "https://example.com/owner.png",
+		TrustLevel:    2,
+	})
+	if err != nil {
+		t.Fatalf("upsert owner user: %v", err)
+	}
+	otherUser, err := store.UpsertUser(ctx, storage.UpsertUserInput{
+		LinuxDOUserID: 3002,
+		Username:      "other",
+		DisplayName:   "Other",
+		AvatarURL:     "https://example.com/other.png",
+		TrustLevel:    2,
+	})
+	if err != nil {
+		t.Fatalf("upsert other user: %v", err)
+	}
+
+	service := NewPaymentService(config.Config{
+		LinuxDOCredit: config.LinuxDOCreditConfig{
+			PID: "pid",
+			Key: "key",
+		},
+	}, store, nil, fakeConfiguredLinuxDOCredit{})
+
+	order, err := service.CreateOrder(ctx, owner, CreatePaymentOrderRequest{
+		ProductKey: PaymentProductTest,
+		Units:      1,
+	})
+	if err != nil {
+		t.Fatalf("create payment order: %v", err)
+	}
+
+	_, err = service.GetMyOrder(ctx, otherUser, order.OutTradeNo)
+	if err == nil {
+		t.Fatalf("expected foreign order lookup to fail")
+	}
+	if normalized := NormalizeError(err); normalized.Code != "not_found" {
+		t.Fatalf("expected not_found for foreign order lookup, got %+v", normalized)
+	}
+}

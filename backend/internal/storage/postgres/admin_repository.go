@@ -415,12 +415,12 @@ INSERT INTO email_routes (
     updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(root_domain, prefix) DO UPDATE SET
-    owner_user_id = excluded.owner_user_id,
     target_email = excluded.target_email,
     target_kind = excluded.target_kind,
     target_token_public_id = excluded.target_token_public_id,
     enabled = excluded.enabled,
     updated_at = excluded.updated_at
+WHERE email_routes.owner_user_id = excluded.owner_user_id
 RETURNING id
 `,
 		input.OwnerUserID,
@@ -436,6 +436,9 @@ RETURNING id
 
 	var id int64
 	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return model.EmailRoute{}, storage.ErrEmailRouteOwnershipConflict
+		}
 		return model.EmailRoute{}, err
 	}
 	return s.getEmailRouteByID(ctx, id)

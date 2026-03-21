@@ -64,6 +64,8 @@ type Store interface {
 	GetEmailTargetByVerificationTokenHash(ctx context.Context, tokenHash string) (model.EmailTarget, error)
 	CreateEmailTarget(ctx context.Context, input CreateEmailTargetInput) (model.EmailTarget, error)
 	UpdateEmailTarget(ctx context.Context, input UpdateEmailTargetInput) (model.EmailTarget, error)
+	PrepareEmailTargetVerificationSend(ctx context.Context, input PrepareEmailTargetVerificationSendInput) (model.EmailTarget, error)
+	ConsumeEmailTargetVerificationToken(ctx context.Context, tokenHash string, verifiedAt time.Time) (model.EmailTarget, error)
 	ListAdminApplications(ctx context.Context) ([]model.AdminApplication, error)
 	ListAdminApplicationsByApplicant(ctx context.Context, applicantUserID int64) ([]model.AdminApplication, error)
 	UpsertAdminApplication(ctx context.Context, input UpsertAdminApplicationInput) (model.AdminApplication, error)

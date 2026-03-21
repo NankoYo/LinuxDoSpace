@@ -264,6 +264,7 @@ func (s *AdminService) CreateAllocation(ctx context.Context, actor model.User, r
 		NormalizedPrefix: normalizedPrefix,
 		FQDN:             fqdn,
 		IsPrimary:        request.IsPrimary,
+		SkipQuota:        true,
 		Source:           source,
 		Status:           status,
 	})

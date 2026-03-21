@@ -616,6 +616,20 @@ func (s *Store) CreateAllocation(ctx context.Context, input CreateAllocationInpu
 
 	now := time.Now().UTC()
 
+	if !input.SkipQuota {
+		quota, err := loadEffectiveQuotaForAllocationTx(ctx, tx, input.UserID, input.ManagedDomainID)
+		if err != nil {
+			return model.Allocation{}, err
+		}
+		activeCount, err := countActiveAllocationsByUserAndDomainTx(ctx, tx, input.UserID, input.ManagedDomainID)
+		if err != nil {
+			return model.Allocation{}, err
+		}
+		if activeCount >= quota {
+			return model.Allocation{}, storage.ErrAllocationQuotaExceeded
+		}
+	}
+
 	if input.IsPrimary {
 		if _, err := tx.ExecContext(ctx, `
 UPDATE allocations
@@ -697,6 +711,47 @@ RETURNING
 	}
 
 	return s.GetAllocationByID(ctx, allocation.ID)
+}
+
+// loadEffectiveQuotaForAllocationTx reloads the effective quota inside the
+// caller-owned transaction so quota checks and inserts stay coupled.
+func loadEffectiveQuotaForAllocationTx(ctx context.Context, tx *sql.Tx, userID int64, managedDomainID int64) (int, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT COALESCE((
+    SELECT max_allocations
+    FROM user_domain_quotas
+    WHERE user_id = ? AND managed_domain_id = ?
+), (
+    SELECT default_quota
+    FROM managed_domains
+    WHERE id = ?
+))
+`, userID, managedDomainID, managedDomainID)
+
+	var quota sql.NullInt64
+	if err := row.Scan(&quota); err != nil {
+		return 0, err
+	}
+	if !quota.Valid {
+		return 0, sql.ErrNoRows
+	}
+	return int(quota.Int64), nil
+}
+
+// countActiveAllocationsByUserAndDomainTx reloads the current active count
+// inside the caller-owned transaction.
+func countActiveAllocationsByUserAndDomainTx(ctx context.Context, tx *sql.Tx, userID int64, managedDomainID int64) (int, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT COUNT(1)
+FROM allocations
+WHERE user_id = ? AND managed_domain_id = ? AND status = 'active'
+`, userID, managedDomainID)
+
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // ListAllocationsByUser 返回用户拥有的所有活动分配。

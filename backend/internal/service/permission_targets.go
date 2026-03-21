@@ -28,6 +28,22 @@ const (
 	// being hammered so one user cannot force repeated outbound verification
 	// messages to the same external inbox in a tight loop.
 	emailTargetVerificationResendCooldown = time.Minute
+
+	// emailTargetVerificationOwnerShortLimit caps how many verification sends one
+	// account can reserve within the short anti-spam burst window.
+	emailTargetVerificationOwnerShortLimit = 5
+
+	// emailTargetVerificationOwnerDailyLimit caps how many verification sends one
+	// account can reserve within a rolling 24-hour period.
+	emailTargetVerificationOwnerDailyLimit = 20
+
+	// emailTargetVerificationTargetShortLimit caps short-burst sends to the same
+	// external inbox, even if the caller retries from multiple sessions.
+	emailTargetVerificationTargetShortLimit = 3
+
+	// emailTargetVerificationTargetDailyLimit caps rolling 24-hour sends to the
+	// same external inbox to keep LinuxDoSpace from becoming an outbound spammer.
+	emailTargetVerificationTargetDailyLimit = 10
 )
 
 // UserEmailTargetView describes one user-owned forwarding destination email
@@ -171,39 +187,17 @@ func (s *PermissionService) VerifyEmailTarget(ctx context.Context, token string)
 		return EmailTargetVerificationResult{}, ValidationError("verification token is required")
 	}
 
-	item, err := s.db.GetEmailTargetByVerificationTokenHash(ctx, hashEmailTargetVerificationToken(normalizedToken))
-	if err != nil {
-		if storage.IsNotFound(err) {
-			return EmailTargetVerificationResult{}, NotFoundError("verification token is invalid or already used")
-		}
-		return EmailTargetVerificationResult{}, InternalError("failed to load email target by verification token", err)
-	}
-
 	now := time.Now().UTC()
-	if item.VerificationExpiresAt == nil || !item.VerificationExpiresAt.After(now) {
-		if _, clearErr := s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-			ID:                     item.ID,
-			CloudflareAddressID:    "",
-			VerificationTokenHash:  "",
-			VerificationExpiresAt:  nil,
-			VerifiedAt:             item.VerifiedAt,
-			LastVerificationSentAt: item.LastVerificationSentAt,
-		}); clearErr != nil {
-			return EmailTargetVerificationResult{}, InternalError("failed to clear expired email target verification token", clearErr)
-		}
-		return EmailTargetVerificationResult{}, ValidationError("verification token has expired")
-	}
-
-	verifiedItem, err := s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     item.ID,
-		CloudflareAddressID:    "",
-		VerificationTokenHash:  "",
-		VerificationExpiresAt:  nil,
-		VerifiedAt:             &now,
-		LastVerificationSentAt: item.LastVerificationSentAt,
-	})
+	verifiedItem, err := s.db.ConsumeEmailTargetVerificationToken(ctx, hashEmailTargetVerificationToken(normalizedToken), now)
 	if err != nil {
-		return EmailTargetVerificationResult{}, InternalError("failed to mark email target as verified", err)
+		switch {
+		case storage.IsNotFound(err):
+			return EmailTargetVerificationResult{}, NotFoundError("verification token is invalid or already used")
+		case err == storage.ErrEmailTargetVerificationExpired:
+			return EmailTargetVerificationResult{}, ValidationError("verification token has expired")
+		default:
+			return EmailTargetVerificationResult{}, InternalError("failed to verify email target", err)
+		}
 	}
 
 	metadata, _ := json.Marshal(map[string]any{
@@ -354,16 +348,26 @@ func (s *PermissionService) issueEmailTargetVerification(ctx context.Context, it
 		return model.EmailTarget{}, InternalError("failed to generate email target verification token", err)
 	}
 
-	expiresAt := time.Now().UTC().Add(emailTargetVerificationTokenLifetime)
-	prepared, err := s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     item.ID,
-		CloudflareAddressID:    "",
-		VerificationTokenHash:  tokenHash,
-		VerificationExpiresAt:  &expiresAt,
-		VerifiedAt:             nil,
-		LastVerificationSentAt: nil,
+	now := time.Now().UTC()
+	expiresAt := now.Add(emailTargetVerificationTokenLifetime)
+	prepared, err := s.db.PrepareEmailTargetVerificationSend(ctx, storage.PrepareEmailTargetVerificationSendInput{
+		ID:                    item.ID,
+		OwnerUserID:           item.OwnerUserID,
+		Email:                 item.Email,
+		VerificationTokenHash: tokenHash,
+		VerificationExpiresAt: &expiresAt,
+		PreparedAt:            now,
+		ShortWindowStart:      now.Add(-10 * time.Minute),
+		DailyWindowStart:      now.Add(-24 * time.Hour),
+		OwnerShortLimit:       emailTargetVerificationOwnerShortLimit,
+		OwnerDailyLimit:       emailTargetVerificationOwnerDailyLimit,
+		TargetShortLimit:      emailTargetVerificationTargetShortLimit,
+		TargetDailyLimit:      emailTargetVerificationTargetDailyLimit,
 	})
 	if err != nil {
+		if err == storage.ErrEmailTargetVerificationRateLimited {
+			return model.EmailTarget{}, TooManyRequestsError("验证邮件发送过于频繁，请稍后再试")
+		}
 		return model.EmailTarget{}, InternalError("failed to prepare email target verification state", err)
 	}
 
@@ -382,20 +386,7 @@ func (s *PermissionService) issueEmailTargetVerification(ctx context.Context, it
 	}); err != nil {
 		return model.EmailTarget{}, UnavailableError("目标邮箱已保存，但平台暂时无法发出验证邮件，请稍后点击“重新发送验证”重试", err)
 	}
-
-	sentAt := time.Now().UTC()
-	updated, err := s.db.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
-		ID:                     prepared.ID,
-		CloudflareAddressID:    "",
-		VerificationTokenHash:  prepared.VerificationTokenHash,
-		VerificationExpiresAt:  prepared.VerificationExpiresAt,
-		VerifiedAt:             nil,
-		LastVerificationSentAt: &sentAt,
-	})
-	if err != nil {
-		return model.EmailTarget{}, InternalError("failed to persist email target verification send timestamp", err)
-	}
-	return updated, nil
+	return prepared, nil
 }
 
 // shouldIssueVerificationOnCreate decides whether pressing "添加目标邮箱"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,6 +313,126 @@ func TestVerifyEmailTargetRejectsExpiredToken(t *testing.T) {
 	}
 	if strings.TrimSpace(stored.VerificationTokenHash) != "" {
 		t.Fatalf("expected expired verification token hash to be cleared")
+	}
+}
+
+// TestVerifyEmailTargetConsumesTokenOnlyOnceUnderConcurrency verifies that
+// concurrent opens of the same verification link cannot both succeed.
+func TestVerifyEmailTargetConsumesTokenOnlyOnceUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 801, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+
+	service, mailer := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
+
+	if _, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "concurrent@example.com"}); err != nil {
+		t.Fatalf("create email target: %v", err)
+	}
+	token := mustExtractVerificationToken(t, mailer.sent[0].VerificationURL)
+
+	type verifyResult struct {
+		err error
+	}
+
+	results := make(chan verifyResult, 2)
+	start := make(chan struct{})
+	var waitGroup sync.WaitGroup
+	for attempt := 0; attempt < 2; attempt++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			_, verifyErr := service.VerifyEmailTarget(ctx, token)
+			results <- verifyResult{err: verifyErr}
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+	close(results)
+
+	successCount := 0
+	notFoundCount := 0
+	for item := range results {
+		if item.err == nil {
+			successCount++
+			continue
+		}
+		if NormalizeError(item.err).Code == "not_found" {
+			notFoundCount++
+			continue
+		}
+		t.Fatalf("expected concurrent loser to see not_found, got %v", item.err)
+	}
+
+	if successCount != 1 {
+		t.Fatalf("expected exactly one verification success, got %d", successCount)
+	}
+	if notFoundCount != 1 {
+		t.Fatalf("expected exactly one verification miss, got %d", notFoundCount)
+	}
+}
+
+// TestResendMyEmailTargetVerificationHonorsPersistentTargetBurstLimit verifies
+// that the resend endpoint is throttled by persisted send history, not only the
+// in-memory cooldown on the current process.
+func TestResendMyEmailTargetVerificationHonorsPersistentTargetBurstLimit(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+	user := seedPermissionEmailTestUserWithLinuxDOID(t, ctx, store, 802, "alice")
+	seedPermissionEmailManagedDomain(t, ctx, store)
+
+	service, _ := newPermissionServiceWithTestMailer(newPermissionEmailTestConfig(), store, nil)
+
+	item, err := service.CreateMyEmailTarget(ctx, user, CreateMyEmailTargetRequest{Email: "burst@example.com"})
+	if err != nil {
+		t.Fatalf("create pending email target: %v", err)
+	}
+	stored, err := store.GetEmailTargetByEmail(ctx, item.Email)
+	if err != nil {
+		t.Fatalf("load created email target: %v", err)
+	}
+
+	for _, offset := range []time.Duration{-9 * time.Minute, -5 * time.Minute, -2 * time.Minute} {
+		preparedAt := time.Now().UTC().Add(offset)
+		expiresAt := preparedAt.Add(emailTargetVerificationTokenLifetime)
+		if _, err := store.PrepareEmailTargetVerificationSend(ctx, storage.PrepareEmailTargetVerificationSendInput{
+			ID:                    stored.ID,
+			OwnerUserID:           user.ID,
+			Email:                 stored.Email,
+			VerificationTokenHash: "seed-" + preparedAt.Format("150405"),
+			VerificationExpiresAt: &expiresAt,
+			PreparedAt:            preparedAt,
+			ShortWindowStart:      preparedAt.Add(-10 * time.Minute),
+			DailyWindowStart:      preparedAt.Add(-24 * time.Hour),
+			OwnerShortLimit:       99,
+			OwnerDailyLimit:       99,
+			TargetShortLimit:      99,
+			TargetDailyLimit:      99,
+		}); err != nil {
+			t.Fatalf("seed verification attempt at %s: %v", preparedAt.Format(time.RFC3339), err)
+		}
+	}
+
+	agedSentAt := time.Now().UTC().Add(-2 * time.Minute)
+	if _, err := store.UpdateEmailTarget(ctx, storage.UpdateEmailTargetInput{
+		ID:                     stored.ID,
+		CloudflareAddressID:    "",
+		VerificationTokenHash:  stored.VerificationTokenHash,
+		VerificationExpiresAt:  stored.VerificationExpiresAt,
+		VerifiedAt:             nil,
+		LastVerificationSentAt: &agedSentAt,
+	}); err != nil {
+		t.Fatalf("age resend cooldown timestamp: %v", err)
+	}
+
+	_, err = service.ResendMyEmailTargetVerification(ctx, user, stored.ID)
+	if err == nil {
+		t.Fatalf("expected persistent target burst limit to block resend")
+	}
+	if NormalizeError(err).Code != "too_many_requests" {
+		t.Fatalf("expected too_many_requests from persistent target burst limit, got %v", err)
 	}
 }
 

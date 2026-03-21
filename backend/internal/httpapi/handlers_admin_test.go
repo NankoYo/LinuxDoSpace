@@ -101,6 +101,77 @@ WHERE action = 'admin.session.verify_password_failed'
 	}
 }
 
+// TestHandleAdminVerifyPasswordRateLimitsByUserIdentity verifies that the
+// limiter still blocks brute-force attempts when both the session id and client
+// IP change but the same administrator account is targeted.
+func TestHandleAdminVerifyPasswordRateLimitsByUserIdentity(t *testing.T) {
+	ctx := context.Background()
+	store := newAdminPasswordTestStore(t)
+
+	user, err := store.UpsertUser(ctx, sqlite.UpsertUserInput{
+		LinuxDOUserID:  1000,
+		Username:       "user2996",
+		DisplayName:    "User 2996",
+		AvatarURL:      "https://example.com/avatar.png",
+		TrustLevel:     4,
+		IsLinuxDOAdmin: false,
+		IsAppAdmin:     true,
+	})
+	if err != nil {
+		t.Fatalf("upsert admin user: %v", err)
+	}
+
+	firstSession, err := store.CreateSession(ctx, sqlite.CreateSessionInput{
+		ID:        "session-admin-user-bucket-a",
+		UserID:    user.ID,
+		CSRFToken: "csrf-admin-user-bucket-a",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create first admin session: %v", err)
+	}
+	secondSession, err := store.CreateSession(ctx, sqlite.CreateSessionInput{
+		ID:        "session-admin-user-bucket-b",
+		UserID:    user.ID,
+		CSRFToken: "csrf-admin-user-bucket-b",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create second admin session: %v", err)
+	}
+
+	cfg := config.Config{
+		App: config.AppConfig{
+			SessionCookieName:    "linuxdospace_session",
+			SessionBindUserAgent: false,
+			SessionTTL:           time.Hour,
+			AdminPassword:        "correct-horse-battery-staple",
+			AdminUsernames:       []string{"user2996"},
+		},
+	}
+
+	api := &API{
+		config:               cfg,
+		authService:          service.NewAuthService(cfg, store, nil),
+		adminPasswordLimiter: newAdminPasswordLimiter(store, 5, 15*time.Minute, time.Hour),
+	}
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		recorder := performAdminPasswordRequestFromIP(t, api, firstSession.ID, firstSession.CSRFToken, "wrong-password", "203.0.113.42")
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected status 401, got %d with body %s", attempt, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	blocked := performAdminPasswordRequestFromIP(t, api, secondSession.ID, secondSession.CSRFToken, "wrong-password", "198.51.100.73")
+	if blocked.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected second session and ip to still be blocked by user bucket, got %d with body %s", blocked.Code, blocked.Body.String())
+	}
+	if blocked.Header().Get("Retry-After") == "" {
+		t.Fatalf("expected blocked attempt to include Retry-After header")
+	}
+}
+
 // TestHandleAdminVerifyPasswordRotatesSession verifies that a successful admin
 // password submission returns a fresh session cookie and CSRF token.
 func TestHandleAdminVerifyPasswordRotatesSession(t *testing.T) {
@@ -306,13 +377,20 @@ func TestEnforceCSRFFailsForCrossSiteFetchWithoutOrigin(t *testing.T) {
 // performAdminPasswordRequest sends one JSON password verification request into
 // the real handler with the session cookie and CSRF token already attached.
 func performAdminPasswordRequest(t *testing.T, api *API, sessionID string, csrfToken string, password string) *httptest.ResponseRecorder {
+	return performAdminPasswordRequestFromIP(t, api, sessionID, csrfToken, password, "203.0.113.42")
+}
+
+// performAdminPasswordRequestFromIP sends one JSON password verification
+// request with an explicit client IP so limiter bucket combinations can be
+// tested deterministically.
+func performAdminPasswordRequestFromIP(t *testing.T, api *API, sessionID string, csrfToken string, password string, clientIP string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/admin/verify-password", strings.NewReader(`{"password":"`+password+`"}`))
 	request.AddCookie(&http.Cookie{Name: "linuxdospace_session", Value: sessionID})
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-CSRF-Token", csrfToken)
-	request.Header.Set("CF-Connecting-IP", "203.0.113.42")
+	request.Header.Set("CF-Connecting-IP", clientIP)
 
 	recorder := httptest.NewRecorder()
 	api.handleAdminVerifyPassword(recorder, request)

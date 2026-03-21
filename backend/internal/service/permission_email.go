@@ -180,6 +180,9 @@ func (s *PermissionService) UpsertMyDefaultEmailRoute(ctx context.Context, user 
 			Enabled:             request.Enabled,
 		})
 		if persistErr != nil {
+			if persistErr == storage.ErrEmailRouteOwnershipConflict {
+				return ConflictError("default mailbox address is already owned by another user")
+			}
 			return InternalError("failed to save default email route", persistErr)
 		}
 		return nil

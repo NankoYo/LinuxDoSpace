@@ -18,6 +18,22 @@ var (
 	// hidden per-day mailbox forwarding cap enforced by the local SMTP relay.
 	ErrMailForwardDailyLimitExceeded = errors.New("mail forward daily limit exceeded")
 
+	// ErrAllocationQuotaExceeded means one user attempted to allocate more
+	// namespaces on one managed root than their effective quota allows.
+	ErrAllocationQuotaExceeded = errors.New("allocation quota exceeded")
+
+	// ErrEmailRouteOwnershipConflict means one caller attempted to overwrite an
+	// existing email route owned by another user.
+	ErrEmailRouteOwnershipConflict = errors.New("email route ownership conflict")
+
+	// ErrEmailTargetVerificationExpired means the verification token existed but
+	// expired before it was atomically consumed.
+	ErrEmailTargetVerificationExpired = errors.New("email target verification expired")
+
+	// ErrEmailTargetVerificationRateLimited means the caller exceeded the
+	// persistent resend/send thresholds for the owner or target inbox.
+	ErrEmailTargetVerificationRateLimited = errors.New("email target verification rate limited")
+
 	// ErrPOWChallengeDailyLimitExceeded means the current user already claimed
 	// the maximum number of proof-of-work rewards allowed for the UTC day.
 	ErrPOWChallengeDailyLimitExceeded = errors.New("pow challenge daily limit exceeded")

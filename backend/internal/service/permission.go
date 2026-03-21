@@ -477,6 +477,9 @@ func (s *PermissionService) UpsertMyCatchAllEmailRoute(ctx context.Context, user
 			Enabled:             request.Enabled,
 		})
 		if persistErr != nil {
+			if persistErr == storage.ErrEmailRouteOwnershipConflict {
+				return ConflictError("catch-all mailbox address is already owned by another user")
+			}
 			return InternalError("failed to save catch-all email route", persistErr)
 		}
 		return nil

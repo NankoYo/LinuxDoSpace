@@ -289,7 +289,7 @@ func (s *PaymentService) GetMyOrder(ctx context.Context, user model.User, outTra
 		return model.PaymentOrder{}, InternalError("failed to load payment order", err)
 	}
 	if order.UserID != user.ID {
-		return model.PaymentOrder{}, ForbiddenError("payment order does not belong to the current user")
+		return model.PaymentOrder{}, NotFoundError("payment order not found")
 	}
 	return order, nil
 }

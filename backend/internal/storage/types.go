@@ -54,6 +54,7 @@ type CreateAllocationInput struct {
 	NormalizedPrefix string
 	FQDN             string
 	IsPrimary        bool
+	SkipQuota        bool
 	Source           string
 	Status           string
 }
@@ -154,6 +155,24 @@ type UpdateEmailTargetInput struct {
 	VerificationExpiresAt  *time.Time
 	VerifiedAt             *time.Time
 	LastVerificationSentAt *time.Time
+}
+
+// PrepareEmailTargetVerificationSendInput describes one atomic preparation
+// step that reserves a verification-send slot, persists the next token, and
+// refreshes the target row before the application sends the actual email.
+type PrepareEmailTargetVerificationSendInput struct {
+	ID                       int64
+	OwnerUserID              int64
+	Email                    string
+	VerificationTokenHash    string
+	VerificationExpiresAt    *time.Time
+	PreparedAt               time.Time
+	ShortWindowStart         time.Time
+	DailyWindowStart         time.Time
+	OwnerShortLimit          int
+	OwnerDailyLimit          int
+	TargetShortLimit         int
+	TargetDailyLimit         int
 }
 
 // UpsertAdminApplicationInput describes one user-side permission application.

@@ -11,6 +11,9 @@ import (
 
 type CreateEmailTargetInput = storage.CreateEmailTargetInput
 type UpdateEmailTargetInput = storage.UpdateEmailTargetInput
+type PrepareEmailTargetVerificationSendInput = storage.PrepareEmailTargetVerificationSendInput
+
+const emailTargetVerificationAttemptRetention = 30 * 24 * time.Hour
 
 // ListEmailTargetsByOwner returns every forwarding destination currently bound
 // to one local user.
@@ -157,6 +160,225 @@ RETURNING id
 
 	var id int64
 	if err := row.Scan(&id); err != nil {
+		return model.EmailTarget{}, err
+	}
+	return s.getEmailTargetByID(ctx, id)
+}
+
+// PrepareEmailTargetVerificationSend atomically reserves one verification-send
+// slot, persists the fresh token, and updates the target row before the actual
+// outbound email leaves the process.
+func (s *Store) PrepareEmailTargetVerificationSend(ctx context.Context, input PrepareEmailTargetVerificationSendInput) (model.EmailTarget, error) {
+	now := input.PreparedAt.UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.EmailTarget{}, err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, `
+SELECT
+    id,
+    owner_user_id,
+    email,
+    cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
+    verified_at,
+    last_verification_sent_at,
+    created_at,
+    updated_at
+FROM email_targets
+WHERE id = ?
+FOR UPDATE
+`, input.ID)
+	item, err := scanEmailTarget(row)
+	if err != nil {
+		return model.EmailTarget{}, err
+	}
+	if item.OwnerUserID != input.OwnerUserID || item.Email != input.Email {
+		return model.EmailTarget{}, sql.ErrNoRows
+	}
+	shortOwnerCount, dailyOwnerCount, shortTargetCount, dailyTargetCount, err := countEmailTargetVerificationAttemptsTx(ctx, tx, input.OwnerUserID, input.Email, input.ShortWindowStart.UTC(), input.DailyWindowStart.UTC())
+	if err != nil {
+		return model.EmailTarget{}, err
+	}
+	if input.OwnerShortLimit > 0 && shortOwnerCount >= input.OwnerShortLimit {
+		return model.EmailTarget{}, storage.ErrEmailTargetVerificationRateLimited
+	}
+	if input.OwnerDailyLimit > 0 && dailyOwnerCount >= input.OwnerDailyLimit {
+		return model.EmailTarget{}, storage.ErrEmailTargetVerificationRateLimited
+	}
+	if input.TargetShortLimit > 0 && shortTargetCount >= input.TargetShortLimit {
+		return model.EmailTarget{}, storage.ErrEmailTargetVerificationRateLimited
+	}
+	if input.TargetDailyLimit > 0 && dailyTargetCount >= input.TargetDailyLimit {
+		return model.EmailTarget{}, storage.ErrEmailTargetVerificationRateLimited
+	}
+
+	cleanupBefore := now.Add(-emailTargetVerificationAttemptRetention)
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM email_target_verification_attempts
+WHERE prepared_at < ?
+`, formatTime(cleanupBefore)); err != nil {
+		return model.EmailTarget{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO email_target_verification_attempts (
+    owner_user_id,
+    email,
+    prepared_at,
+    created_at
+) VALUES (?, ?, ?, ?)
+`,
+		input.OwnerUserID,
+		input.Email,
+		formatTime(now),
+		formatTime(now),
+	); err != nil {
+		return model.EmailTarget{}, err
+	}
+
+	row = tx.QueryRowContext(ctx, `
+UPDATE email_targets
+SET
+    cloudflare_address_id = '',
+    verification_token_hash = ?,
+    verification_expires_at = ?,
+    verified_at = NULL,
+    last_verification_sent_at = ?,
+    updated_at = ?
+WHERE id = ?
+RETURNING id
+`,
+		input.VerificationTokenHash,
+		formatNullableTime(input.VerificationExpiresAt),
+		formatTime(now),
+		formatTime(now),
+		input.ID,
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		return model.EmailTarget{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.EmailTarget{}, err
+	}
+	return s.getEmailTargetByID(ctx, id)
+}
+
+// countEmailTargetVerificationAttemptsTx returns owner- and target-scoped send
+// counts across the short and daily windows used by resend protection.
+func countEmailTargetVerificationAttemptsTx(ctx context.Context, tx *queryTx, ownerUserID int64, email string, shortWindowStart time.Time, dailyWindowStart time.Time) (int, int, int, int, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT
+    COALESCE(SUM(CASE WHEN owner_user_id = ? AND prepared_at >= ? THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN owner_user_id = ? AND prepared_at >= ? THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN email = ? AND prepared_at >= ? THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE WHEN email = ? AND prepared_at >= ? THEN 1 ELSE 0 END), 0)
+FROM email_target_verification_attempts
+WHERE owner_user_id = ? OR email = ?
+`,
+		ownerUserID,
+		formatTime(shortWindowStart),
+		ownerUserID,
+		formatTime(dailyWindowStart),
+		email,
+		formatTime(shortWindowStart),
+		email,
+		formatTime(dailyWindowStart),
+		ownerUserID,
+		email,
+	)
+
+	var shortOwnerCount int
+	var dailyOwnerCount int
+	var shortTargetCount int
+	var dailyTargetCount int
+	if err := row.Scan(&shortOwnerCount, &dailyOwnerCount, &shortTargetCount, &dailyTargetCount); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	return shortOwnerCount, dailyOwnerCount, shortTargetCount, dailyTargetCount, nil
+}
+
+// ConsumeEmailTargetVerificationToken atomically verifies one still-valid token
+// exactly once and clears it so concurrent replays cannot both succeed.
+func (s *Store) ConsumeEmailTargetVerificationToken(ctx context.Context, tokenHash string, verifiedAt time.Time) (model.EmailTarget, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.EmailTarget{}, err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, `
+SELECT
+    id,
+    owner_user_id,
+    email,
+    cloudflare_address_id,
+    verification_token_hash,
+    verification_expires_at,
+    verified_at,
+    last_verification_sent_at,
+    created_at,
+    updated_at
+FROM email_targets
+WHERE verification_token_hash = ?
+FOR UPDATE
+`, tokenHash)
+	item, err := scanEmailTarget(row)
+	if err != nil {
+		return model.EmailTarget{}, err
+	}
+
+	now := verifiedAt.UTC()
+	if item.VerificationExpiresAt == nil || !item.VerificationExpiresAt.After(now) {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE email_targets
+SET
+    verification_token_hash = '',
+    verification_expires_at = NULL,
+    updated_at = ?
+WHERE id = ?
+`,
+			formatTime(now),
+			item.ID,
+		); err != nil {
+			return model.EmailTarget{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return model.EmailTarget{}, err
+		}
+		return model.EmailTarget{}, storage.ErrEmailTargetVerificationExpired
+	}
+
+	row = tx.QueryRowContext(ctx, `
+UPDATE email_targets
+SET
+    cloudflare_address_id = '',
+    verification_token_hash = '',
+    verification_expires_at = NULL,
+    verified_at = ?,
+    updated_at = ?
+WHERE id = ? AND verification_token_hash = ?
+RETURNING id
+`,
+		formatTime(now),
+		formatTime(now),
+		item.ID,
+		tokenHash,
+	)
+
+	var id int64
+	if err := row.Scan(&id); err != nil {
+		if err == sql.ErrNoRows {
+			return model.EmailTarget{}, sql.ErrNoRows
+		}
+		return model.EmailTarget{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return model.EmailTarget{}, err
 	}
 	return s.getEmailTargetByID(ctx, id)

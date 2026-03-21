@@ -90,7 +90,7 @@ func (a *API) handleAdminVerifyPassword(w http.ResponseWriter, r *http.Request) 
 	}
 
 	clientIP := requestClientIP(r, a.config.App.TrustedProxyCIDRs)
-	if retryAfter, blocked := a.adminPasswordLimiter.Check(r.Context(), session.ID, clientIP, time.Now().UTC()); blocked {
+	if retryAfter, blocked := a.adminPasswordLimiter.Check(r.Context(), session.ID, clientIP, user.ID, time.Now().UTC()); blocked {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
 		writeError(w, service.TooManyRequestsError("too many invalid admin password attempts, please retry later"))
 		return
@@ -105,12 +105,12 @@ func (a *API) handleAdminVerifyPassword(w http.ResponseWriter, r *http.Request) 
 	verifiedSession, err := a.authService.VerifyAdminPassword(r.Context(), *session, *user, request.Password)
 	if err != nil {
 		if normalized := service.NormalizeError(err); normalized != nil && normalized.Code == "unauthorized" {
-			a.adminPasswordLimiter.RegisterFailure(r.Context(), session.ID, clientIP, time.Now().UTC())
+			a.adminPasswordLimiter.RegisterFailure(r.Context(), session.ID, clientIP, user.ID, time.Now().UTC())
 		}
 		writeError(w, err)
 		return
 	}
-	a.adminPasswordLimiter.Reset(r.Context(), session.ID, clientIP)
+	a.adminPasswordLimiter.Reset(r.Context(), session.ID, clientIP, user.ID)
 	a.setSessionCookie(w, verifiedSession.ID)
 
 	managedDomains, err := a.domainService.ListAdminDomains(r.Context())
