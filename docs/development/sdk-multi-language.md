@@ -18,8 +18,9 @@
 - 鉴权方式固定为 `Authorization: Bearer <token>`
 - 服务端只知道 Token，不知道客户端内部绑定规则
 - 客户端本地负责 mailbox 匹配、顺序路由和 overlap 控制
-- `client.listen(...)` 是完整流入口
-- `mailbox.listen(...)` 是本地子队列入口
+- 每种语言都应提供一个“完整流入口”，但公开方法名应保持语言习惯，不强行统一成同名 API
+- 每种语言都应提供一个“本地 mailbox 消费入口”，但公开方法名应保持语言习惯，不强行统一成同名 API
+- 各语言 README 才是该语言公开 API 命名的权威来源
 
 ## 统一匹配规则
 
@@ -41,10 +42,8 @@
 
 - 当前开发机可直接验证：Node.js、Go、Rust、Java、GCC、G++
 - 当前开发机不可直接验证：Swift、Dart、Zig、Lua、Kotlin、.NET SDK
-- 对于无法本地验证的语言，README 必须明确写出：
-  - 当前依赖
-  - 推荐构建命令
-  - 当前环境未验证的事实
+- 对于无法本地验证的语言，README 至少应明确写出当前环境未验证的事实
+- 如果该语言对外暴露了明确的工具链、依赖或推荐构建命令，也应在 README 中写清楚
 
 当前一轮落地结果：
 
@@ -74,4 +73,5 @@
 - Python SDK 是独立 Git 子仓库
 - 其余语言 SDK 现在也都是独立 Git 仓库
 - 当前 PyPI 安装命令明确为 `pip install linuxdospace`
+- 当前仓库内置的 repo-local skill 只有 Python SDK 一份，位于 `sdk/python/.agents/skills/linuxdo-space-python-sdk`
 - 父仓库只跟踪 submodule 指针，不直接承载 Python SDK 的提交历史
