@@ -70,6 +70,59 @@ The backend decides which frontend should receive the redirect through a short-l
 Destroys the current authenticated session.
 Requires a valid session and `X-CSRF-Token`.
 
+### `GET /v1/token/email/stream`
+Opens one live NDJSON email stream for an API token with the `email` capability.
+
+The stream sends:
+
+- one initial `ready` event
+- periodic `heartbeat` events
+- real `mail` events when the relay publishes them
+
+The `ready` event currently includes:
+
+- `token_public_id`
+- `owner_username`
+
+The SDK uses `owner_username` to derive the owner's semantic mail namespace,
+whose current canonical form is `<owner_username>-mail.<default-root>`.
+
+### `PUT /v1/token/email/filters`
+Replaces the currently active dynamic mailbox suffix-fragment set attached to
+one live API-token email stream connection.
+
+This endpoint uses bearer-token authentication, not the browser session.
+
+Request example:
+
+```json
+{
+  "suffixes": ["", "foo", "bar"]
+}
+```
+
+Response example:
+
+```json
+{
+  "suffixes": ["", "bar", "foo"],
+  "domains": [
+    "testuser-mail.linuxdo.space",
+    "testuser-mailbar.linuxdo.space",
+    "testuser-mailfoo.linuxdo.space"
+  ]
+}
+```
+
+Behavior:
+
+- `suffixes` are the optional fragments appended after the fixed `-mail`
+- `""` maps to `<owner_username>-mail.linuxdo.space`
+- `"foo"` maps to `<owner_username>-mailfoo.linuxdo.space`
+- an active `GET /v1/token/email/stream` connection for the same token is required
+- the backend rejects any requested dynamic mailbox domain that conflicts with
+  another live token stream or with an allocated namespace under the default root
+
 ### `GET /v1/me`
 Returns the current public-site session, user payload, CSRF token, and every active allocation already owned by the current user.
 The temporary restriction that only allows self-service requests for a username-matching namespace does not hide administrator-granted namespaces from this response.

@@ -392,9 +392,10 @@ type UpdatePaymentOrderFulfillmentStateInput struct {
 // ApplyPaymentOrderEntitlementInput describes one idempotent request to turn a
 // paid order into local entitlements and immutable quantity ledger records.
 type ApplyPaymentOrderEntitlementInput struct {
-	OutTradeNo                string
-	AppliedAt                 time.Time
-	BlockedNormalizedPrefixes []string
+	OutTradeNo                           string
+	AppliedAt                            time.Time
+	BlockedNormalizedPrefixes            []string
+	ReservedDynamicMailAliasUserPrefixes []string
 }
 
 // CreateOrReplacePOWChallengeInput describes one user-bound proof-of-work

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added dynamic API-token mailbox-domain filters under `PUT /v1/token/email/filters`, so the SMTP relay can fast-reject inactive `@<user>-mail<suffix>.linuxdo.space` aliases instead of pushing every miss through the heavier database route lookup path.
+- Updated the Python SDK semantic suffix model: `Suffix.linuxdo_space` now resolves to the owner's canonical `@<user>-mail.<root>` namespace, while `Suffix.linuxdo_space.with_suffix("foo")` resolves to `@<user>-mailfoo.<root>` and auto-syncs the active dynamic suffix set back to the backend.
+- Hardened administrator allocation creation so manual grants now honor the same reserved dynamic `-mail<suffix>` namespace boundary as the public availability and paid-purchase flows.
+- Hardened paid domain-purchase entitlement apply so both exact-mode finalization and random-prefix assignment now re-check the current dynamic `username-mail*` reservation set at apply time, closing the gap where a newly created user could otherwise make a previously checked-out prefix become reserved before the order was fulfilled.
 - Hardened user allocation creation so effective quota is now enforced inside
   the storage transaction as a final guard, closing the concurrent read-then-
   create window that could previously oversubscribe one user's namespace quota.

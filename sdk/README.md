@@ -14,6 +14,22 @@
 - 未开始 `listen()` 的 mailbox 不会积压历史消息
 - 服务端只知道 Token，不知道本地注册了哪些 mailbox 规则
 
+当前版本额外需要注意一条命名空间边界：
+
+- `Suffix.linuxdo_space` / `SuffixLinuxdoSpace` / 同义常量对用户来说仍然只需要写成
+  `linuxdo.space`
+- SDK 必须在内部自动兼容当前 token 拥有者在该根域下的第一方邮件命名空间
+- 当前至少包括：
+  - `<owner_username>-mail.linuxdo.space`
+  - `<owner_username>-mail<suffix_fragment>.linuxdo.space`
+- SDK 可能收到两类收件地址：
+  - `alice@<owner_username>-mail.linuxdo.space`
+  - `alice@<owner_username>-mailfoo.linuxdo.space`
+- 消费者代码不应显式硬编码 `*-mail.linuxdo.space` 这样的具体命名空间；
+  继续使用 `Suffix.linuxdo_space` / 同义常量即可，由 SDK 在内部完成兼容
+- 当前 Python SDK 额外暴露了 `Suffix.linuxdo_space.with_suffix("foo")`
+  这种显式动态 mail suffix helper；其他语言 SDK 后续应对齐同一语义
+
 当前 SDK 列表：
 
 - `python/`
@@ -56,3 +72,4 @@
 - 其他语言 SDK 也都已经拆成各自独立 Git 仓库，父仓库只保存 gitlink 与 `.gitmodules` 配置。
 - C 与 C++ 当前实现的是“传输无关核心”，通过 `ingestNdjsonLine` 接入上层 HTTPS 流。
 - 其余语言都按照 `MAIL_STREAM_PROTOCOL` 提供真实的 SDK 工程骨架与公开 API。
+- 父仓库级文档只定义统一基线；每个语言仓库自己的 README 才是最终公开 API 的权威入口。

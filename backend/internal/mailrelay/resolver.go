@@ -69,7 +69,9 @@ type RecipientResolver interface {
 // DBResolver resolves recipients purely from the local database so LinuxDoSpace
 // no longer depends on Cloudflare Email Routing for subdomain catch-all mail.
 type DBResolver struct {
-	store ResolverStore
+	store             ResolverStore
+	tokenHub          *TokenStreamHub
+	defaultRootDomain string
 }
 
 // ResolvedRecipient is the routing result for one accepted SMTP recipient.
@@ -88,8 +90,12 @@ type ResolvedRecipient struct {
 
 // NewDBResolver constructs the database-backed recipient resolver used by the
 // built-in SMTP relay.
-func NewDBResolver(store ResolverStore) *DBResolver {
-	return &DBResolver{store: store}
+func NewDBResolver(store ResolverStore, defaultRootDomain string, tokenHub *TokenStreamHub) *DBResolver {
+	return &DBResolver{
+		store:             store,
+		tokenHub:          tokenHub,
+		defaultRootDomain: normalizeDNSName(defaultRootDomain),
+	}
 }
 
 // ResolveRecipient accepts one envelope recipient, normalizes it, tries an
@@ -111,11 +117,46 @@ func (r *DBResolver) ResolveRecipient(ctx context.Context, recipient string) (Re
 		return ResolvedRecipient{}, fmt.Errorf("load exact route for %s: %w", recipient, err)
 	}
 
+	if activeToken, ok := r.lookupActiveExtraMailboxDomain(domain); ok {
+		if err := r.ensureRouteOwnerAllowed(ctx, activeToken.OwnerUserID, recipient); err != nil {
+			return ResolvedRecipient{}, err
+		}
+		return ResolvedRecipient{
+			OriginalRecipient:   strings.ToLower(strings.TrimSpace(recipient)),
+			LocalPart:           localPart,
+			Domain:              domain,
+			TargetKind:          model.EmailRouteTargetKindAPIToken,
+			TargetEmail:         "",
+			TargetTokenPublicID: activeToken.TokenPublicID,
+			RouteID:             0,
+			RouteOwnerUserID:    activeToken.OwnerUserID,
+			RoutePrefix:         catchAllRoutePrefix,
+			UsedCatchAll:        true,
+		}, nil
+	}
+
 	catchAllRoute, err := r.store.GetEmailRouteByAddress(ctx, domain, catchAllRoutePrefix)
 	switch {
 	case err == nil:
 		return r.resolveStoredRoute(ctx, recipient, localPart, domain, catchAllRoute, true)
 	case storage.IsNotFound(err):
+		if activeToken, ok := r.lookupActiveMailboxDomain(domain); ok {
+			if err := r.ensureRouteOwnerAllowed(ctx, activeToken.OwnerUserID, recipient); err != nil {
+				return ResolvedRecipient{}, err
+			}
+			return ResolvedRecipient{
+				OriginalRecipient:   strings.ToLower(strings.TrimSpace(recipient)),
+				LocalPart:           localPart,
+				Domain:              domain,
+				TargetKind:          model.EmailRouteTargetKindAPIToken,
+				TargetEmail:         "",
+				TargetTokenPublicID: activeToken.TokenPublicID,
+				RouteID:             0,
+				RouteOwnerUserID:    activeToken.OwnerUserID,
+				RoutePrefix:         catchAllRoutePrefix,
+				UsedCatchAll:        true,
+			}, nil
+		}
 		return ResolvedRecipient{}, fmt.Errorf("%w: %s", ErrNoMatchingRoute, recipient)
 	default:
 		return ResolvedRecipient{}, fmt.Errorf("load catch-all route for %s: %w", recipient, err)
@@ -242,4 +283,41 @@ func normalizeEnvelopeAddress(raw string) (string, string, error) {
 	}
 
 	return localPart, domain, nil
+}
+
+func (r *DBResolver) lookupActiveMailboxDomain(domain string) (ActiveTokenMailboxDomain, bool) {
+	if r == nil || r.tokenHub == nil {
+		return ActiveTokenMailboxDomain{}, false
+	}
+	return r.tokenHub.LookupMailboxDomain(domain)
+}
+
+func (r *DBResolver) lookupActiveExtraMailboxDomain(domain string) (ActiveTokenMailboxDomain, bool) {
+	item, ok := r.lookupActiveMailboxDomain(domain)
+	if !ok || !r.isExtraMailboxAliasDomain(domain) {
+		return ActiveTokenMailboxDomain{}, false
+	}
+	return item, true
+}
+
+func (r *DBResolver) isExtraMailboxAliasDomain(domain string) bool {
+	normalizedDomain := normalizeDNSName(domain)
+	defaultRoot := normalizeDNSName(r.defaultRootDomain)
+	if normalizedDomain == "" || defaultRoot == "" || !strings.HasSuffix(normalizedDomain, "."+defaultRoot) {
+		return false
+	}
+
+	label := strings.TrimSuffix(normalizedDomain, "."+defaultRoot)
+	if label == "" || strings.Contains(label, ".") {
+		return false
+	}
+	markerIndex := strings.Index(label, "-mail")
+	if markerIndex <= 0 {
+		return false
+	}
+	return !strings.HasSuffix(label, "-mail")
+}
+
+func normalizeDNSName(value string) string {
+	return strings.ToLower(strings.Trim(strings.TrimSpace(value), "."))
 }

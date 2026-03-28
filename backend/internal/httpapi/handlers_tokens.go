@@ -182,6 +182,45 @@ func (a *API) handleTokenEmailStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleUpdateTokenEmailFilters replaces the dynamic mailbox-domain suffix list
+// currently attached to one live API-token stream connection.
+func (a *API) handleUpdateTokenEmailFilters(w http.ResponseWriter, r *http.Request) {
+	if a.tokenService == nil || a.tokenService.Hub() == nil {
+		writeError(w, service.UnavailableError("api token stream is not configured", nil))
+		return
+	}
+
+	rawToken, ok := bearerTokenFromRequest(r)
+	if !ok {
+		writeError(w, service.UnauthorizedError("missing bearer token"))
+		return
+	}
+
+	token, err := a.tokenService.AuthenticateEmailStreamToken(r.Context(), rawToken)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	ownerUsername, err := a.tokenService.ResolveStreamOwnerUsername(r.Context(), token)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var request service.UpdateTokenEmailFiltersRequest
+	if err := decodeJSONBody(r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	result, err := a.tokenService.UpdateEmailStreamMailboxFilters(r.Context(), token, ownerUsername, request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func bearerTokenFromRequest(r *http.Request) (string, bool) {
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if authorization == "" {

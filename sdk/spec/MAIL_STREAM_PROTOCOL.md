@@ -25,6 +25,8 @@
 {"type":"ready","token_public_id":"tok123","owner_username":"testuser"}
 {"type":"heartbeat"}
 {"type":"mail","original_envelope_from":"bounce@example.com","original_recipients":["alice@testuser.linuxdo.space"],"received_at":"2026-03-20T10:11:12Z","raw_message_base64":"RnJvbTogLi4u"}
+{"type":"mail","original_envelope_from":"bounce@example.com","original_recipients":["alice@testuser-mail.linuxdo.space"],"received_at":"2026-03-20T10:11:13Z","raw_message_base64":"RnJvbTogLi4u"}
+{"type":"mail","original_envelope_from":"bounce@example.com","original_recipients":["alice@testuser-mailfoo.linuxdo.space"],"received_at":"2026-03-20T10:11:14Z","raw_message_base64":"RnJvbTogLi4u"}
 ```
 
 ## 事件类型
@@ -34,8 +36,16 @@
 表示连接已经建立成功，当前 SDK 应忽略该事件或仅用于内部握手。
 
 `owner_username` 是必需字段。SDK 使用它把第一方枚举后缀
-`linuxdo.space` 解析成当前 token 拥有者的真实命名空间后缀
-`<owner_username>.linuxdo.space`。
+`linuxdo.space` 解析成当前 token 拥有者的真实邮件命名空间后缀
+`<owner_username>-mail.linuxdo.space`。
+
+这一点在当前版本仍然保持为黑箱语义。`Suffix.linuxdo_space` 是第一方语义后缀，
+SDK 必须在内部把它映射为当前 token 拥有者在 `linuxdo.space` 下可接收邮件的
+第一方命名空间集合。当前至少包括：
+
+- `<owner_username>-mail.linuxdo.space`
+- `<owner_username>-mail<suffix_fragment>.linuxdo.space`
+- 为兼容旧事件输入，也可能出现 `<owner_username>.linuxdo.space`
 
 示例：
 
@@ -84,6 +94,57 @@
 }
 ```
 
+当用户把 API token 选为邮箱泛解析 `*@<owner_username>-mail.linuxdo.space`
+的转发目标时，`original_recipients` 也可能出现新的显式邮箱命名空间，
+例如：
+
+```json
+{
+  "type": "mail",
+  "original_envelope_from": "bounce@example.com",
+  "original_recipients": [
+    "alice@testuser-mail.linuxdo.space"
+  ],
+  "received_at": "2026-03-20T10:11:13Z",
+  "raw_message_base64": "RnJvbTogLi4u"
+}
+```
+
+当客户端主动注册了动态 mail suffix 过滤列表后，`original_recipients`
+还可能出现：
+
+```json
+{
+  "type": "mail",
+  "original_envelope_from": "bounce@example.com",
+  "original_recipients": [
+    "alice@testuser-mailfoo.linuxdo.space"
+  ],
+  "received_at": "2026-03-20T10:11:14Z",
+  "raw_message_base64": "RnJvbTogLi4u"
+}
+```
+
+## 动态邮箱后缀控制面
+
+为了让服务端只接受当前活跃客户端真正需要的动态邮箱域，协议还定义了一条
+辅助控制接口：
+
+- 方法：`PUT`
+- 路径：`/v1/token/email/filters`
+- 鉴权：`Authorization: Bearer <token>`
+- 请求体：`{"suffixes":["", "foo", "bar"]}`
+
+说明：
+
+- `suffixes` 不是完整域名，而是固定 `-mail` 后面的可选后缀片段
+- `""` 表示 `<owner_username>-mail.linuxdo.space`
+- `"foo"` 表示 `<owner_username>-mailfoo.linuxdo.space`
+- 服务端会把这些片段和 `ready.owner_username` 结合，维护当前 token
+  活跃的动态邮箱域过滤列表
+- 当某个动态 `-mail<suffix>` 域没有被当前任何活跃 token stream 注册时，
+  服务端应尽早拒绝，而不是继续执行更重的数据库路由流程
+
 ## SDK 公共行为
 
 ### 上游连接
@@ -102,7 +163,14 @@
 
 - 绑定基于邮箱地址的 local-part 与 suffix
 - 第一方枚举后缀 `linuxdo.space` 是语义后缀，不是字面父域名
-- SDK 必须把它解析为 `<owner_username>.linuxdo.space`
+- SDK 必须在内部把它匹配到当前 token 拥有者在 `linuxdo.space` 下的第一方命名空间
+- 当前 SDK 至少应自动兼容：
+  - `<owner_username>-mail.linuxdo.space`
+  - `<owner_username>-mail<suffix_fragment>.linuxdo.space`
+- 对支持动态后缀 helper 的 SDK：
+  - `Suffix.linuxdo_space` 表示 `<owner_username>-mail.linuxdo.space`
+  - `Suffix.linuxdo_space.with_suffix("foo")` 表示 `<owner_username>-mailfoo.linuxdo.space`
+- 用户代码不应被迫为了新邮件命名空间改写原有 `Suffix.linuxdo_space` 用法
 - `prefix` 与 `pattern` 二选一
 - `pattern` 使用全匹配，不是搜索匹配
 - 同一 suffix 下的所有绑定共享一条创建顺序链

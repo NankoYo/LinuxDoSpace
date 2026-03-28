@@ -197,6 +197,16 @@ func (s *DomainService) CheckAvailability(ctx context.Context, rootDomain string
 		result.Available = false
 		result.Reasons = append(result.Reasons, "reserved_mail_namespace")
 	}
+	if result.Available {
+		reservedDynamicMailAlias, reservedErr := s.isReservedDynamicMailAliasPrefix(ctx, managedDomain.RootDomain, normalizedPrefix)
+		if reservedErr != nil {
+			return AvailabilityResult{}, reservedErr
+		}
+		if reservedDynamicMailAlias {
+			result.Available = false
+			result.Reasons = append(result.Reasons, "reserved_dynamic_mail_namespace")
+		}
+	}
 
 	existing, err := s.db.FindAllocationByNormalizedPrefix(ctx, managedDomain.ID, normalizedPrefix)
 	if err == nil && existing.ID > 0 {
@@ -1047,6 +1057,11 @@ func (s *DomainService) prepareAllocation(ctx context.Context, rootDomain string
 	if isSystemReservedMailNamespacePrefix(managedDomain.RootDomain, normalizedPrefix, s.cfg.Cloudflare.DefaultRootDomain) {
 		return model.ManagedDomain{}, "", "", ForbiddenError("prefixes ending with -mail are reserved for the platform-managed mail namespace")
 	}
+	if reservedDynamicMailAlias, reservedErr := s.isReservedDynamicMailAliasPrefix(ctx, managedDomain.RootDomain, normalizedPrefix); reservedErr != nil {
+		return model.ManagedDomain{}, "", "", reservedErr
+	} else if reservedDynamicMailAlias {
+		return model.ManagedDomain{}, "", "", ForbiddenError("prefixes matching one user's dynamic -mail mailbox aliases are reserved for the platform-managed mail namespace")
+	}
 
 	return managedDomain, normalizedPrefix, normalizedPrefix + "." + managedDomain.RootDomain, nil
 }
@@ -1059,6 +1074,62 @@ func isSystemReservedMailNamespacePrefix(rootDomain string, normalizedPrefix str
 		return false
 	}
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(normalizedPrefix)), catchAllNamespaceSuffix)
+}
+
+// isReservedDynamicMailAliasPrefix blocks `<username>-mail<suffix>` under the
+// default root once that username already exists locally, because those labels
+// are now part of the dynamic API-token mailbox namespace family.
+func (s *DomainService) isReservedDynamicMailAliasPrefix(ctx context.Context, rootDomain string, normalizedPrefix string) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(rootDomain), strings.TrimSpace(s.cfg.Cloudflare.DefaultRootDomain)) {
+		return false, nil
+	}
+
+	normalizedPrefix = strings.ToLower(strings.TrimSpace(normalizedPrefix))
+	if normalizedPrefix == "" {
+		return false, nil
+	}
+
+	for _, usernamePrefix := range possibleDynamicMailAliasUserPrefixes(normalizedPrefix) {
+		user, err := s.db.GetUserByUsername(ctx, usernamePrefix)
+		switch {
+		case err == nil:
+			normalizedUsernamePrefix, normalizeErr := normalizedUserPrefix(user.Username)
+			if normalizeErr == nil && normalizedUsernamePrefix == usernamePrefix {
+				return true, nil
+			}
+		case storage.IsNotFound(err):
+			continue
+		default:
+			return false, InternalError("failed to check dynamic mail namespace reservation", err)
+		}
+	}
+
+	return false, nil
+}
+
+func possibleDynamicMailAliasUserPrefixes(normalizedPrefix string) []string {
+	items := make([]string, 0, 4)
+	seen := map[string]struct{}{}
+	searchFrom := 0
+	for {
+		relativeIndex := strings.Index(normalizedPrefix[searchFrom:], catchAllNamespaceSuffix)
+		if relativeIndex < 0 {
+			break
+		}
+		absoluteIndex := searchFrom + relativeIndex
+		candidate := normalizedPrefix[:absoluteIndex]
+		if candidate != "" {
+			if _, exists := seen[candidate]; !exists {
+				seen[candidate] = struct{}{}
+				items = append(items, candidate)
+			}
+		}
+		searchFrom = absoluteIndex + len(catchAllNamespaceSuffix)
+		if searchFrom >= len(normalizedPrefix) {
+			break
+		}
+	}
+	return items
 }
 
 // hasLiveConflict 检查 Cloudflare 上是否已经存在与该命名空间冲突的记录。

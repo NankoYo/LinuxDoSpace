@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"linuxdospace/backend/internal/config"
 	"linuxdospace/backend/internal/mailrelay"
 	"linuxdospace/backend/internal/model"
 	"linuxdospace/backend/internal/security"
@@ -20,6 +23,11 @@ const (
 
 	// APITokenTargetTypeAPIToken means the route forwards to one live API token stream.
 	APITokenTargetTypeAPIToken = model.EmailRouteTargetKindAPIToken
+
+	// maxDynamicMailboxSuffixesPerToken bounds one live token stream's dynamic
+	// mailbox-domain filter set so a single bearer token cannot pin unbounded
+	// in-memory suffix state into the relay.
+	maxDynamicMailboxSuffixesPerToken = 256
 )
 
 // UserAPITokenView is the public frontend representation of one user-managed token.
@@ -47,15 +55,29 @@ type CreateMyAPITokenResult struct {
 	RawToken string           `json:"raw_token"`
 }
 
+// UpdateTokenEmailFiltersRequest replaces the currently active dynamic mailbox
+// suffix-fragment set for one live API-token email stream connection.
+type UpdateTokenEmailFiltersRequest struct {
+	Suffixes []string `json:"suffixes"`
+}
+
+// UpdateTokenEmailFiltersResult returns the normalized suffix fragments and the
+// fully derived mailbox domains now active for this token stream.
+type UpdateTokenEmailFiltersResult struct {
+	Suffixes []string `json:"suffixes"`
+	Domains  []string `json:"domains"`
+}
+
 // TokenService owns user-managed API tokens and the live email stream hub.
 type TokenService struct {
+	cfg config.Config
 	db  Store
 	hub *mailrelay.TokenStreamHub
 }
 
 // NewTokenService creates the user-facing token-management service.
-func NewTokenService(db Store, hub *mailrelay.TokenStreamHub) *TokenService {
-	return &TokenService{db: db, hub: hub}
+func NewTokenService(cfg config.Config, db Store, hub *mailrelay.TokenStreamHub) *TokenService {
+	return &TokenService{cfg: cfg, db: db, hub: hub}
 }
 
 // ListMyAPITokens returns the current user's tokens, newest first.
@@ -223,6 +245,108 @@ func (s *TokenService) ResolveStreamOwnerUsername(ctx context.Context, token mod
 	return strings.ToLower(strings.TrimSpace(user.Username)), nil
 }
 
+// UpdateEmailStreamMailboxFilters replaces the active dynamic mailbox-domain
+// registrations attached to one live token stream connection.
+func (s *TokenService) UpdateEmailStreamMailboxFilters(ctx context.Context, token model.APIToken, ownerUsername string, request UpdateTokenEmailFiltersRequest) (UpdateTokenEmailFiltersResult, error) {
+	if s == nil || s.hub == nil {
+		return UpdateTokenEmailFiltersResult{}, UnavailableError("api token stream is not configured", nil)
+	}
+
+	defaultRootDomain := strings.ToLower(strings.TrimSpace(s.cfg.Cloudflare.DefaultRootDomain))
+	if defaultRootDomain == "" {
+		return UpdateTokenEmailFiltersResult{}, UnavailableError("default root domain is not configured for dynamic api-token mailbox suffixes", nil)
+	}
+
+	normalizedOwnerUsername, err := normalizedUserPrefix(ownerUsername)
+	if err != nil {
+		return UpdateTokenEmailFiltersResult{}, ValidationError("api token owner username cannot be mapped to a valid dynamic mailbox prefix")
+	}
+
+	managedDomain, err := s.db.GetManagedDomainByRoot(ctx, defaultRootDomain)
+	if err != nil {
+		if storage.IsNotFound(err) {
+			return UpdateTokenEmailFiltersResult{}, UnavailableError("default root domain is not available for dynamic api-token mailbox suffixes", err)
+		}
+		return UpdateTokenEmailFiltersResult{}, InternalError("failed to load default root domain for dynamic api-token mailbox suffixes", err)
+	}
+	if !managedDomain.Enabled {
+		return UpdateTokenEmailFiltersResult{}, ForbiddenError("default root domain is disabled for dynamic api-token mailbox suffixes")
+	}
+
+	if len(request.Suffixes) > 0 {
+		ownerUser, err := s.db.GetUserByID(ctx, token.OwnerUserID)
+		if err != nil {
+			if storage.IsNotFound(err) {
+				return UpdateTokenEmailFiltersResult{}, NotFoundError("api token owner not found")
+			}
+			return UpdateTokenEmailFiltersResult{}, InternalError("failed to load api token owner", err)
+		}
+		permissionService := NewPermissionService(s.cfg, s.db, nil)
+		permission, err := permissionService.loadEmailCatchAllPermission(ctx, ownerUser)
+		if err != nil {
+			return UpdateTokenEmailFiltersResult{}, err
+		}
+		if permission.Status != "approved" {
+			return UpdateTokenEmailFiltersResult{}, ForbiddenError("the catch-all email permission has not been approved")
+		}
+		if permission.CatchAllAccess == nil || !permission.CatchAllAccess.DeliveryAvailable {
+			return UpdateTokenEmailFiltersResult{}, ConflictError("catch-all delivery is currently unavailable for this user")
+		}
+	}
+
+	normalizedSuffixes := make([]string, 0, len(request.Suffixes))
+	seenSuffixes := make(map[string]struct{}, len(request.Suffixes))
+	domains := make([]string, 0, len(request.Suffixes))
+	for _, rawSuffix := range request.Suffixes {
+		normalizedSuffix, suffixErr := normalizeTokenMailboxSuffixFragment(rawSuffix)
+		if suffixErr != nil {
+			return UpdateTokenEmailFiltersResult{}, suffixErr
+		}
+		if _, exists := seenSuffixes[normalizedSuffix]; exists {
+			continue
+		}
+		seenSuffixes[normalizedSuffix] = struct{}{}
+		if len(seenSuffixes) > maxDynamicMailboxSuffixesPerToken {
+			return UpdateTokenEmailFiltersResult{}, ValidationError("too many dynamic mailbox suffixes in one request")
+		}
+		normalizedSuffixes = append(normalizedSuffixes, normalizedSuffix)
+
+		label := normalizedOwnerUsername + catchAllNamespaceSuffix + normalizedSuffix
+		if len(label) > 63 {
+			return UpdateTokenEmailFiltersResult{}, ValidationError("dynamic mailbox suffix is too long for one dns label")
+		}
+
+		allocation, allocationErr := s.db.FindAllocationByNormalizedPrefix(ctx, managedDomain.ID, label)
+		switch {
+		case allocationErr == nil && allocation.ID > 0:
+			return UpdateTokenEmailFiltersResult{}, ConflictError("dynamic mailbox suffix conflicts with an allocated namespace")
+		case allocationErr != nil && !storage.IsNotFound(allocationErr):
+			return UpdateTokenEmailFiltersResult{}, InternalError("failed to check dynamic mailbox suffix conflicts", allocationErr)
+		}
+
+		domains = append(domains, label+"."+defaultRootDomain)
+	}
+
+	sort.Strings(normalizedSuffixes)
+	sort.Strings(domains)
+
+	if err := s.hub.UpdateMailboxDomains(token.PublicID, token.OwnerUserID, normalizedOwnerUsername, domains); err != nil {
+		switch err {
+		case mailrelay.ErrTokenStreamSubscriptionRequired:
+			return UpdateTokenEmailFiltersResult{}, ConflictError("an active api token email stream connection is required before mailbox suffix filters can be updated")
+		case mailrelay.ErrTokenStreamMailboxDomainConflict:
+			return UpdateTokenEmailFiltersResult{}, ConflictError("one requested dynamic mailbox domain is already attached to another live api token stream")
+		default:
+			return UpdateTokenEmailFiltersResult{}, InternalError("failed to update api token mailbox suffix filters", err)
+		}
+	}
+
+	return UpdateTokenEmailFiltersResult{
+		Suffixes: normalizedSuffixes,
+		Domains:  domains,
+	}, nil
+}
+
 // RequireOwnedEmailAPIToken validates that the given token exists, belongs to the
 // current user, is active, and supports the email stream capability.
 func (s *TokenService) RequireOwnedEmailAPIToken(ctx context.Context, user model.User, publicID string) (model.APIToken, error) {
@@ -275,4 +399,44 @@ func apiTokenHasScope(item model.APIToken, scope string) bool {
 func hashAPIToken(rawToken string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(rawToken)))
 	return hex.EncodeToString(sum[:])
+}
+
+func normalizeTokenMailboxSuffixFragment(raw string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return "", nil
+	}
+
+	var builder strings.Builder
+	lastWasDash := false
+	for _, runeValue := range value {
+		switch {
+		case runeValue >= 'a' && runeValue <= 'z':
+			builder.WriteRune(runeValue)
+			lastWasDash = false
+		case runeValue >= '0' && runeValue <= '9':
+			builder.WriteRune(runeValue)
+			lastWasDash = false
+		default:
+			if !lastWasDash {
+				builder.WriteRune('-')
+				lastWasDash = true
+			}
+		}
+	}
+
+	normalized := strings.Trim(builder.String(), "-")
+	if normalized == "" {
+		return "", ValidationError("mailbox suffix does not contain any valid dns characters")
+	}
+	if strings.Contains(normalized, ".") {
+		return "", ValidationError("mailbox suffix must stay inside one dns label")
+	}
+	if len(normalized) > 48 {
+		return "", ValidationError("mailbox suffix is too long")
+	}
+	if _, err := NormalizePrefix("mail" + normalized); err != nil {
+		return "", ValidationError(fmt.Sprintf("mailbox suffix is invalid: %s", err.Error()))
+	}
+	return normalized, nil
 }

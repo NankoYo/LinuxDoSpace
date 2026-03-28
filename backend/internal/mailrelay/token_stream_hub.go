@@ -14,6 +14,14 @@ const tokenStreamBufferSize = 128
 // one active NDJSON stream connection.
 var ErrTokenStreamAlreadyConnected = errors.New("api token stream is already connected")
 
+// ErrTokenStreamSubscriptionRequired reports that mailbox-domain filters can
+// only be changed while the token currently owns one active stream session.
+var ErrTokenStreamSubscriptionRequired = errors.New("api token stream is not connected")
+
+// ErrTokenStreamMailboxDomainConflict reports that one requested dynamic
+// mailbox domain is already claimed by another active token stream.
+var ErrTokenStreamMailboxDomainConflict = errors.New("api token mailbox domain is already registered")
+
 // TokenStreamEvent is the NDJSON payload delivered to one connected API token.
 type TokenStreamEvent struct {
 	Type                 string   `json:"type"`
@@ -50,9 +58,20 @@ func (e TokenMailEvent) ToStreamEvent() TokenStreamEvent {
 // TokenStreamHub keeps live in-memory subscriptions for API tokens that want
 // to receive mail through the HTTPS NDJSON stream.
 type TokenStreamHub struct {
-	mu          sync.RWMutex
-	nextID      uint64
-	subscribers map[string]map[uint64]*tokenStreamSubscriber
+	mu           sync.RWMutex
+	nextID       uint64
+	subscribers  map[string]map[uint64]*tokenStreamSubscriber
+	domains      map[string]ActiveTokenMailboxDomain
+	tokenDomains map[string]map[string]struct{}
+}
+
+// ActiveTokenMailboxDomain is one currently registered dynamic mailbox domain
+// backed by a live API-token stream subscriber.
+type ActiveTokenMailboxDomain struct {
+	Domain        string
+	TokenPublicID string
+	OwnerUserID   int64
+	OwnerUsername string
 }
 
 type tokenStreamSubscriber struct {
@@ -136,7 +155,9 @@ func (s *TokenStreamSubscription) Cancel() {
 // endpoint and the SMTP relay.
 func NewTokenStreamHub() *TokenStreamHub {
 	return &TokenStreamHub{
-		subscribers: make(map[string]map[uint64]*tokenStreamSubscriber),
+		subscribers:  make(map[string]map[uint64]*tokenStreamSubscriber),
+		domains:      make(map[string]ActiveTokenMailboxDomain),
+		tokenDomains: make(map[string]map[string]struct{}),
 	}
 }
 
@@ -182,8 +203,13 @@ func (h *TokenStreamHub) removeSubscription(tokenPublicID string, subscriptionID
 	}
 	existing := tokenSubscribers[subscriptionID]
 	delete(tokenSubscribers, subscriptionID)
+	shouldClearDomains := false
 	if len(tokenSubscribers) == 0 {
 		delete(h.subscribers, normalizedID)
+		shouldClearDomains = true
+	}
+	if shouldClearDomains {
+		h.clearTokenDomainsLocked(normalizedID)
 	}
 	h.mu.Unlock()
 
@@ -215,6 +241,7 @@ func (h *TokenStreamHub) DisconnectToken(tokenPublicID string) int {
 		delete(tokenSubscribers, subscriptionID)
 	}
 	delete(h.subscribers, normalizedID)
+	h.clearTokenDomainsLocked(normalizedID)
 	h.mu.Unlock()
 
 	for _, subscriber := range snapshot {
@@ -273,4 +300,96 @@ func (h *TokenStreamHub) Publish(event TokenMailEvent) (int, int) {
 		}
 	}
 	return delivered, len(listeners)
+}
+
+// UpdateMailboxDomains replaces the currently active dynamic mailbox-domain set
+// for one live token stream. The operation is atomic from the caller's
+// perspective: either the entire new set becomes active, or the previous set
+// stays untouched if any requested domain conflicts with another token.
+func (h *TokenStreamHub) UpdateMailboxDomains(tokenPublicID string, ownerUserID int64, ownerUsername string, domains []string) error {
+	if h == nil {
+		return ErrTokenStreamSubscriptionRequired
+	}
+
+	normalizedID := strings.TrimSpace(tokenPublicID)
+	if normalizedID == "" {
+		return ErrTokenStreamSubscriptionRequired
+	}
+
+	normalizedOwnerUsername := strings.ToLower(strings.TrimSpace(ownerUsername))
+	normalizedDomains := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
+	for _, item := range domains {
+		normalizedDomain := strings.ToLower(strings.TrimSpace(item))
+		if normalizedDomain == "" {
+			continue
+		}
+		if _, exists := seen[normalizedDomain]; exists {
+			continue
+		}
+		seen[normalizedDomain] = struct{}{}
+		normalizedDomains = append(normalizedDomains, normalizedDomain)
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.subscribers[normalizedID]) == 0 {
+		return ErrTokenStreamSubscriptionRequired
+	}
+
+	for _, normalizedDomain := range normalizedDomains {
+		existing, exists := h.domains[normalizedDomain]
+		if exists && existing.TokenPublicID != normalizedID {
+			return ErrTokenStreamMailboxDomainConflict
+		}
+	}
+
+	h.clearTokenDomainsLocked(normalizedID)
+	if len(normalizedDomains) == 0 {
+		return nil
+	}
+
+	tokenDomains := make(map[string]struct{}, len(normalizedDomains))
+	for _, normalizedDomain := range normalizedDomains {
+		h.domains[normalizedDomain] = ActiveTokenMailboxDomain{
+			Domain:        normalizedDomain,
+			TokenPublicID: normalizedID,
+			OwnerUserID:   ownerUserID,
+			OwnerUsername: normalizedOwnerUsername,
+		}
+		tokenDomains[normalizedDomain] = struct{}{}
+	}
+	h.tokenDomains[normalizedID] = tokenDomains
+	return nil
+}
+
+// LookupMailboxDomain returns the active API-token stream that currently owns
+// the given dynamic mailbox domain.
+func (h *TokenStreamHub) LookupMailboxDomain(domain string) (ActiveTokenMailboxDomain, bool) {
+	if h == nil {
+		return ActiveTokenMailboxDomain{}, false
+	}
+
+	normalizedDomain := strings.ToLower(strings.TrimSpace(domain))
+	if normalizedDomain == "" {
+		return ActiveTokenMailboxDomain{}, false
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	item, ok := h.domains[normalizedDomain]
+	return item, ok
+}
+
+func (h *TokenStreamHub) clearTokenDomainsLocked(tokenPublicID string) {
+	existing := h.tokenDomains[tokenPublicID]
+	if len(existing) == 0 {
+		delete(h.tokenDomains, tokenPublicID)
+		return
+	}
+	for domain := range existing {
+		delete(h.domains, domain)
+	}
+	delete(h.tokenDomains, tokenPublicID)
 }

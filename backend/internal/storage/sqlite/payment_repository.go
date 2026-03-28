@@ -513,6 +513,7 @@ func (s *Store) ApplyPaymentOrderEntitlement(ctx context.Context, input ApplyPay
 	outTradeNo := strings.TrimSpace(input.OutTradeNo)
 	appliedAt := input.AppliedAt.UTC()
 	blockedPrefixSet := normalizeBlockedPrefixSet(input.BlockedNormalizedPrefixes)
+	reservedDynamicMailAliasUserPrefixSet := normalizeBlockedPrefixSet(input.ReservedDynamicMailAliasUserPrefixes)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -555,7 +556,7 @@ func (s *Store) ApplyPaymentOrderEntitlement(ctx context.Context, input ApplyPay
 			return model.PaymentOrder{}, false, err
 		}
 	case model.PaymentEffectDomainAllocationPurchase:
-		if err := applyDomainAllocationPurchaseTx(ctx, tx, order, appliedAt, blockedPrefixSet); err != nil {
+		if err := applyDomainAllocationPurchaseTx(ctx, tx, order, appliedAt, blockedPrefixSet, reservedDynamicMailAliasUserPrefixSet); err != nil {
 			return model.PaymentOrder{}, false, err
 		}
 	default:
@@ -768,7 +769,7 @@ func applyCatchAllRemainingCountTx(ctx context.Context, tx *sql.Tx, order model.
 
 // applyDomainAllocationPurchaseTx creates the namespace granted by one paid
 // domain-purchase order inside the same database transaction.
-func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order model.PaymentOrder, appliedAt time.Time, blockedPrefixSet map[string]struct{}) error {
+func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order model.PaymentOrder, appliedAt time.Time, blockedPrefixSet map[string]struct{}, reservedDynamicMailAliasUserPrefixSet map[string]struct{}) error {
 	rootDomain := strings.ToLower(strings.TrimSpace(order.PurchaseRootDomain))
 	if rootDomain == "" {
 		return fmt.Errorf("payment order %s is missing purchase_root_domain", order.OutTradeNo)
@@ -791,8 +792,11 @@ func applyDomainAllocationPurchaseTx(ctx context.Context, tx *sql.Tx, order mode
 		if _, blocked := blockedPrefixSet[normalizedPrefix]; blocked {
 			return fmt.Errorf("requested domain %s already has live dns records", normalizedPrefix+"."+managedDomain.RootDomain)
 		}
+		if isReservedDynamicMailAliasPurchasePrefix(normalizedPrefix, reservedDynamicMailAliasUserPrefixSet) {
+			return fmt.Errorf("requested domain %s is reserved for the platform-managed mail namespace", normalizedPrefix+"."+managedDomain.RootDomain)
+		}
 	case "random":
-		generatedPrefix, generateErr := generateRandomAllocationPrefixTx(ctx, tx, managedDomain.ID, order.PurchaseRequestedLength, blockedPrefixSet)
+		generatedPrefix, generateErr := generateRandomAllocationPrefixTx(ctx, tx, managedDomain.ID, order.PurchaseRequestedLength, blockedPrefixSet, reservedDynamicMailAliasUserPrefixSet)
 		if generateErr != nil {
 			return generateErr
 		}
@@ -1008,7 +1012,7 @@ RETURNING
 
 // generateRandomAllocationPrefixTx creates a random 12+ character label and
 // retries until the current root domain has no allocation conflict.
-func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDomainID int64, length int, blockedPrefixSet map[string]struct{}) (string, error) {
+func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDomainID int64, length int, blockedPrefixSet map[string]struct{}, reservedDynamicMailAliasUserPrefixSet map[string]struct{}) (string, error) {
 	if length < 12 || length > 63 {
 		return "", fmt.Errorf("random allocation length must be between 12 and 63")
 	}
@@ -1028,6 +1032,9 @@ func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDo
 		if _, blocked := blockedPrefixSet[candidate]; blocked {
 			continue
 		}
+		if isReservedDynamicMailAliasPurchasePrefix(candidate, reservedDynamicMailAliasUserPrefixSet) {
+			continue
+		}
 		if _, err := findAllocationByNormalizedPrefixTx(ctx, tx, managedDomainID, candidate); errors.Is(err, sql.ErrNoRows) {
 			return candidate, nil
 		} else if err != nil {
@@ -1036,6 +1043,22 @@ func generateRandomAllocationPrefixTx(ctx context.Context, tx *sql.Tx, managedDo
 	}
 
 	return "", fmt.Errorf("failed to generate a unique random allocation prefix after multiple retries")
+}
+
+func isReservedDynamicMailAliasPurchasePrefix(candidate string, reservedUserPrefixes map[string]struct{}) bool {
+	normalizedCandidate := strings.ToLower(strings.TrimSpace(candidate))
+	if normalizedCandidate == "" {
+		return false
+	}
+	for userPrefix := range reservedUserPrefixes {
+		if userPrefix == "" {
+			continue
+		}
+		if strings.HasPrefix(normalizedCandidate, userPrefix+"-mail") {
+			return true
+		}
+	}
+	return false
 }
 
 // scanPaymentOrder maps one joined payment-order row into the shared model.

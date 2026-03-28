@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -247,6 +248,9 @@ func readableDomainPurchaseAvailabilityMessage(reasons []string) string {
 	if slicesContain(reasons, "existing_dns_records") {
 		return "live dns records already exist for the requested namespace"
 	}
+	if slicesContain(reasons, "reserved_dynamic_mail_namespace") || slicesContain(reasons, "reserved_mail_namespace") {
+		return "the requested namespace is reserved for the platform-managed mail namespace"
+	}
 	return "the requested namespace is not available"
 }
 
@@ -322,6 +326,36 @@ func (s *PaymentService) listLiveDomainPurchaseBlockedPrefixes(ctx context.Conte
 	for value := range blocked {
 		values = append(values, value)
 	}
+	return values, nil
+}
+
+// listReservedDynamicMailAliasUserPrefixes returns every currently known user
+// prefix whose derived `-mail` namespace family must stay unsellable under the
+// configured default root at final payment-apply time as well.
+func (s *PaymentService) listReservedDynamicMailAliasUserPrefixes(ctx context.Context, rootDomain string) ([]string, error) {
+	if !strings.EqualFold(strings.TrimSpace(rootDomain), strings.TrimSpace(s.cfg.Cloudflare.DefaultRootDomain)) {
+		return nil, nil
+	}
+
+	users, err := s.db.ListAdminUsers(ctx)
+	if err != nil {
+		return nil, InternalError("failed to load user list for dynamic mail namespace reservation", err)
+	}
+
+	seen := make(map[string]struct{}, len(users))
+	values := make([]string, 0, len(users))
+	for _, user := range users {
+		normalizedPrefix, normalizeErr := normalizedUserPrefix(user.Username)
+		if normalizeErr != nil || normalizedPrefix == "" {
+			continue
+		}
+		if _, exists := seen[normalizedPrefix]; exists {
+			continue
+		}
+		seen[normalizedPrefix] = struct{}{}
+		values = append(values, normalizedPrefix)
+	}
+	sort.Strings(values)
 	return values, nil
 }
 

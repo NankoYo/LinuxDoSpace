@@ -21,6 +21,13 @@
 - 每种语言都应提供一个“完整流入口”，但公开方法名应保持语言习惯，不强行统一成同名 API
 - 每种语言都应提供一个“本地 mailbox 消费入口”，但公开方法名应保持语言习惯，不强行统一成同名 API
 - 各语言 README 才是该语言公开 API 命名的权威来源
+- 第一方语义后缀 `linuxdo.space` 对外仍保持原写法不变
+- SDK 内部必须自动兼容当前 token 拥有者在该根域下的第一方邮件命名空间
+- 当前至少包括 `<owner_username>-mail.linuxdo.space` 与 `<owner_username>-mail<suffix_fragment>.linuxdo.space`
+- 消费者不应被迫改写成显式的 `<owner_username>-mail.linuxdo.space`；
+  旧的 `Suffix.linuxdo_space` / 同义常量写法必须持续兼容
+- 当前 Python SDK 已经额外提供 `Suffix.linuxdo_space.with_suffix("foo")`
+  作为动态 mail suffix helper；其他语言 SDK 应按同一语义补齐
 
 ## 统一匹配规则
 
@@ -67,6 +74,14 @@
 当前主仓库最近一轮安全/一致性修复没有修改 `/v1/token/email/stream`
 的 wire format。本轮 SDK 工作重点仍然是保持各语言对现有协议的实现
 一致，而不是引入新的协议版本。
+
+不过命名空间可见行为已经扩大：
+
+- token 订阅者现在既可能收到 `<owner_username>-mail.linuxdo.space` 下的邮件，
+  也可能收到 `<owner_username>-mail<suffix_fragment>.linuxdo.space` 下的邮件
+- 这不是新的 wire format 版本，而是 `original_recipients` 的合法取值集合变大
+- 因此各语言 SDK 必须在不破坏旧 `Suffix.linuxdo_space` 写法的前提下完成内部兼容
+- 换句话说，真实命名空间变化属于 SDK 内部黑箱，不应泄漏为消费者必须感知的升级成本
 
 ## Python SDK 特殊说明
 

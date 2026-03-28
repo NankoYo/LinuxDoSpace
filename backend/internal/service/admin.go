@@ -1073,6 +1073,15 @@ func (s *AdminService) validateAdminAllocationWrite(ctx context.Context, ownerUs
 	if err != nil {
 		return model.User{}, model.ManagedDomain{}, "", "", "", "", ValidationError(err.Error())
 	}
+	if isSystemReservedMailNamespacePrefix(managedDomain.RootDomain, normalizedPrefix, s.cfg.Cloudflare.DefaultRootDomain) {
+		return model.User{}, model.ManagedDomain{}, "", "", "", "", ForbiddenError("prefixes ending with -mail are reserved for the platform-managed mail namespace")
+	}
+	domainService := NewDomainService(s.cfg, s.db, s.cf)
+	if reservedDynamicMailAlias, reservedErr := domainService.isReservedDynamicMailAliasPrefix(ctx, managedDomain.RootDomain, normalizedPrefix); reservedErr != nil {
+		return model.User{}, model.ManagedDomain{}, "", "", "", "", reservedErr
+	} else if reservedDynamicMailAlias {
+		return model.User{}, model.ManagedDomain{}, "", "", "", "", ForbiddenError("prefixes matching one user's dynamic -mail mailbox aliases are reserved for the platform-managed mail namespace")
+	}
 
 	status := normalizeAdminAllocationStatus(rawStatus)
 	if status == "" {

@@ -84,7 +84,7 @@ func main() {
 	adminService := service.NewAdminService(cfg, store, cloudflareClient)
 	permissionService := service.NewPermissionService(cfg, store, cloudflareClient)
 	tokenHub := mailrelay.NewTokenStreamHub()
-	tokenService := service.NewTokenService(store, tokenHub)
+	tokenService := service.NewTokenService(cfg, store, tokenHub)
 	quantityService := service.NewQuantityService(store)
 	powService := service.NewPOWService(cfg, store)
 	creditClient := linuxdocredit.NewClient(
@@ -167,7 +167,7 @@ func main() {
 		)
 		smtpServer = mailrelay.NewServer(
 			cfg.Mail,
-			mailrelay.NewDBResolver(store),
+			mailrelay.NewDBResolver(store, cfg.Cloudflare.DefaultRootDomain, tokenHub),
 			store,
 			tokenHub,
 			log.Default(),

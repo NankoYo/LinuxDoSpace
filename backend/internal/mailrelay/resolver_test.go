@@ -14,14 +14,16 @@ import (
 // fakeResolverStore keeps the mail relay unit tests focused on route
 // resolution instead of a concrete SQL backend.
 type fakeResolverStore struct {
-	routes   map[string]model.EmailRoute
-	targets  map[string]model.EmailTarget
-	tokens   map[string]model.APIToken
-	controls map[int64]model.UserControl
+	routes       map[string]model.EmailRoute
+	targets      map[string]model.EmailTarget
+	tokens       map[string]model.APIToken
+	controls     map[int64]model.UserControl
+	routeLookups int
 }
 
 // GetEmailRouteByAddress returns one in-memory route keyed by domain + prefix.
 func (f *fakeResolverStore) GetEmailRouteByAddress(ctx context.Context, rootDomain string, prefix string) (model.EmailRoute, error) {
+	f.routeLookups++
 	key := strings.ToLower(strings.TrimSpace(rootDomain)) + "|" + strings.ToLower(strings.TrimSpace(prefix))
 	item, ok := f.routes[key]
 	if !ok {
@@ -96,7 +98,7 @@ func TestDBResolverPrefersExactRoute(t *testing.T) {
 				VerifiedAt:  &verifiedAt,
 			},
 		},
-	})
+	}, "linuxdo.space", nil)
 
 	result, err := resolver.ResolveRecipient(context.Background(), "Alice@LinuxDo.Space")
 	if err != nil {
@@ -133,7 +135,7 @@ func TestDBResolverFallsBackToCatchAll(t *testing.T) {
 				VerifiedAt:  &verifiedAt,
 			},
 		},
-	})
+	}, "linuxdo.space", nil)
 
 	result, err := resolver.ResolveRecipient(context.Background(), "notice@alice.linuxdo.space")
 	if err != nil {
@@ -170,7 +172,7 @@ func TestDBResolverRejectsMismatchedTargetOwnership(t *testing.T) {
 				VerifiedAt:  &verifiedAt,
 			},
 		},
-	})
+	}, "linuxdo.space", nil)
 
 	_, err := resolver.ResolveRecipient(context.Background(), "alice@linuxdo.space")
 	if !errors.Is(err, ErrTargetOwnershipMismatch) {
@@ -261,10 +263,83 @@ func TestDBResolverRejectsBannedOwner(t *testing.T) {
 				IsBanned: true,
 			},
 		},
-	})
+	}, "linuxdo.space", nil)
 
 	_, err := resolver.ResolveRecipient(context.Background(), "alice@linuxdo.space")
 	if !errors.Is(err, ErrRouteDisabled) {
 		t.Fatalf("expected banned owner to disable routing, got %v", err)
+	}
+}
+
+// TestDBResolverResolvesActiveDynamicMailboxDomain verifies that one live
+// token-mailbox alias under `<username>-mail<suffix>.<root>` bypasses the
+// database route table and resolves directly to the connected token stream.
+func TestDBResolverResolvesActiveDynamicMailboxDomain(t *testing.T) {
+	hub := NewTokenStreamHub()
+	subscription, err := hub.Subscribe("ldt_token")
+	if err != nil {
+		t.Fatalf("subscribe token stream: %v", err)
+	}
+	defer subscription.Cancel()
+	if err := hub.UpdateMailboxDomains("ldt_token", 42, "alice", []string{"alice-mailfoo.linuxdo.space"}); err != nil {
+		t.Fatalf("register dynamic mailbox domain: %v", err)
+	}
+
+	store := &fakeResolverStore{}
+	resolver := NewDBResolver(store, "linuxdo.space", hub)
+
+	result, err := resolver.ResolveRecipient(context.Background(), "notice@alice-mailfoo.linuxdo.space")
+	if err != nil {
+		t.Fatalf("resolve dynamic mailbox recipient: %v", err)
+	}
+	if result.TargetKind != model.EmailRouteTargetKindAPIToken || result.TargetTokenPublicID != "ldt_token" {
+		t.Fatalf("expected api token dynamic mailbox route, got %+v", result)
+	}
+	if !result.UsedCatchAll || result.RoutePrefix != catchAllRoutePrefix {
+		t.Fatalf("expected dynamic mailbox route to reuse catch-all accounting semantics, got %+v", result)
+	}
+	if store.routeLookups != 1 {
+		t.Fatalf("expected one exact-route lookup before dynamic mailbox resolution, got %d", store.routeLookups)
+	}
+}
+
+// TestDBResolverFastRejectsInactiveDynamicMailboxDomain verifies that random
+// `-mail<suffix>` aliases do not hit the database when no live token stream
+// registered that exact dynamic domain.
+func TestDBResolverFastRejectsInactiveDynamicMailboxDomain(t *testing.T) {
+	store := &fakeResolverStore{}
+	resolver := NewDBResolver(store, "linuxdo.space", NewTokenStreamHub())
+
+	_, err := resolver.ResolveRecipient(context.Background(), "notice@alice-mailzzz.linuxdo.space")
+	if !errors.Is(err, ErrNoMatchingRoute) {
+		t.Fatalf("expected ErrNoMatchingRoute for inactive dynamic mailbox alias, got %v", err)
+	}
+	if store.routeLookups != 2 {
+		t.Fatalf("expected inactive dynamic alias to fall back to exact+catch-all route lookups, got %d", store.routeLookups)
+	}
+}
+
+// TestDBResolverRejectsBannedOwnerForDynamicMailboxDomain verifies that the
+// dynamic token-mailbox fast path still fails closed once the owner is banned.
+func TestDBResolverRejectsBannedOwnerForDynamicMailboxDomain(t *testing.T) {
+	hub := NewTokenStreamHub()
+	subscription, err := hub.Subscribe("ldt_token")
+	if err != nil {
+		t.Fatalf("subscribe token stream: %v", err)
+	}
+	defer subscription.Cancel()
+	if err := hub.UpdateMailboxDomains("ldt_token", 42, "alice", []string{"alice-mailfoo.linuxdo.space"}); err != nil {
+		t.Fatalf("register dynamic mailbox domain: %v", err)
+	}
+
+	resolver := NewDBResolver(&fakeResolverStore{
+		controls: map[int64]model.UserControl{
+			42: {UserID: 42, IsBanned: true},
+		},
+	}, "linuxdo.space", hub)
+
+	_, err = resolver.ResolveRecipient(context.Background(), "notice@alice-mailfoo.linuxdo.space")
+	if !errors.Is(err, ErrRouteDisabled) {
+		t.Fatalf("expected banned dynamic-mail owner to be rejected, got %v", err)
 	}
 }

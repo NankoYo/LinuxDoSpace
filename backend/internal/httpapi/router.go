@@ -54,6 +54,7 @@ func NewRouter(deps RouterDependencies) http.Handler {
 	mux.HandleFunc("GET /v1/public/email-routes/check", api.handlePublicEmailRouteAvailability)
 	mux.HandleFunc("GET /v1/public/email-targets/verify", api.handleVerifyEmailTarget)
 	mux.HandleFunc("GET /v1/token/email/stream", api.handleTokenEmailStream)
+	mux.HandleFunc("PUT /v1/token/email/filters", api.handleUpdateTokenEmailFilters)
 	mux.HandleFunc("GET /v1/public/ldc/products", api.handlePublicPaymentProducts)
 	mux.HandleFunc("GET /v1/auth/login", api.handleAuthLogin)
 	mux.HandleFunc("GET /v1/admin/auth/login", api.handleAdminAuthLogin)

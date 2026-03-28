@@ -222,6 +222,67 @@ func TestEnsureBuiltInManagedDomainsDoesNotOverrideExistingConfiguration(t *test
 	}
 }
 
+// TestListReservedDynamicMailAliasUserPrefixes verifies that final domain
+// purchase application blocks current users' derived `-mail` namespace family
+// under the default root even when no live DNS record exists yet.
+func TestListReservedDynamicMailAliasUserPrefixes(t *testing.T) {
+	ctx := context.Background()
+	store := newAuthTestStore(t)
+
+	if _, err := store.UpsertManagedDomain(ctx, sqlite.UpsertManagedDomainInput{
+		RootDomain:         "linuxdo.space",
+		CloudflareZoneID:   "zone-default",
+		DefaultQuota:       1,
+		AutoProvision:      true,
+		IsDefault:          true,
+		Enabled:            true,
+		SaleEnabled:        true,
+		SaleBasePriceCents: 1000,
+	}); err != nil {
+		t.Fatalf("upsert managed domain: %v", err)
+	}
+
+	if _, err := store.UpsertUser(ctx, storage.UpsertUserInput{
+		LinuxDOUserID: 4001,
+		Username:      "Alice",
+		DisplayName:   "Alice",
+		AvatarURL:     "https://example.com/alice.png",
+		TrustLevel:    2,
+	}); err != nil {
+		t.Fatalf("upsert alice user: %v", err)
+	}
+	if _, err := store.UpsertUser(ctx, storage.UpsertUserInput{
+		LinuxDOUserID: 4002,
+		Username:      "Bob",
+		DisplayName:   "Bob",
+		AvatarURL:     "https://example.com/bob.png",
+		TrustLevel:    2,
+	}); err != nil {
+		t.Fatalf("upsert bob user: %v", err)
+	}
+
+	service := NewPaymentService(config.Config{
+		Cloudflare: config.CloudflareConfig{
+			DefaultRootDomain: "linuxdo.space",
+		},
+	}, store, nil, fakeConfiguredLinuxDOCredit{})
+
+	values, err := service.listReservedDynamicMailAliasUserPrefixes(ctx, "linuxdo.space")
+	if err != nil {
+		t.Fatalf("list reserved dynamic mail alias user prefixes: %v", err)
+	}
+
+	reserved := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		reserved[value] = struct{}{}
+	}
+	for _, expected := range []string{"alice", "bob"} {
+		if _, ok := reserved[expected]; !ok {
+			t.Fatalf("expected reserved prefixes to contain %q, got %v", expected, values)
+		}
+	}
+}
+
 // TestEnsureBuiltInManagedDomainsSkipsMissingOptionalZones verifies that one
 // not-yet-delegated optional sale root does not break backend startup.
 func TestEnsureBuiltInManagedDomainsSkipsMissingOptionalZones(t *testing.T) {

@@ -562,6 +562,11 @@ func (s *PaymentService) buildApplyPaymentOrderEntitlementInput(ctx context.Cont
 		return storage.ApplyPaymentOrderEntitlementInput{}, err
 	}
 	input.BlockedNormalizedPrefixes = blockedPrefixes
+	reservedUserPrefixes, err := s.listReservedDynamicMailAliasUserPrefixes(ctx, order.PurchaseRootDomain)
+	if err != nil {
+		return storage.ApplyPaymentOrderEntitlementInput{}, err
+	}
+	input.ReservedDynamicMailAliasUserPrefixes = reservedUserPrefixes
 	return input, nil
 }
 
